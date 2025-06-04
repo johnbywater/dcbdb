@@ -130,6 +130,8 @@ pub struct EventStore {
     path: PathBuf,
     // Tag index: maps each tag to a set of event positions (1-based)
     tag_index: Mutex<HashMap<String, HashSet<u64>>>,
+    // Cache of events with their byte positions in the WAL
+    event_cache: Mutex<Vec<(Event, u64)>>,
 }
 
 impl EventStore {
@@ -158,6 +160,7 @@ impl EventStore {
             wal_file: Mutex::new(wal_file),
             path,
             tag_index: Mutex::new(HashMap::new()),
+            event_cache: Mutex::new(Vec::new()),
         };
 
         Ok(event_store)
@@ -179,6 +182,16 @@ impl EventStore {
             EventStoreError::Io(io::Error::new(
                 io::ErrorKind::Other,
                 "Failed to acquire lock on tag index",
+            ))
+        })
+    }
+
+    // Helper method to get a lock on the event cache
+    fn lock_event_cache(&self) -> Result<MutexGuard<Vec<(Event, u64)>>> {
+        self.event_cache.lock().map_err(|_| {
+            EventStoreError::Io(io::Error::new(
+                io::ErrorKind::Other,
+                "Failed to acquire lock on event cache",
             ))
         })
     }
@@ -261,11 +274,7 @@ impl EventStore {
         after: Option<u64>,
         limit: Option<usize>,
     ) -> Result<(Vec<SequencedEvent>, Option<u64>)> {
-        let mut wal = self.lock_wal()?;
-        wal.seek(SeekFrom::Start(0))?;
-
         let mut events = Vec::new();
-        let mut event_positions = Vec::new();
         let mut filtered_positions = Vec::new();
         let limit_option = limit;
         let limit = limit.unwrap_or(usize::MAX);
@@ -281,16 +290,22 @@ impl EventStore {
             false
         };
 
-        // First pass: read all events and their positions
-        while let Some((event, pos)) = EventStore::read_event_record(&mut wal)? {
-            event_positions.push((event, pos));
+        // Get cached events
+        let mut event_cache = self.lock_event_cache()?;
+
+        // If cache is empty, load events
+        if event_cache.is_empty() {
+            // Release the lock before reloading cache
+            drop(event_cache);
+            self.reload_event_cache()?;
+            // Get cache again after reload
+            event_cache = self.lock_event_cache()?;
         }
 
-        // Sort events by position (should already be in order, but just to be safe)
-        event_positions.sort_by_key(|(_, pos)| *pos);
+        // Use cached events - we already have a reference now that we're sure it's loaded
 
-        // Second pass: filter events using tag index or sequential scan
-        if can_use_index && !event_positions.is_empty() && query.is_some() {
+        // Filter events using tag index or sequential scan
+        if can_use_index && !event_cache.is_empty() && query.is_some() {
             // Use tag index for optimization
             let query_ref = query.as_ref().unwrap();
             if let Some(positions) = self.find_tag_index_matches(query_ref)? {
@@ -308,8 +323,8 @@ impl EventStore {
 
                     // Position is 1-based, convert to 0-based index
                     let index = (position - 1) as usize;
-                    if index < event_positions.len() {
-                        let (event, _) = &event_positions[index];
+                    if index < event_cache.len() {
+                        let (event, _) = &event_cache[index];
 
                         // Verify that the event fully matches the query (including types)
                         if Self::event_matches_query(event, query_ref) {
@@ -324,8 +339,8 @@ impl EventStore {
                 }
             }
         } else {
-            // Fall back to sequential scan
-            for (i, (event, _)) in event_positions.iter().enumerate() {
+            // Fall back to sequential scan of cached events
+            for (i, (event, _)) in event_cache.iter().enumerate() {
                 let position = i as u64 + 1; // 1-based position
 
                 // Skip events up to the 'after' position
@@ -352,7 +367,7 @@ impl EventStore {
             }
         }
 
-        // Apply limit
+        // Apply limit if needed (might be unnecessary due to early exit above, but keeping for safety)
         let filtered_positions = if limit < filtered_positions.len() {
             filtered_positions[0..limit].to_vec()
         } else {
@@ -362,7 +377,7 @@ impl EventStore {
         // Add events to the result
         for position in &filtered_positions {
             let index = (*position - 1) as usize;
-            let (event, _) = &event_positions[index];
+            let (event, _) = &event_cache[index];
             events.push(SequencedEvent {
                 position: *position,
                 event: event.clone(),
@@ -370,13 +385,13 @@ impl EventStore {
         }
 
         // Calculate the head
-        let head = if !event_positions.is_empty() {
+        let head = if !event_cache.is_empty() {
             // If a limit was applied and we have filtered positions, return the last position in the result
             if limit_option.is_some() && !filtered_positions.is_empty() && filtered_positions.len() == limit {
                 Some(filtered_positions[filtered_positions.len() - 1])
             } else {
                 // Otherwise, return the total number of events
-                Some(event_positions.len() as u64)
+                Some(event_cache.len() as u64)
             }
         } else {
             None
@@ -410,25 +425,32 @@ impl EventStore {
         // Append events
         let mut wal = self.lock_wal()?;
         let mut tag_index = self.lock_tag_index()?;
+        let mut event_cache = self.lock_event_cache()?;
 
-        // Count existing events
-        wal.seek(SeekFrom::Start(0))?;
-        let mut event_count = 0;
-        while let Some(_) = EventStore::read_event_record(&mut wal)? {
-            event_count += 1;
-        }
+        // Get current event count from cache
+        let event_count = event_cache.len();
+
+        // Seek to end of file for appending
+        wal.seek(SeekFrom::End(0))?;
 
         // Write events and update tag index
         for (i, event) in events.iter().enumerate() {
+            // Get the byte position before writing
+            let position_bytes = wal.stream_position()?;
+
+            // Write the event
             Self::write_event_record(&mut wal, event)?;
 
+            // Add to cache
+            event_cache.push((event.clone(), position_bytes));
+
             // Add event position to tag index for each tag
-            let position = event_count + i as u64 + 1; // 1-based position
+            let position = event_count + i + 1; // 1-based position
             for tag in &event.tags {
                 tag_index
                     .entry(tag.clone())
                     .or_insert_with(HashSet::new)
-                    .insert(position);
+                    .insert(position as u64);
             }
         }
 
@@ -436,7 +458,7 @@ impl EventStore {
         wal.sync_all()?;
 
         // Return the position of the last event (1-based)
-        Ok(event_count + events.len() as u64)
+        Ok((event_count as u64) + (events.len() as u64))
     }
 
     // Helper method to check if an event matches a query
@@ -545,6 +567,38 @@ impl EventStore {
         // Read all events and rebuild index
         let mut position = 1; // 1-based position
         while let Some((event, _)) = Self::read_event_record(&mut wal)? {
+            for tag in &event.tags {
+                tag_index
+                    .entry(tag.clone())
+                    .or_insert_with(HashSet::new)
+                    .insert(position);
+            }
+            position += 1;
+        }
+
+        Ok(())
+    }
+
+    // Helper method to reload the event cache from WAL
+    fn reload_event_cache(&self) -> Result<()> {
+        let mut wal = self.lock_wal()?;
+        let mut event_cache = self.lock_event_cache()?;
+        let mut tag_index = self.lock_tag_index()?;
+
+        // Clear existing cache and index
+        event_cache.clear();
+        tag_index.clear();
+
+        // Reset to start of file
+        wal.seek(SeekFrom::Start(0))?;
+
+        // Read all events and populate cache and index
+        let mut position = 1; // 1-based position
+        while let Some((event, pos)) = Self::read_event_record(&mut wal)? {
+            // Add to event cache
+            event_cache.push((event.clone(), pos));
+
+            // Add to tag index
             for tag in &event.tags {
                 tag_index
                     .entry(tag.clone())

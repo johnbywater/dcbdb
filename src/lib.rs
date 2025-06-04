@@ -9,10 +9,8 @@ use crc::{Crc, CRC_32_ISO_HDLC};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-// Export server and client modules if the grpc feature is enabled
-#[cfg(feature = "grpc")]
+// Export server and client modules
 pub mod server;
-#[cfg(feature = "grpc")]
 pub mod client;
 
 // EventStore trait
@@ -51,8 +49,7 @@ impl EventStoreApi for EventStore {
     }
 }
 
-// Implement the trait for EventStoreClientSync if the grpc feature is enabled
-#[cfg(feature = "grpc")]
+// Implement the trait for EventStoreClientSync
 impl EventStoreApi for client::EventStoreClientSync {
     fn read(
         &self,

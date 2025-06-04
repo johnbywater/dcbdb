@@ -4,18 +4,6 @@ use uuid::Uuid;
 // Import the EventStore and related types from the main crate
 use dcbsd::{Event, EventStore, EventStoreError, Query, QueryItem, AppendCondition, EventStoreApi};
 
-// Import gRPC-related types if the grpc feature is enabled
-#[cfg(feature = "grpc")]
-use std::net::SocketAddr;
-#[cfg(feature = "grpc")]
-use std::sync::Arc;
-#[cfg(feature = "grpc")]
-use tokio::runtime::Runtime;
-#[cfg(feature = "grpc")]
-use dcbsd::server::{EventStoreServer, proto::event_store_service_server::EventStoreServiceServer};
-#[cfg(feature = "grpc")]
-use dcbsd::client::{EventStoreClient, EventStoreClientSync};
-
 #[test]
 fn test_direct_event_store() {
     let temp_dir = tempdir().unwrap();
@@ -23,39 +11,9 @@ fn test_direct_event_store() {
     run_event_store_test(&event_store);
 }
 
-// The gRPC test is only defined if the grpc feature is enabled
-#[cfg(feature = "grpc")]
-#[test]
-fn test_grpc_event_store() {
-    let temp_dir = tempdir().unwrap();
-    let event_store = EventStore::open(temp_dir.path()).unwrap();
-    let event_store_server = EventStoreServer::with_event_store(Arc::new(event_store));
-
-    // Create a runtime for the gRPC server
-    let rt = Runtime::new().unwrap();
-
-    // Start the gRPC server
-    let server_addr = "127.0.0.1:50051".parse::<SocketAddr>().unwrap();
-    let server_future = tonic::transport::Server::builder()
-        .add_service(event_store_server.into_service())
-        .serve(server_addr);
-
-    // Spawn the server in the background
-    rt.spawn(server_future);
-
-    // Connect to the server
-    let client = rt.block_on(async {
-        EventStoreClient::connect("http://127.0.0.1:50051").await.unwrap()
-    });
-
-    let client_sync = EventStoreClientSync::new(client);
-
-    // Run the test
-    run_event_store_test(&client_sync);
-}
 
 // Helper function to run the test with a given EventStoreApi implementation
-fn run_event_store_test<T: EventStoreApi>(event_store: &T) {
+pub fn run_event_store_test<T: EventStoreApi>(event_store: &T) {
 
     // Read all, expect no results.
     let (result, head) = event_store.read(None, None, None).unwrap();

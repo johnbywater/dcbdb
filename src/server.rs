@@ -15,7 +15,7 @@ use proto::{
     event_store_service_server::{EventStoreService, EventStoreServiceServer},
     EventProto, SequencedEventProto, QueryItemProto, QueryProto, AppendConditionProto,
     ReadRequestProto, ReadResponseProto, AppendRequestProto, AppendResponseProto,
-    error_response_proto::ErrorType,
+    // error_response_proto::ErrorType,
 };
 
 // Conversion functions between domain types and proto types

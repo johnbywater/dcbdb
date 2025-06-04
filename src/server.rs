@@ -8,7 +8,7 @@ use crate::{Event, EventStore, EventStoreError, Query, QueryItem, AppendConditio
 
 // Import the generated proto code
 pub mod proto {
-    tonic::include_proto!("eventstore");
+    tonic::include_proto!("dcbdb");
 }
 
 use proto::{
@@ -140,23 +140,23 @@ impl EventStoreService for EventStoreServer {
         request: Request<ReadRequestProto>,
     ) -> Result<Response<ReadResponseProto>, Status> {
         let req = request.into_inner();
-        
+
         let query = req.query.map(Into::into);
         let after = req.after;
         let limit = req.limit.map(|l| l as usize);
-        
+
         let (events, head) = self.event_store.read(query, after, limit)
             .map_err(Status::from)?;
-        
+
         let events_proto: Vec<SequencedEventProto> = events.into_iter()
             .map(Into::into)
             .collect();
-        
+
         let response = ReadResponseProto {
             events: events_proto,
             head,
         };
-        
+
         Ok(Response::new(response))
     }
 
@@ -165,20 +165,20 @@ impl EventStoreService for EventStoreServer {
         request: Request<AppendRequestProto>,
     ) -> Result<Response<AppendResponseProto>, Status> {
         let req = request.into_inner();
-        
+
         let events: Vec<Event> = req.events.into_iter()
             .map(Into::into)
             .collect();
-        
+
         let condition = req.condition.map(Into::into);
-        
+
         let position = self.event_store.append(events, condition)
             .map_err(Status::from)?;
-        
+
         let response = AppendResponseProto {
             position,
         };
-        
+
         Ok(Response::new(response))
     }
 }

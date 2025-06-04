@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package eventstore;
+package dcbdb;
 
 // Event message
 message EventProto {
@@ -73,7 +73,7 @@ message ErrorResponseProto {
 service EventStoreService {
   // Read events from the store
   rpc Read(ReadRequestProto) returns (ReadResponseProto);
-  
+
   // Append events to the store
   rpc Append(AppendRequestProto) returns (AppendResponseProto);
 }

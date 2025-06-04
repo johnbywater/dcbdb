@@ -7,7 +7,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // It is also available at https://github.com/protocolbuffers/protobuf/releases
 
     // Try to compile the proto files, but don't fail the build if protoc is not installed
-    tonic_build::compile_protos("proto/eventstore.proto").expect("Failed to compile proto files");
+    tonic_build::compile_protos("proto/dcbdb.proto").expect("Failed to compile proto files");
 
 
     Ok(())

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -128,6 +128,8 @@ pub struct EventStore {
     wal_file: Mutex<File>,
     // path is kept for future extensions (e.g., index files, snapshots)
     path: PathBuf,
+    // Tag index: maps each tag to a set of event positions (1-based)
+    tag_index: Mutex<HashMap<String, HashSet<u64>>>,
 }
 
 impl EventStore {
@@ -152,10 +154,13 @@ impl EventStore {
             .create(true)
             .open(&wal_path)?;
 
-        Ok(EventStore {
+        let event_store = EventStore {
             wal_file: Mutex::new(wal_file),
             path,
-        })
+            tag_index: Mutex::new(HashMap::new()),
+        };
+
+        Ok(event_store)
     }
 
     // Helper method to get a lock on the WAL file
@@ -164,6 +169,16 @@ impl EventStore {
             EventStoreError::Io(io::Error::new(
                 io::ErrorKind::Other,
                 "Failed to acquire lock on WAL file",
+            ))
+        })
+    }
+
+    // Helper method to get a lock on the tag index
+    fn lock_tag_index(&self) -> Result<MutexGuard<HashMap<String, HashSet<u64>>>> {
+        self.tag_index.lock().map_err(|_| {
+            EventStoreError::Io(io::Error::new(
+                io::ErrorKind::Other,
+                "Failed to acquire lock on tag index",
             ))
         })
     }
@@ -259,6 +274,13 @@ impl EventStore {
             return Ok((Vec::new(), None));
         }
 
+        // Check if we can use the tag index for more efficient querying
+        let can_use_index = if let Some(ref query) = query {
+            query.items.iter().any(|item| !item.tags.is_empty())
+        } else {
+            false
+        };
+
         // First pass: read all events and their positions
         while let Some((event, pos)) = EventStore::read_event_record(&mut wal)? {
             event_positions.push((event, pos));
@@ -267,26 +289,67 @@ impl EventStore {
         // Sort events by position (should already be in order, but just to be safe)
         event_positions.sort_by_key(|(_, pos)| *pos);
 
-        // Second pass: filter events
-        for (i, (event, _)) in event_positions.iter().enumerate() {
-            let position = i as u64 + 1; // 1-based position
+        // Second pass: filter events using tag index or sequential scan
+        if can_use_index && !event_positions.is_empty() && query.is_some() {
+            // Use tag index for optimization
+            let query_ref = query.as_ref().unwrap();
+            if let Some(positions) = self.find_tag_index_matches(query_ref)? {
+                // Get sorted positions from HashSet
+                let mut position_vec: Vec<u64> = positions.into_iter().collect();
+                position_vec.sort();
 
-            // Skip events up to the 'after' position
-            if let Some(after_pos) = after {
-                if position <= after_pos {
-                    continue;
+                for position in position_vec {
+                    // Skip events up to the 'after' position
+                    if let Some(after_pos) = after {
+                        if position <= after_pos {
+                            continue;
+                        }
+                    }
+
+                    // Position is 1-based, convert to 0-based index
+                    let index = (position - 1) as usize;
+                    if index < event_positions.len() {
+                        let (event, _) = &event_positions[index];
+
+                        // Verify that the event fully matches the query (including types)
+                        if Self::event_matches_query(event, query_ref) {
+                            filtered_positions.push(position);
+
+                            // Early exit if we've reached the limit
+                            if filtered_positions.len() >= limit {
+                                break;
+                            }
+                        }
+                    }
                 }
             }
+        } else {
+            // Fall back to sequential scan
+            for (i, (event, _)) in event_positions.iter().enumerate() {
+                let position = i as u64 + 1; // 1-based position
 
-            // Check if the event matches the query
-            if let Some(ref query) = query {
-                if !Self::event_matches_query(event, query) {
-                    continue;
+                // Skip events up to the 'after' position
+                if let Some(after_pos) = after {
+                    if position <= after_pos {
+                        continue;
+                    }
+                }
+
+                // Check if the event matches the query
+                if let Some(ref query) = query {
+                    if !Self::event_matches_query(event, query) {
+                        continue;
+                    }
+                }
+
+                // Add the position to the filtered positions
+                filtered_positions.push(position);
+
+                // Early exit if we've reached the limit
+                if filtered_positions.len() >= limit {
+                    break;
                 }
             }
-
-            // Add the position to the filtered positions
-            filtered_positions.push(position);
         }
 
         // Apply limit
@@ -346,6 +409,7 @@ impl EventStore {
 
         // Append events
         let mut wal = self.lock_wal()?;
+        let mut tag_index = self.lock_tag_index()?;
 
         // Count existing events
         wal.seek(SeekFrom::Start(0))?;
@@ -354,9 +418,18 @@ impl EventStore {
             event_count += 1;
         }
 
-        // Write events
-        for event in &events {
+        // Write events and update tag index
+        for (i, event) in events.iter().enumerate() {
             Self::write_event_record(&mut wal, event)?;
+
+            // Add event position to tag index for each tag
+            let position = event_count + i as u64 + 1; // 1-based position
+            for tag in &event.tags {
+                tag_index
+                    .entry(tag.clone())
+                    .or_insert_with(HashSet::new)
+                    .insert(position);
+            }
         }
 
         // Ensure durability
@@ -381,6 +454,63 @@ impl EventStore {
         false
     }
 
+    // Helper method to find candidate positions using tag index
+    fn find_tag_index_matches(&self, query: &Query) -> Result<Option<HashSet<u64>>> {
+        let tag_index = self.lock_tag_index()?;
+
+        if query.items.is_empty() {
+            return Ok(None);
+        }
+
+        let mut candidate_positions: Option<HashSet<u64>> = None;
+
+        for item in &query.items {
+            if !item.tags.is_empty() {
+                // Start with positions of the first tag
+                let mut item_positions: Option<HashSet<u64>> = None;
+
+                for tag in &item.tags {
+                    if let Some(tag_positions) = tag_index.get(tag) {
+                        match item_positions {
+                            Some(ref mut positions) => {
+                                // Intersect with existing positions (AND logic for tags within an item)
+                                let intersection: HashSet<u64> = positions
+                                    .intersection(tag_positions)
+                                    .cloned()
+                                    .collect();
+                                *positions = intersection;
+                            }
+                            None => {
+                                // First tag in this item
+                                item_positions = Some(tag_positions.clone());
+                            }
+                        }
+                    } else {
+                        // If any tag is not found, this item cannot match
+                        item_positions = Some(HashSet::new());
+                        break;
+                    }
+                }
+
+                // Add positions for this item to candidate positions (OR logic between items)
+                if let Some(item_pos) = item_positions {
+                    match candidate_positions {
+                        Some(ref mut positions) => {
+                            // Union with existing positions
+                            positions.extend(item_pos);
+                        }
+                        None => {
+                            // First item with tags
+                            candidate_positions = Some(item_pos);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(candidate_positions)
+    }
+
     // Helper method to check if an event matches a query item
     fn event_matches_query_item(event: &Event, item: &QueryItem) -> bool {
         // If types are specified, check if the event type matches any of them
@@ -399,5 +529,31 @@ impl EventStore {
         }
 
         true
+    }
+
+    // Helper method to rebuild the tag index from all events in the WAL
+    fn rebuild_tag_index(&self) -> Result<()> {
+        let mut wal = self.lock_wal()?;
+        let mut tag_index = self.lock_tag_index()?;
+
+        // Clear existing index
+        tag_index.clear();
+
+        // Reset to start of file
+        wal.seek(SeekFrom::Start(0))?;
+
+        // Read all events and rebuild index
+        let mut position = 1; // 1-based position
+        while let Some((event, _)) = Self::read_event_record(&mut wal)? {
+            for tag in &event.tags {
+                tag_index
+                    .entry(tag.clone())
+                    .or_insert_with(HashSet::new)
+                    .insert(position);
+            }
+            position += 1;
+        }
+
+        Ok(())
     }
 }

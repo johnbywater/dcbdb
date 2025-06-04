@@ -20,6 +20,11 @@ async-trait = "0.1"
 [dev-dependencies]
 tempfile = "3.8.0"
 tokio-test = "0.4"
+criterion = "0.5"
 
 [build-dependencies]
 tonic-build = "0.10"
+
+[[bench]]
+name = "event_store_benchmark"
+harness = false

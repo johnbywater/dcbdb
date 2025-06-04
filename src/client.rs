@@ -4,9 +4,15 @@ use tonic::transport::Channel;
 use tonic::Status;
 
 use crate::{Event, EventStoreError, Query, AppendCondition, SequencedEvent, Result};
-use crate::server::proto::{
+
+// Import the generated proto code directly
+pub mod proto {
+    tonic::include_proto!("dcbdb");
+}
+
+use proto::{
     event_store_service_client::EventStoreServiceClient,
-    EventProto, QueryProto, AppendConditionProto,
+    EventProto, QueryProto, QueryItemProto, AppendConditionProto,
     ReadRequestProto, AppendRequestProto,
 };
 
@@ -23,7 +29,7 @@ impl EventStoreClient {
                 std::io::ErrorKind::Other,
                 format!("Failed to connect to gRPC server: {}", e),
             )))?;
-        
+
         Ok(Self { client })
     }
 
@@ -37,30 +43,30 @@ impl EventStoreClient {
         let query_proto = query.map(|q| {
             let items = q.items.into_iter()
                 .map(|item| {
-                    crate::server::proto::QueryItemProto {
+                    QueryItemProto {
                         types: item.types,
                         tags: item.tags,
                     }
                 })
                 .collect();
-            
+
             QueryProto { items }
         });
-        
+
         let limit_proto = limit.map(|l| l as u32);
-        
+
         let request = ReadRequestProto {
             query: query_proto,
             after,
             limit: limit_proto,
         };
-        
+
         let response = self.client.clone().read(request)
             .await
             .map_err(|e| convert_status_to_error(e))?;
-        
+
         let response = response.into_inner();
-        
+
         let events = response.events.into_iter()
             .map(|e| {
                 let event_proto = e.event.unwrap();
@@ -69,14 +75,14 @@ impl EventStoreClient {
                     tags: event_proto.tags,
                     data: event_proto.data,
                 };
-                
+
                 SequencedEvent {
                     position: e.position,
                     event,
                 }
             })
             .collect();
-        
+
         Ok((events, response.head))
     }
 
@@ -92,37 +98,37 @@ impl EventStoreClient {
                 data: e.data,
             })
             .collect();
-        
+
         let condition_proto = condition.map(|c| {
             let query = c.fail_if_events_match;
             let items = query.items.into_iter()
                 .map(|item| {
-                    crate::server::proto::QueryItemProto {
+                    QueryItemProto {
                         types: item.types,
                         tags: item.tags,
                     }
                 })
                 .collect();
-            
+
             let query_proto = QueryProto { items };
-            
+
             AppendConditionProto {
                 fail_if_events_match: Some(query_proto),
                 after: c.after,
             }
         });
-        
+
         let request = AppendRequestProto {
             events: events_proto,
             condition: condition_proto,
         };
-        
+
         let response = self.client.clone().append(request)
             .await
             .map_err(|e| convert_status_to_error(e))?;
-        
+
         let response = response.into_inner();
-        
+
         Ok(response.position)
     }
 }

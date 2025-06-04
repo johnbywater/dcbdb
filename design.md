@@ -1,29 +1,24 @@
-# Event Store with Write-Ahead Log (WAL) - Design Document
+# Event Store with Write-Ahead Log (WAL) and Persistent Index - Design Document
 
 ## Overview
 
-This document outlines the design of a lightweight, durable, and fast event store implemented in Rust using a write-ahead log (WAL) for persistence and crash resilience. The store supports basic event sourcing operations such as appending events and replaying them in order, with potential for extension into a full CQRS/event-driven system.
+This document outlines the design of a lightweight, durable, and fast event store implemented in Rust using a write-ahead log (WAL) for persistence and crash resilience, extended with a persistent index for queryability. The store supports event sourcing operations such as appending and querying events, with consistency guarantees using the Dynamic Consistency Boundary (DCB) pattern.
 
 ---
 
 ## Goals
 
-* **Durability**: Events must not be lost during crashes or power failures.
-* **Performance**: Fast write path using sequential disk writes.
-* **Atomicity**: Batches of events are written atomically.
-* **Queryability**: Events can be queried using types and tags.
-* **Simplicity**: Toy-level complexity with realistic patterns.
-* **Extensibility**: Modular design for snapshotting, indexing, and streaming.
-* **Concurrency**: Safe concurrent reads and writes with locking or coordination.
-* **Consistency**: Support for the Dynamic Consistency Boundary (DCB) specification.
+* **Durability**: WAL ensures that no events are lost during crashes.
+* **Atomicity**: Events are written in batches and flushed atomically.
+* **Queryability**: Persistent index allows fast querying by tags and types.
+* **Performance**: Fast writes, fast filtered reads.
+* **Extensibility**: Snapshotting, streaming, compaction are modular add-ons.
+* **Concurrency**: Safe concurrent access using synchronization primitives.
+* **Consistency**: Supports DCB semantics for conditional appends.
 
 ---
 
-## Core Concepts
-
-### Event
-
-An `Event` is an immutable record with the following fields:
+## Event Representation
 
 ```rust
 struct Event {
@@ -36,53 +31,99 @@ struct SequencedEvent {
     position: u64,
     event: Event,
 }
+
+struct EventMetadata {
+    offset: u64,
+    event_type: String,
+    tags: Vec<String>,
+}
 ```
 
-Each event is serialized using `bincode` and protected with a CRC32 checksum. Events are recorded with a monotonically increasing position and do not require an aggregate ID or version.
+---
 
-### Write-Ahead Log (WAL)
+## WAL Format
 
-* Events are written to a log file sequentially.
-* The format for each event record:
+Each event is encoded as:
 
-    * `[4 bytes]` Length of encoded event.
-    * `[N bytes]` Serialized event payload.
-    * `[4 bytes]` CRC32 checksum.
+```
+[4 bytes] length
+[N bytes] serialized Event
+[4 bytes] CRC32
+```
 
-All events in a batch are written in one contiguous block and flushed with `sync_all()` to ensure atomicity and durability.
+Events are appended in order and flushed using `sync_all()`.
 
 ---
 
-## File Structure
+## Persistent Index File (`eventstore.idx`)
 
-* `eventstore.wal`: Main WAL file where all events are appended.
-* `eventstore.idx`: Index file mapping tags and types to event positions.
-* `snapshots/`: Directory for event projections or snapshots.
+### Format
+
+Serialized structure containing:
+
+```rust
+struct IndexEntry {
+    position: u64,
+    offset: u64,
+    event_type: String,
+    tags: Vec<String>,
+}
+
+struct IndexData {
+    entries: Vec<IndexEntry>,
+    tag_index: HashMap<String, Vec<u64>>,
+    type_index: HashMap<String, Vec<u64>>,
+}
+```
+
+This structure is serialized using `bincode` and flushed after each successful append.
 
 ---
 
-## Components
+## EventStore Struct
 
-### EventStore
+```rust
+struct EventStore {
+    wal_file: Mutex<File>,
+    metadata: Mutex<Vec<(u64, EventMetadata)>>,
+    tag_index: Mutex<HashMap<String, Vec<u64>>>,
+    type_index: Mutex<HashMap<String, Vec<u64>>>,
+    event_count: AtomicU64,
+}
+```
 
-Encapsulates all logic for file IO, locking, and event handling.
+---
 
-#### Key Methods
+## Methods
 
-* `open(path: &str) -> Self`
-* `append_all(events: Vec<Event>) -> Result<()>`: Atomically appends a batch of events.
-* `append_if_unchanged(query_items: Vec<QueryItem>, after: Option<u64>, new_events: Vec<Event>) -> Result<u64>`: Appends events if no conflicting events exist since `after`. Returns the last position written.
-* `read(query_items: Vec<QueryItem>, after: Option<u64>, limit: Option<usize>) -> (Vec<SequencedEvent>, Option<u64>)`: Returns all events matching query items after a given position, up to an optional limit. Returns the highest position scanned.
+### `open(path: &str) -> Self`
 
-Uses `Mutex<File>` to ensure safe concurrent access initially.
+* Load WAL
+* Attempt to load `eventstore.idx`
+* If index is missing or invalid, scan WAL to build index
+
+### `append_all(events: Vec<Event>) -> Result<()>`
+
+* Encode and write batch to WAL
+* Capture offset and metadata for each event
+* Update `metadata`, `tag_index`, `type_index`
+* Serialize and flush index to `eventstore.idx`
+
+### `append_if_unchanged(query_items: Vec<QueryItem>, after: Option<u64>, new_events: Vec<Event>) -> Result<u64>`
+
+* Run read with `query_items` and `after`
+* If any matches, return integrity error
+* Else, call `append_all` and return last position
+
+### `read(query_items: Vec<QueryItem>, after: Option<u64>, limit: Option<usize>) -> (Vec<SequencedEvent>, Option<u64>)`
+
+* Resolve matching positions from `tag_index` and `type_index`
+* Filter by `after` and limit
+* Read event payloads from WAL using `offset`
 
 ---
 
 ## Query Model
-
-### QueryItem
-
-Each query item specifies matching criteria:
 
 ```rust
 struct QueryItem {
@@ -91,120 +132,86 @@ struct QueryItem {
 }
 ```
 
-### Matching Semantics
+**Matching Rules**:
 
-* An event matches a query item if:
+* Match if event type is in `types`
+* Or, if `types` is empty and event tags are a **superset** of query tags
 
-    * Its type is in the query item’s `types`, **or** the query item has no types and the event’s tags are a **superset** of the query item’s tags.
-* A query with zero items and no `after` will select all events.
-* A query with multiple items accumulates matching events across all query items.
-
-### Append Condition
-
-* Represented by a pair `(query: Vec<QueryItem>, after: Option<u64>)`
-* Before appending, the store re-runs the query using the same `query` and `after`.
-* If any new events are found, the append fails with an integrity error.
-* Otherwise, the new events are written atomically.
+**Empty query** = all events
 
 ---
 
-## Durability and Power Failure Resilience
+## Durability
 
-* All writes are flushed using `file.sync_all()` after appending.
-* CRC32 is used to detect corruption due to incomplete writes.
-* On startup, invalid or corrupted events at the tail of the WAL are ignored.
-
----
-
-## Performance Characteristics
-
-### Append
-
-* Uses `OpenOptions` with `append` and `fsync()` for fast, reliable writes.
-* Events are encoded in binary for minimal disk usage.
-* Batches are appended atomically to avoid partial update states.
-
-### Read
-
-* Replays events sequentially from disk.
-* Validates CRC32 at read time.
-* Querying is done via filtering in memory or indexed lookup.
+* WAL uses `sync_all()` after each batch
+* CRC32 guards against corruption
+* Index is written to temp file and renamed to prevent partial writes
 
 ---
 
-## Extensions and Future Work
+## Performance
 
-### Indexing
+* Append: fast, sequential disk writes
+* Read: in-memory index filtering, random access to WAL
 
-* **Structure**: Index maps `tag/type -> Vec<position>` for fast filtering.
-* **Purpose**: Efficient read queries for dynamic query items.
-* **Format**: Binary format mapping tags/types to event offsets.
-* **Maintenance**: Index is updated atomically after each append.
+---
 
-### Concurrency Control
-
-* **Goal**: Safe concurrent readers and writers.
-* **Design**:
-
-    * Use `RwLock` or crossbeam channels for fine-grained locking.
-    * For each append, acquire exclusive write lock.
-    * Readers use shared lock to read and filter events.
-    * Index updates are guarded by their own mutex.
-
-### Dynamic Consistency Boundary (DCB) Support
-
-* **Query**: A command method selects events using query items and a known position.
-* **Decision**: A decision model is constructed from the selected events.
-* **Append Condition**: The command attempts to append new events **if and only if** no events have been recorded since the known position, under the same query items.
-* **Atomicity**: If the condition passes, all new events are written atomically with assigned positions.
-* **Consistency**: If the condition fails, an integrity error is raised.
-* **Dynamic Boundary**: Each command dynamically defines the scope of consistency it requires.
-* **API**: The system implements a recorder interface with the following methods:
-
-  ```rust
-  fn read(query: Option<Vec<QueryItem>>, after: Option<u64>, limit: Option<usize>) -> (Vec<SequencedEvent>, Option<u64>);
-  fn append(events: Vec<Event>, condition: Option<(Vec<QueryItem>, Option<u64>)>) -> Result<u64, IntegrityError>;
-  ```
+## Extensions
 
 ### Snapshotting
 
-* Write state of projection models to snapshot files.
-* Accelerates recovery from WAL.
+* Persist projections for faster recovery
 
 ### Segmentation
 
-* Rotate WAL into segments: `wal-00001`, `wal-00002`, etc.
-* Enables log pruning and archiving.
+* `wal-00001`, `wal-00002`, etc., plus corresponding index segments
 
-### Streaming Reads
+### Streaming
 
-* Implement tailing reads using file watchers or an event queue.
+* Tail file or implement subscription hooks
 
 ### API Layer
 
-* Expose via gRPC or HTTP for integration with microservices.
-* Implement projections and subscriptions.
+* gRPC or HTTP with JSON/Protobuf
+
+---
+
+## Concurrency
+
+* Use `Mutex` and `AtomicU64`
+* Future: upgrade to `RwLock` or async channels
+
+---
+
+## Consistency: Dynamic Consistency Boundary (DCB)
+
+```rust
+fn read(query: Option<Vec<QueryItem>>, after: Option<u64>, limit: Option<usize>) -> (Vec<SequencedEvent>, Option<u64>);
+fn append(events: Vec<Event>, condition: Option<(Vec<QueryItem>, Option<u64>)>) -> Result<u64, IntegrityError>;
+```
+
+* Guarantees atomic conditional append
+* Command defines consistency boundary with query + `after`
 
 ---
 
 ## Technology Stack
 
 * **Language**: Rust
-* **IO Libraries**: std::fs, bincode, crc
-* **Serialization**: bincode (can switch to protobuf or msgpack)
-* **Concurrency Tools**: std::sync::{Mutex, RwLock}, crossbeam (future)
+* **IO**: `std::fs`, `bincode`, `crc32fast`
+* **Memory Map**: `memmap2`
+* **Concurrency**: `Mutex`, `AtomicU64`, `RwLock`
 
 ---
 
 ## Limitations
 
-* Basic concurrency model with coarse locking.
-* No log compaction or garbage collection.
-* No in-memory caching.
-* Indexing requires full WAL scan if out-of-sync.
+* Index must be flushed periodically to persist queryability
+* WAL compaction not implemented
+* Index may grow large without tag/type pruning
 
 ---
 
 ## Summary
 
-This design provides a minimal but extensible starting point for building an event sourcing engine backed by a WAL. It is resilient to power loss, supports atomic multi-event appends, and allows filtered reads by tag/type-based queries. With indexing, concurrency control, and full support for the Dynamic Consistency Boundary, it enables scalable command processing with strong consistency semantics.
+This design integrates a persistent index with a WAL-backed event store to support durable, queryable, and consistent event processing. It enables fast reads via an in-memory index that is backed by a flushed metadata file, and it ensures DCB safety for complex multi-event transactions. The modular structure supports extension into a fully-fledged event sourcing platform.

@@ -9,6 +9,69 @@ use crc::{Crc, CRC_32_ISO_HDLC};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+// Export server and client modules if the grpc feature is enabled
+#[cfg(feature = "grpc")]
+pub mod server;
+#[cfg(feature = "grpc")]
+pub mod client;
+
+// EventStore trait
+pub trait EventStoreApi {
+    fn read(
+        &self,
+        query: Option<Query>,
+        after: Option<u64>,
+        limit: Option<usize>,
+    ) -> Result<(Vec<SequencedEvent>, Option<u64>)>;
+
+    fn append(
+        &self,
+        events: Vec<Event>,
+        condition: Option<AppendCondition>,
+    ) -> Result<u64>;
+}
+
+// Implement the trait for EventStore
+impl EventStoreApi for EventStore {
+    fn read(
+        &self,
+        query: Option<Query>,
+        after: Option<u64>,
+        limit: Option<usize>,
+    ) -> Result<(Vec<SequencedEvent>, Option<u64>)> {
+        self.read(query, after, limit)
+    }
+
+    fn append(
+        &self,
+        events: Vec<Event>,
+        condition: Option<AppendCondition>,
+    ) -> Result<u64> {
+        self.append(events, condition)
+    }
+}
+
+// Implement the trait for EventStoreClientSync if the grpc feature is enabled
+#[cfg(feature = "grpc")]
+impl EventStoreApi for client::EventStoreClientSync {
+    fn read(
+        &self,
+        query: Option<Query>,
+        after: Option<u64>,
+        limit: Option<usize>,
+    ) -> Result<(Vec<SequencedEvent>, Option<u64>)> {
+        self.read(query, after, limit)
+    }
+
+    fn append(
+        &self,
+        events: Vec<Event>,
+        condition: Option<AppendCondition>,
+    ) -> Result<u64> {
+        self.append(events, condition)
+    }
+}
+
 // Constants
 const CRC: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
 

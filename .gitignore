@@ -4,3 +4,4 @@
 /.idea/inspectionProfiles/Project_Default.xml
 /.idea/.gitignore
 /.idea/vcs.xml
+/data/eventstore.wal

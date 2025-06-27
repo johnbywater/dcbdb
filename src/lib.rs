@@ -12,6 +12,9 @@ pub mod wal;
 // Export the Segments module
 pub mod segments;
 
+// Export the Positions module
+pub mod positions;
+
 #[cfg(test)]
 mod tests {
     #[test]

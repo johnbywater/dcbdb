@@ -601,6 +601,9 @@ impl PositionIndex {
             let new_values = leaf.values.split_off(split_point);
 
             let new_page_id = self.alloc_page_id();
+            // Extract the first key from new_keys before moving it
+            let first_key = new_keys[0];
+
             let new_leaf = LeafNode {
                 keys: new_keys,
                 values: new_values,
@@ -619,12 +622,12 @@ impl PositionIndex {
 
             let new_leaf_page = IndexPage {
                 page_id: new_page_id,
-                node: Node::Leaf(new_leaf.clone()),
+                node: Node::Leaf(new_leaf),
             };
             self.add_page(&new_leaf_page)?;
 
             // Return the first key in the new leaf and the new page ID
-            Ok((new_leaf.keys[0], new_page_id))
+            Ok((first_key, new_page_id))
         } else {
             Err(IndexError::InvalidNodeType("Expected leaf node".to_string()))
         }
@@ -693,7 +696,8 @@ impl PositionIndex {
                     for i in 0..leaf_node.keys.len() {
                         if leaf_node.keys[i] == key {
                             let record = leaf_node.values[i].clone();
-                            position_cache.insert(key, record.clone());
+                            let record_for_cache = record.clone();
+                            position_cache.insert(key, record_for_cache);
                             return Ok(Some(record));
                         }
                     }

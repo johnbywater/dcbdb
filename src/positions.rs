@@ -1037,4 +1037,64 @@ mod tests {
             panic!("Expected internal node");
         }
     }
+
+    #[test]
+    fn test_serialize_page() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("position_index.db");
+        let index = PositionIndex::new(&path, 1).unwrap();
+
+        // Create a simple leaf node
+        let leaf_node = LeafNode {
+            keys: vec![1, 2, 3],
+            values: vec![
+                PositionIndexRecord {
+                    segment: 1,
+                    offset: 10,
+                    type_hash: hash_type("test-type-1"),
+                },
+                PositionIndexRecord {
+                    segment: 2,
+                    offset: 20,
+                    type_hash: hash_type("test-type-2"),
+                },
+                PositionIndexRecord {
+                    segment: 3,
+                    offset: 30,
+                    type_hash: hash_type("test-type-3"),
+                },
+            ],
+            next_leaf_id: None,
+        };
+
+        let page = IndexPage {
+            page_id: PageID(1),
+            node: Node::Leaf(leaf_node),
+        };
+
+        // Serialize the page
+        let serialized = index.serialize_page(&page).unwrap();
+
+        // Check that the serialized data is around 120 bytes, not PAGE_SIZE
+        assert!(serialized.len() < 200); // Allow some flexibility in the exact size
+        assert!(serialized.len() > 100);
+        println!("Serialized data length: {}", serialized.len());
+
+        // Check that the node type byte is correct
+        assert_eq!(serialized[0], 2); // 2 is the node type byte for leaf nodes
+
+        // Extract the data length from the serialized data
+        let data_len = u16::from_le_bytes([serialized[5], serialized[6]]);
+
+        // Check that the data length is reasonable (greater than 0 and less than PAGE_SIZE - HEADER_SIZE)
+        assert!(data_len > 0);
+        assert!(data_len < (PAGE_SIZE - HEADER_SIZE) as u16);
+
+        // Check that the actual data is present in the serialized buffer
+        let data = &serialized[HEADER_SIZE..HEADER_SIZE + data_len as usize];
+        assert!(!data.is_empty());
+
+        // The serialized data should be exactly HEADER_SIZE + data_len bytes
+        assert_eq!(serialized.len(), HEADER_SIZE + data_len as usize);
+    }
 }

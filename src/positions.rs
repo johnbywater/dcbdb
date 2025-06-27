@@ -444,13 +444,35 @@ impl PositionIndex {
     where
         F: FnOnce(&mut IndexPage) -> R,
     {
+        // First try to get the page from the cache
         let mut page_cache = self.page_cache.lock().unwrap();
         if let Some(page) = page_cache.get_mut(&page_id) {
-            return Ok(f(page));
+            let result = f(page);
+            // Mark the page as dirty since it was modified
+            self.mark_dirty(page_id);
+            return Ok(result);
         }
 
-        // If the page is not in the cache, return an error
-        Err(IndexError::PageNotFound(page_id))
+        // If not in cache, try to load it from disk
+        drop(page_cache); // Release the lock before calling get_page
+
+        // Get the page (this will load it from disk if necessary)
+        let page = self.get_page(page_id)?;
+
+        // Now that we have the page, put it back in the cache and get a mutable reference
+        let mut page_cache = self.page_cache.lock().unwrap();
+        page_cache.insert(page_id, page);
+
+        // Get a mutable reference to the page and apply the function
+        if let Some(page) = page_cache.get_mut(&page_id) {
+            let result = f(page);
+            // Mark the page as dirty since it was modified
+            self.mark_dirty(page_id);
+            return Ok(result);
+        }
+
+        // This should never happen since we just inserted the page
+        Err(IndexError::DatabaseCorrupted("Failed to get page after inserting it into cache".to_string()))
     }
 
     // Get a page from the index with a mutable reference

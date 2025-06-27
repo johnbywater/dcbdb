@@ -537,90 +537,104 @@ impl PositionIndex {
 
     // Insert a key-value pair into the index
     pub fn insert(&mut self, key: Position, value: PositionIndexRecord) -> IndexResult<()> {
-        if let Some(split_root) = self.insert_recursive(self.root_page_id, key, value.clone())? {
-            // The root node split, so create a new internal node
-            let (promoted_position, new_page_id) = split_root;
-            let new_root = IndexPage {
-                page_id: self.alloc_page_id(),
-                node: Node::Internal(InternalNode {
-                    keys: vec![promoted_position],
-                    child_ids: vec![self.root_page_id, new_page_id],
-                }),
-            };
-            self.add_page(&new_root)?;
-            self.root_page_id = new_root.page_id;
-            self.write_header()?;
-        }
+        // Stack to keep track of the path from root to leaf
+        // Each entry is a page ID and the index of the child to follow
+        let mut stack: Vec<(PageID, usize)> = Vec::new();
+        let mut current_page_id = self.root_page_id;
 
-        let mut position_cache = self.position_cache.lock().unwrap();
-        position_cache.insert(key, value);
+        // First phase: traverse down to the leaf node
+        loop {
+            let page = self.get_page(current_page_id)?;
 
-        Ok(())
-    }
-
-    // Recursive helper for insert
-    fn insert_recursive(
-        &mut self,
-        page_id: PageID,
-        key: Position,
-        value: PositionIndexRecord,
-    ) -> IndexResult<Option<(Position, PageID)>> {
-        let page = self.get_page(page_id)?;
-
-        match page.node {
-            Node::Leaf(mut leaf) => {
-                // We found a leaf node, so insert the key-value pair directly
-                // No need to clone the leaf_node
-
-                if leaf.keys.is_empty() || key > *leaf.keys.last().unwrap() {
-                    leaf.keys.push(key);
-                    leaf.values.push(value);
-                } else {
-                    // Find the insertion point
-                    let mut i = 0;
-                    while i < leaf.keys.len() && leaf.keys[i] < key {
-                        i += 1;
+            match &page.node {
+                Node::Leaf(_) => {
+                    // Found the leaf node, break out of the loop
+                    break;
+                },
+                Node::Internal(internal) => {
+                    // Find the child to follow
+                    let mut child_idx = 0;
+                    while child_idx < internal.keys.len() && internal.keys[child_idx] <= key {
+                        child_idx += 1;
                     }
 
-                    if i < leaf.keys.len() && leaf.keys[i] == key {
-                        // Key already exists, update the value
-                        leaf.values[i] = value;
-                    } else {
-                        // Insert the key-value pair
-                        leaf.keys.insert(i, key);
-                        leaf.values.insert(i, value);
-                    }
-                }
+                    // Push the current page and child index onto the stack
+                    stack.push((current_page_id, child_idx));
 
-                // Create a new page with the modified leaf node
-                let new_page = IndexPage {
-                    page_id,
-                    node: Node::Leaf(leaf),
-                };
-
-                // Check if this page needs splitting
-                if self.needs_splitting(&new_page)? {
-                    return Ok(Some(self.split_leaf(&new_page)?));
-                } else {
-                    // Just mark the page as dirty if it doesn't need splitting
-                    let mut page_cache = self.page_cache.lock().unwrap();
-                    page_cache.insert(page_id, new_page);
-                    self.mark_dirty(page_id);
+                    // Move to the child
+                    current_page_id = internal.child_ids[child_idx];
+                },
+                Node::Header(_) => {
+                    return Err(IndexError::InvalidNodeType("Expected leaf or internal node".to_string()));
                 }
             }
-            Node::Internal(mut internal) => {
-                // Find the child to recurse into
-                // No need to clone the internal_node
-                let mut child_idx = 0;
+        }
 
-                while child_idx < internal.keys.len() && internal.keys[child_idx] <= key {
-                    child_idx += 1;
+        // Second phase: insert into the leaf node
+        let mut page = self.get_page(current_page_id)?;
+        if let Node::Leaf(mut leaf) = page.node {
+            // Insert the key-value pair into the leaf
+            if leaf.keys.is_empty() || key > *leaf.keys.last().unwrap() {
+                leaf.keys.push(key);
+                leaf.values.push(value.clone());
+            } else {
+                // Find the insertion point
+                let mut i = 0;
+                while i < leaf.keys.len() && leaf.keys[i] < key {
+                    i += 1;
                 }
 
-                let child_id = internal.child_ids[child_idx];
+                if i < leaf.keys.len() && leaf.keys[i] == key {
+                    // Key already exists, update the value
+                    leaf.values[i] = value.clone();
+                } else {
+                    // Insert the key-value pair
+                    leaf.keys.insert(i, key);
+                    leaf.values.insert(i, value.clone());
+                }
+            }
 
-                if let Some(split_child) = self.insert_recursive(child_id, key, value)? {
-                    // Child page split, so insert the promoted key and new page ID
+            // Create a new page with the modified leaf node
+            let new_page = IndexPage {
+                page_id: current_page_id,
+                node: Node::Leaf(leaf),
+            };
+
+            // Check if this page needs splitting
+            let mut split_info = None;
+            if self.needs_splitting(&new_page)? {
+                split_info = Some(self.split_leaf(&new_page)?);
+            } else {
+                // Just mark the page as dirty if it doesn't need splitting
+                let mut page_cache = self.page_cache.lock().unwrap();
+                page_cache.insert(current_page_id, new_page);
+                self.mark_dirty(current_page_id);
+            }
+
+            // Third phase: propagate splits up the tree
+            while let Some(split_child) = split_info {
+                if stack.is_empty() {
+                    // We've reached the root, create a new root
+                    let (promoted_position, new_page_id) = split_child;
+                    let new_root = IndexPage {
+                        page_id: self.alloc_page_id(),
+                        node: Node::Internal(InternalNode {
+                            keys: vec![promoted_position],
+                            child_ids: vec![self.root_page_id, new_page_id],
+                        }),
+                    };
+                    self.add_page(&new_root)?;
+                    self.root_page_id = new_root.page_id;
+                    self.write_header()?;
+                    break;
+                }
+
+                // Pop the parent from the stack
+                let (parent_id, _) = stack.pop().unwrap();
+                let parent_page = self.get_page(parent_id)?;
+
+                if let Node::Internal(mut internal) = parent_page.node {
+                    // Insert the promoted key and new page ID
                     let (promoted_key, new_page_id) = split_child;
 
                     let mut i = 0;
@@ -633,28 +647,35 @@ impl PositionIndex {
 
                     // Create a new page with the modified internal node
                     let new_page = IndexPage {
-                        page_id,
+                        page_id: parent_id,
                         node: Node::Internal(internal),
                     };
 
                     // Check if this page needs splitting
                     if self.needs_splitting(&new_page)? {
-                        return Ok(Some(self.split_internal(&new_page)?));
+                        split_info = Some(self.split_internal(&new_page)?);
                     } else {
                         // Just mark the page as dirty if it doesn't need splitting
                         let mut page_cache = self.page_cache.lock().unwrap();
-                        page_cache.insert(page_id, new_page);
-                        self.mark_dirty(page_id);
+                        page_cache.insert(parent_id, new_page);
+                        self.mark_dirty(parent_id);
+                        split_info = None;
                     }
+                } else {
+                    return Err(IndexError::InvalidNodeType("Expected internal node".to_string()));
                 }
             }
-            Node::Header(_) => {
-                return Err(IndexError::InvalidNodeType("Expected leaf or internal node".to_string()));
-            }
+        } else {
+            return Err(IndexError::InvalidNodeType("Expected leaf node".to_string()));
         }
 
-        Ok(None)
+        // Update the position cache
+        let mut position_cache = self.position_cache.lock().unwrap();
+        position_cache.insert(key, value);
+
+        Ok(())
     }
+
 
     // Check if a page needs splitting
     fn needs_splitting(&self, page: &IndexPage) -> IndexResult<bool> {

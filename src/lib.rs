@@ -9,6 +9,9 @@ pub mod api;
 // Export the WAL module
 pub mod wal;
 
+// Export the Segments module
+pub mod segments;
+
 #[cfg(test)]
 mod tests {
     #[test]

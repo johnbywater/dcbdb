@@ -159,6 +159,10 @@ impl PositionCache {
         self.cache.get(&key).cloned()
     }
 
+    pub fn get_mut(&mut self, key: &Position) -> Option<&mut PositionIndexRecord> {
+        self.cache.get_mut(key)
+    }
+
     pub fn insert(&mut self, key: Position, value: PositionIndexRecord) {
         self.cache.put(key, value);
     }
@@ -191,6 +195,10 @@ impl PageCache {
 
     pub fn get(&mut self, page_id: PageID) -> Option<IndexPage> {
         self.cache.get(&page_id).cloned()
+    }
+
+    pub fn get_mut(&mut self, page_id: &PageID) -> Option<&mut IndexPage> {
+        self.cache.get_mut(page_id)
     }
 
     pub fn insert(&mut self, page_id: PageID, page: IndexPage) {
@@ -807,6 +815,96 @@ impl PositionIndex {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_page_cache_get_mut() {
+        // Test initialization with capacity
+        let mut cache = PageCache::new(3);
+
+        // Create a test page
+        let page = IndexPage {
+            page_id: PageID(1),
+            node: Node::Leaf(LeafNode {
+                keys: vec![1, 2],
+                values: vec![
+                    PositionIndexRecord {
+                        segment: 1,
+                        offset: 10,
+                        type_hash: vec![1, 2, 3],
+                    },
+                    PositionIndexRecord {
+                        segment: 2,
+                        offset: 20,
+                        type_hash: vec![4, 5, 6],
+                    },
+                ],
+                next_leaf_id: None,
+            }),
+        };
+
+        // Insert the page into the cache
+        cache.insert(page.page_id, page.clone());
+
+        // Get a mutable reference to the page
+        let page_mut = cache.get_mut(&PageID(1)).unwrap();
+
+        // Modify the page through the mutable reference
+        if let Node::Leaf(leaf) = &mut page_mut.node {
+            // Add a new key-value pair
+            leaf.keys.push(3);
+            leaf.values.push(PositionIndexRecord {
+                segment: 3,
+                offset: 30,
+                type_hash: vec![7, 8, 9],
+            });
+        } else {
+            panic!("Expected leaf node");
+        }
+
+        // Get the page again to verify the modification
+        let modified_page = cache.get(PageID(1)).unwrap();
+        if let Node::Leaf(leaf) = &modified_page.node {
+            // Verify that the new key-value pair was added
+            assert_eq!(leaf.keys.len(), 3);
+            assert_eq!(leaf.keys[2], 3);
+            assert_eq!(leaf.values[2].segment, 3);
+            assert_eq!(leaf.values[2].offset, 30);
+            assert_eq!(leaf.values[2].type_hash, vec![7, 8, 9]);
+        } else {
+            panic!("Expected leaf node");
+        }
+    }
+
+    #[test]
+    fn test_position_cache_get_mut() {
+        // Test initialization with capacity
+        let mut cache = PositionCache::new(3);
+
+        // Create a test record
+        let record = PositionIndexRecord {
+            segment: 1,
+            offset: 10,
+            type_hash: vec![1, 2, 3],
+        };
+
+        // Insert the record into the cache
+        let position = 1;
+        cache.insert(position, record.clone());
+
+        // Get a mutable reference to the record
+        let record_mut = cache.get_mut(&position).unwrap();
+
+        // Modify the record through the mutable reference
+        record_mut.segment = 2;
+        record_mut.offset = 20;
+        record_mut.type_hash = vec![4, 5, 6];
+
+        // Get the record again to verify the modification
+        let modified_record = cache.get(position).unwrap();
+        assert_eq!(modified_record.segment, 2);
+        assert_eq!(modified_record.offset, 20);
+        assert_eq!(modified_record.type_hash, vec![4, 5, 6]);
+    }
 
     #[test]
     fn test_page_cache() {

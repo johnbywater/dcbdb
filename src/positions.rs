@@ -208,6 +208,7 @@ impl PageCache {
         }
     }
 
+
     pub fn insert(&mut self, page_id: PageID, page: IndexPage) {
         // Remove existing entry if present
         if let Some(pos) = self.cache.iter().position(|(id, _)| *id == page_id) {
@@ -506,10 +507,10 @@ impl PositionIndex {
     ) -> IndexResult<Option<(Position, PageID)>> {
         let page = self.get_page(page_id)?;
 
-        match &page.node {
-            Node::Leaf(leaf_node) => {
-                // We found a leaf node, so insert the key-value pair
-                let mut leaf = leaf_node.clone();
+        match page.node {
+            Node::Leaf(mut leaf) => {
+                // We found a leaf node, so insert the key-value pair directly
+                // No need to clone the leaf_node
 
                 if leaf.keys.is_empty() || key > *leaf.keys.last().unwrap() {
                     leaf.keys.push(key);
@@ -531,21 +532,25 @@ impl PositionIndex {
                     }
                 }
 
-                // Update the page
+                // Create a new page with the modified leaf node
                 let new_page = IndexPage {
                     page_id,
                     node: Node::Leaf(leaf),
                 };
-                self.add_page(&new_page)?;
 
                 // Check if this page needs splitting
                 if self.needs_splitting(&new_page)? {
                     return Ok(Some(self.split_leaf(&new_page)?));
+                } else {
+                    // Just mark the page as dirty if it doesn't need splitting
+                    let mut page_cache = self.page_cache.lock().unwrap();
+                    page_cache.insert(page_id, new_page);
+                    self.mark_dirty(page_id);
                 }
             }
-            Node::Internal(internal_node) => {
+            Node::Internal(mut internal) => {
                 // Find the child to recurse into
-                let mut internal = internal_node.clone();
+                // No need to clone the internal_node
                 let mut child_idx = 0;
 
                 while child_idx < internal.keys.len() && internal.keys[child_idx] <= key {
@@ -566,20 +571,24 @@ impl PositionIndex {
                     internal.keys.insert(i, promoted_key);
                     internal.child_ids.insert(i + 1, new_page_id);
 
-                    // Update the page
+                    // Create a new page with the modified internal node
                     let new_page = IndexPage {
                         page_id,
                         node: Node::Internal(internal),
                     };
-                    self.add_page(&new_page)?;
 
                     // Check if this page needs splitting
                     if self.needs_splitting(&new_page)? {
                         return Ok(Some(self.split_internal(&new_page)?));
+                    } else {
+                        // Just mark the page as dirty if it doesn't need splitting
+                        let mut page_cache = self.page_cache.lock().unwrap();
+                        page_cache.insert(page_id, new_page);
+                        self.mark_dirty(page_id);
                     }
                 }
             }
-            _ => {
+            Node::Header(_) => {
                 return Err(IndexError::InvalidNodeType("Expected leaf or internal node".to_string()));
             }
         }

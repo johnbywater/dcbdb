@@ -224,6 +224,43 @@ pub fn hash_type(type_str: &str) -> Vec<u8> {
     uuid.as_bytes()[..TYPE_HASH_LEN].to_vec()
 }
 
+// PageGuard struct to hold both the MutexGuard and provide access to the mutable page
+pub struct PageGuard<'a> {
+    _guard: std::sync::MutexGuard<'a, PageCache>,
+    page: &'a mut IndexPage,
+}
+
+impl<'a> PageGuard<'a> {
+    // Create a new PageGuard
+    fn new(guard: std::sync::MutexGuard<'a, PageCache>, page: &'a mut IndexPage) -> Self {
+        Self { _guard: guard, page }
+    }
+
+    // Get a mutable reference to the page
+    pub fn page_mut(&mut self) -> &mut IndexPage {
+        self.page
+    }
+
+    // Get an immutable reference to the page
+    pub fn page(&self) -> &IndexPage {
+        self.page
+    }
+}
+
+impl<'a> std::ops::Deref for PageGuard<'a> {
+    type Target = IndexPage;
+
+    fn deref(&self) -> &Self::Target {
+        self.page
+    }
+}
+
+impl<'a> std::ops::DerefMut for PageGuard<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.page
+    }
+}
+
 // Position index
 pub struct PositionIndex {
     file: Mutex<File>,
@@ -326,8 +363,8 @@ impl PositionIndex {
     // Get a page from the index
     fn get_page(&self, page_id: PageID) -> IndexResult<IndexPage> {
         let mut page_cache = self.page_cache.lock().unwrap();
-        if let Some(page) = page_cache.get(page_id) {
-            return Ok(page);
+        if let Some(page) = page_cache.get_mut(&page_id) {
+            return Ok(page.clone());
         }
 
         // We'll try to read the page from disk first
@@ -399,6 +436,43 @@ impl PositionIndex {
 
         // If we get here, the page doesn't exist
         return Err(IndexError::PageNotFound(page_id));
+    }
+
+    // Get a page from the index and apply a function to it with a mutable reference
+    // This uses a callback-based approach to avoid lifetime issues
+    fn with_page_mut<F, R>(&self, page_id: PageID, f: F) -> IndexResult<R>
+    where
+        F: FnOnce(&mut IndexPage) -> R,
+    {
+        let mut page_cache = self.page_cache.lock().unwrap();
+        if let Some(page) = page_cache.get_mut(&page_id) {
+            return Ok(f(page));
+        }
+
+        // If the page is not in the cache, return an error
+        Err(IndexError::PageNotFound(page_id))
+    }
+
+    // Get a page from the index with a mutable reference
+    // This returns a borrowed mutable reference instead of cloning the page
+    fn get_page_mut(&self, page_id: PageID) -> IndexResult<&mut IndexPage> {
+        // We need to modify the implementation to return a borrowed mutable reference
+        // However, this is challenging because:
+        // 1. The page_cache is wrapped in a Mutex, which means we need to keep the lock
+        // 2. The method has multiple return points, including cases where it reads from disk
+        // 3. The method signature has &self, which means it can't return a mutable reference
+        //    to something owned by self without using interior mutability
+
+        // Given these constraints, it's not straightforward to modify get_page() to return
+        // a mutable reference. We would need to redesign the API to support this use case.
+        // Some possible approaches:
+        // 1. Create a custom PageGuard struct that holds both the MutexGuard and the page reference
+        // 2. Use a callback-based API where the caller provides a function to operate on the page
+        //    (see the with_page_mut method above for an implementation of this approach)
+        // 3. Use interior mutability with RefCell or Mutex for the pages themselves
+
+        // For now, we'll return an error to indicate that this functionality is not implemented
+        Err(IndexError::DatabaseCorrupted("get_page_mut() is not implemented".to_string()))
     }
 
     // Serialize a page
@@ -870,6 +944,47 @@ mod tests {
             assert_eq!(leaf.values[2].segment, 3);
             assert_eq!(leaf.values[2].offset, 30);
             assert_eq!(leaf.values[2].type_hash, vec![7, 8, 9]);
+        } else {
+            panic!("Expected leaf node");
+        }
+    }
+
+    #[test]
+    fn test_with_page_mut() {
+        // Create a temporary directory for the test
+        let temp_dir = TempDir::new().unwrap();
+        let index_path = temp_dir.path().join("test_with_page_mut.idx");
+
+        // Create a new index
+        let index = PositionIndex::new(&index_path, 10).unwrap();
+
+        // Get the root page ID
+        let root_page_id = index.root_page_id;
+
+        // Use with_page_mut to modify the root page
+        index.with_page_mut(root_page_id, |page| {
+            if let Node::Leaf(leaf) = &mut page.node {
+                // Add a new key-value pair
+                leaf.keys.push(1);
+                leaf.values.push(PositionIndexRecord {
+                    segment: 1,
+                    offset: 10,
+                    type_hash: vec![1, 2, 3],
+                });
+            } else {
+                panic!("Expected leaf node");
+            }
+        }).unwrap();
+
+        // Get the page again to verify the modification
+        let modified_page = index.get_page(root_page_id).unwrap();
+        if let Node::Leaf(leaf) = &modified_page.node {
+            // Verify that the new key-value pair was added
+            assert_eq!(leaf.keys.len(), 1);
+            assert_eq!(leaf.keys[0], 1);
+            assert_eq!(leaf.values[0].segment, 1);
+            assert_eq!(leaf.values[0].offset, 10);
+            assert_eq!(leaf.values[0].type_hash, vec![1, 2, 3]);
         } else {
             panic!("Expected leaf node");
         }

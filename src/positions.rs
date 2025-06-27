@@ -325,10 +325,15 @@ impl PositionIndex {
     // Add a page to the index
     fn add_page(&self, page: &IndexPage) -> IndexResult<()> {
         let mut page_cache = self.page_cache.lock().unwrap();
-        page_cache.insert(page.page_id, page.clone());
-        let mut dirty_pages = self.dirty_pages.lock().unwrap();
-        dirty_pages.insert(page.page_id, true);
+        let page_id = page.page_id;
+        page_cache.insert(page_id, page.clone());
+        self.mark_dirty(page_id);
         Ok(())
+    }
+
+    fn mark_dirty(&self, page_id: PageID) {
+        let mut dirty_pages = self.dirty_pages.lock().unwrap();
+        dirty_pages.insert(page_id, true);
     }
 
     // Get a page from the index

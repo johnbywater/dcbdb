@@ -1,18 +1,18 @@
-//! DCBSD - A fresh start
+//! DCBSD - Dynamic Consistency Boundaries Event Store
 //! 
-//! This library is a clean slate for the project.
+//! This library provides an event store implementation with support for
+//! dynamic consistency boundaries.
 
-/// Placeholder function
-pub fn hello() -> &'static str {
-    "Hello, World!"
-}
+// Export the API module
+pub mod api;
+
+// Export the WAL module
+pub mod wal;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn it_works() {
-        assert_eq!(hello(), "Hello, World!");
+        assert!(true);
     }
 }

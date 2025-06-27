@@ -831,6 +831,215 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    fn test_page_cache() {
+        // Test initialization with capacity
+        let mut cache = PageCache::new(3);
+        assert_eq!(cache.capacity, 3);
+
+        // Create some test pages
+        let page1 = IndexPage {
+            page_id: PageID(1),
+            node: Node::Leaf(LeafNode {
+                keys: vec![1, 2],
+                values: vec![
+                    PositionIndexRecord {
+                        segment: 1,
+                        offset: 10,
+                        type_hash: vec![1, 2, 3],
+                    },
+                    PositionIndexRecord {
+                        segment: 2,
+                        offset: 20,
+                        type_hash: vec![4, 5, 6],
+                    },
+                ],
+                next_leaf_id: None,
+            }),
+        };
+
+        let page2 = IndexPage {
+            page_id: PageID(2),
+            node: Node::Leaf(LeafNode {
+                keys: vec![3, 4],
+                values: vec![
+                    PositionIndexRecord {
+                        segment: 3,
+                        offset: 30,
+                        type_hash: vec![7, 8, 9],
+                    },
+                    PositionIndexRecord {
+                        segment: 4,
+                        offset: 40,
+                        type_hash: vec![10, 11, 12],
+                    },
+                ],
+                next_leaf_id: None,
+            }),
+        };
+
+        let page3 = IndexPage {
+            page_id: PageID(3),
+            node: Node::Leaf(LeafNode {
+                keys: vec![5, 6],
+                values: vec![
+                    PositionIndexRecord {
+                        segment: 5,
+                        offset: 50,
+                        type_hash: vec![13, 14, 15],
+                    },
+                    PositionIndexRecord {
+                        segment: 6,
+                        offset: 60,
+                        type_hash: vec![16, 17, 18],
+                    },
+                ],
+                next_leaf_id: None,
+            }),
+        };
+
+        let page4 = IndexPage {
+            page_id: PageID(4),
+            node: Node::Leaf(LeafNode {
+                keys: vec![7, 8],
+                values: vec![
+                    PositionIndexRecord {
+                        segment: 7,
+                        offset: 70,
+                        type_hash: vec![19, 20, 21],
+                    },
+                    PositionIndexRecord {
+                        segment: 8,
+                        offset: 80,
+                        type_hash: vec![22, 23, 24],
+                    },
+                ],
+                next_leaf_id: None,
+            }),
+        };
+
+        // Test inserting and retrieving pages
+        cache.insert(page1.page_id, page1.clone());
+        let retrieved = cache.get(PageID(1)).unwrap();
+        assert_eq!(retrieved.page_id, page1.page_id);
+        if let Node::Leaf(retrieved_leaf) = &retrieved.node {
+            if let Node::Leaf(original_leaf) = &page1.node {
+                assert_eq!(retrieved_leaf.keys, original_leaf.keys);
+                assert_eq!(retrieved_leaf.values, original_leaf.values);
+                assert_eq!(retrieved_leaf.next_leaf_id, original_leaf.next_leaf_id);
+            } else {
+                panic!("Expected leaf node");
+            }
+        } else {
+            panic!("Expected leaf node");
+        }
+
+        // Test cache eviction when capacity is exceeded
+        cache.insert(page2.page_id, page2.clone());
+        cache.insert(page3.page_id, page3.clone());
+
+        // All three pages should be in the cache
+        assert!(cache.get(PageID(1)).is_some());
+        assert!(cache.get(PageID(2)).is_some());
+        assert!(cache.get(PageID(3)).is_some());
+
+        // Insert a fourth page, which should cause the first page to be evicted
+        // when reduce_to_capacity is called
+        cache.insert(page4.page_id, page4.clone());
+        assert_eq!(cache.cache.len(), 4); // Cache now has 4 items
+
+        // Reduce to capacity
+        cache.reduce_to_capacity();
+        assert_eq!(cache.cache.len(), 3); // Cache now has 3 items
+
+        // The first page should have been evicted
+        assert!(cache.get(PageID(1)).is_none());
+
+        // The other pages should still be in the cache
+        assert!(cache.get(PageID(2)).is_some());
+        assert!(cache.get(PageID(3)).is_some());
+        assert!(cache.get(PageID(4)).is_some());
+
+        // Test clearing the cache
+        cache.clear();
+        assert_eq!(cache.cache.len(), 0);
+        assert!(cache.get(PageID(2)).is_none());
+        assert!(cache.get(PageID(3)).is_none());
+        assert!(cache.get(PageID(4)).is_none());
+    }
+
+    #[test]
+    fn test_position_cache() {
+        // Test initialization with capacity
+        let mut cache = PositionCache::new(3);
+        assert_eq!(cache.capacity, 3);
+
+        // Create some test records
+        let record1 = PositionIndexRecord {
+            segment: 1,
+            offset: 10,
+            type_hash: vec![1, 2, 3],
+        };
+
+        let record2 = PositionIndexRecord {
+            segment: 2,
+            offset: 20,
+            type_hash: vec![4, 5, 6],
+        };
+
+        let record3 = PositionIndexRecord {
+            segment: 3,
+            offset: 30,
+            type_hash: vec![7, 8, 9],
+        };
+
+        let record4 = PositionIndexRecord {
+            segment: 4,
+            offset: 40,
+            type_hash: vec![10, 11, 12],
+        };
+
+        // Test inserting and retrieving records
+        cache.insert(1, record1.clone());
+        let retrieved = cache.get(1).unwrap();
+        assert_eq!(retrieved.segment, record1.segment);
+        assert_eq!(retrieved.offset, record1.offset);
+        assert_eq!(retrieved.type_hash, record1.type_hash);
+
+        // Test cache eviction when capacity is exceeded
+        cache.insert(2, record2.clone());
+        cache.insert(3, record3.clone());
+
+        // All three records should be in the cache
+        assert!(cache.get(1).is_some());
+        assert!(cache.get(2).is_some());
+        assert!(cache.get(3).is_some());
+
+        // Insert a fourth record, which should cause the first record to be evicted
+        // when reduce_to_capacity is called
+        cache.insert(4, record4.clone());
+        assert_eq!(cache.cache.len(), 4); // Cache now has 4 items
+
+        // Reduce to capacity
+        cache.reduce_to_capacity();
+        assert_eq!(cache.cache.len(), 3); // Cache now has 3 items
+
+        // The first record should have been evicted
+        assert!(cache.get(1).is_none());
+
+        // The other records should still be in the cache
+        assert!(cache.get(2).is_some());
+        assert!(cache.get(3).is_some());
+        assert!(cache.get(4).is_some());
+
+        // Test clearing the cache
+        cache.clear();
+        assert_eq!(cache.cache.len(), 0);
+        assert!(cache.get(2).is_none());
+        assert!(cache.get(3).is_none());
+        assert!(cache.get(4).is_none());
+    }
+
+    #[test]
     fn test_write_read_page() {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("position_index.db");

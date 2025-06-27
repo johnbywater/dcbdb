@@ -535,7 +535,7 @@ impl PositionIndex {
 
                 // Check if this page needs splitting
                 if self.needs_splitting(&new_page)? {
-                    return Ok(Some(self.split_leaf(page_id)?));
+                    return Ok(Some(self.split_leaf(&new_page)?));
                 }
             }
             Node::Internal(internal_node) => {
@@ -570,7 +570,7 @@ impl PositionIndex {
 
                     // Check if this page needs splitting
                     if self.needs_splitting(&new_page)? {
-                        return Ok(Some(self.split_internal(page_id)?));
+                        return Ok(Some(self.split_internal(&new_page)?));
                     }
                 }
             }
@@ -589,9 +589,7 @@ impl PositionIndex {
     }
 
     // Split a leaf node
-    fn split_leaf(&mut self, page_id: PageID) -> IndexResult<(Position, PageID)> {
-        let page = self.get_page(page_id)?;
-
+    fn split_leaf(&mut self, page: &IndexPage) -> IndexResult<(Position, PageID)> {
         if let Node::Leaf(leaf_node) = &page.node {
             let mut leaf = leaf_node.clone();
 
@@ -615,7 +613,7 @@ impl PositionIndex {
 
             // Add both pages
             let leaf_page = IndexPage {
-                page_id,
+                page_id: page.page_id,
                 node: Node::Leaf(leaf),
             };
             self.add_page(&leaf_page)?;
@@ -634,9 +632,7 @@ impl PositionIndex {
     }
 
     // Split an internal node
-    fn split_internal(&mut self, page_id: PageID) -> IndexResult<(Position, PageID)> {
-        let page = self.get_page(page_id)?;
-
+    fn split_internal(&mut self, page: &IndexPage) -> IndexResult<(Position, PageID)> {
         if let Node::Internal(internal_node) = &page.node {
             let mut internal = internal_node.clone();
 
@@ -658,7 +654,7 @@ impl PositionIndex {
 
             // Add both pages
             let internal_page = IndexPage {
-                page_id,
+                page_id: page.page_id,
                 node: Node::Internal(internal),
             };
             self.add_page(&internal_page)?;

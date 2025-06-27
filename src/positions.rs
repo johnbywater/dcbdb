@@ -8,9 +8,9 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::fs::{File, OpenOptions};
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 
 use bincode::{deserialize, serialize};
@@ -239,7 +239,6 @@ pub fn hash_type(type_str: &str) -> Vec<u8> {
 
 // Position index
 pub struct PositionIndex {
-    path: PathBuf,
     file: Mutex<File>,
     root_page_id: PageID,
     next_page_id: PageID,
@@ -261,7 +260,6 @@ impl PositionIndex {
             .open(&path_buf)?;
 
         let mut index = Self {
-            path: path_buf,
             file: Mutex::new(file),
             root_page_id: PageID(1),
             next_page_id: PageID(2),
@@ -822,7 +820,7 @@ mod tests {
     fn test_write_read_page() {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("position_index.db");
-        let mut index = PositionIndex::new(&path, 1).unwrap();
+        let index = PositionIndex::new(&path, 1).unwrap();
 
         // Create a leaf node with some records
         let leaf_node = LeafNode {
@@ -920,7 +918,7 @@ mod tests {
     fn test_header() {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("position_index.db");
-        let mut index = PositionIndex::new(&path, 1).unwrap();
+        let index = PositionIndex::new(&path, 1).unwrap();
 
         assert_eq!(index.root_page_id, PageID(1));
         assert_eq!(index.next_page_id, PageID(2));
@@ -1058,7 +1056,7 @@ mod tests {
     fn test_leaf_node() {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("position_index.db");
-        let mut index = PositionIndex::new(&path, 1).unwrap();
+        let index = PositionIndex::new(&path, 1).unwrap();
 
         // Use a different page ID, not the root page ID
         let page_id = PageID(10);
@@ -1113,7 +1111,7 @@ mod tests {
     fn test_internal_node() {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("position_index.db");
-        let mut index = PositionIndex::new(&path, 1).unwrap();
+        let index = PositionIndex::new(&path, 1).unwrap();
 
         // Use a different page ID, not the root page ID
         let page_id = PageID(11);

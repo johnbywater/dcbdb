@@ -939,7 +939,7 @@ mod tests {
 
         // Insert some positions
         let mut inserted: Vec<(Position, PositionIndexRecord)> = Vec::new();
-        let num_inserts = 1500; // Using 1500 instead of 150,000 for performance in tests
+        let num_inserts = 22000; // Using 1500 instead of 150,000 for performance in tests
 
         for i in 0..num_inserts {
             let position = (i + 1).into();

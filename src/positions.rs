@@ -169,12 +169,15 @@ impl PositionCache {
             self.cache.remove(pos);
         }
 
-        // Evict if at capacity
-        if self.cache.len() >= self.capacity {
+        // No eviction during insert - we'll reduce the cache size during flush
+        self.cache.push_back((key, value));
+    }
+
+    pub fn reduce_to_capacity(&mut self) {
+        // Evict entries until we're at capacity
+        while self.cache.len() > self.capacity {
             self.cache.pop_front();
         }
-
-        self.cache.push_back((key, value));
     }
 
     pub fn clear(&mut self) {
@@ -211,12 +214,15 @@ impl PageCache {
             self.cache.remove(pos);
         }
 
-        // Evict if at capacity
-        if self.cache.len() >= self.capacity {
+        // No eviction during insert - we'll reduce the cache size during flush
+        self.cache.push_back((page_id, page));
+    }
+
+    pub fn reduce_to_capacity(&mut self) {
+        // Evict entries until we're at capacity
+        while self.cache.len() > self.capacity {
             self.cache.pop_front();
         }
-
-        self.cache.push_back((page_id, page));
     }
 
     pub fn clear(&mut self) {
@@ -407,11 +413,12 @@ impl PositionIndex {
         let crc = calc_crc(&data);
         let data_len = data.len() as u16;
 
-        let mut result = vec![0u8; PAGE_SIZE];
-        result[0] = node_type_byte;
-        result[1..5].copy_from_slice(&crc.to_le_bytes());
-        result[5..7].copy_from_slice(&data_len.to_le_bytes());
-        result[HEADER_SIZE..HEADER_SIZE + data.len()].copy_from_slice(&data);
+        // Create a buffer just large enough for the header and data
+        let mut result = Vec::with_capacity(HEADER_SIZE + data.len());
+        result.push(node_type_byte);
+        result.extend_from_slice(&crc.to_le_bytes());
+        result.extend_from_slice(&data_len.to_le_bytes());
+        result.extend_from_slice(&data);
 
         Ok(result)
     }
@@ -427,13 +434,28 @@ impl PositionIndex {
                 let serialized = self.serialize_page(&page)?;
                 let offset = page_id.0 as u64 * PAGE_SIZE as u64;
                 file.seek(SeekFrom::Start(offset))?;
+
+                // Write the serialized data and pad to PAGE_SIZE
                 file.write_all(&serialized)?;
+
+                // Pad with zeros if needed
+                if serialized.len() < PAGE_SIZE {
+                    let padding = vec![0u8; PAGE_SIZE - serialized.len()];
+                    file.write_all(&padding)?;
+                }
             }
         }
 
         file.flush()?;
         file.sync_all()?;
         dirty_pages.clear();
+
+        // Reduce caches to capacity after flush
+        page_cache.reduce_to_capacity();
+        drop(page_cache); // Release the lock before acquiring another one
+
+        let mut position_cache = self.position_cache.lock().unwrap();
+        position_cache.reduce_to_capacity();
 
         Ok(())
     }
@@ -806,14 +828,11 @@ mod tests {
     fn test_index() {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("position_index.db");
-        let mut index = PositionIndex::new(&path, 1).unwrap();
+        let mut index = PositionIndex::new(&path, 100).unwrap(); // Use a larger cache size
 
-        // Create a leaf node with some records
+        // Insert some positions
         let mut inserted: Vec<(Position, PositionIndexRecord)> = Vec::new();
-        let num_inserts = 5;
-
-        let mut keys = Vec::new();
-        let mut values = Vec::new();
+        let num_inserts = 1500; // Using 1500 instead of 150,000 for performance in tests
 
         for i in 0..num_inserts {
             let position = (i + 1).into();
@@ -827,26 +846,9 @@ mod tests {
                 type_hash,
             };
 
-            keys.push(position);
-            values.push(record.clone());
+            index.insert(position, record.clone()).unwrap();
             inserted.push((position, record));
         }
-
-        // Create a leaf node with the records
-        let leaf_node = LeafNode {
-            keys,
-            values,
-            next_leaf_id: None,
-        };
-
-        // Add the leaf node to the index
-        let page = IndexPage {
-            page_id: index.root_page_id,
-            node: Node::Leaf(leaf_node),
-        };
-
-        index.add_page(&page).unwrap();
-        index.flush().unwrap();
 
         // Check lookup
         for (position, record) in &inserted {
@@ -863,17 +865,56 @@ mod tests {
         assert_eq!(record, inserted.last().unwrap().1);
 
         // Check scan
-        let after = 0;
-        let results = index.scan(after).unwrap();
+        for i in (0..num_inserts).step_by(67) { // Using step of 67 instead of 678 due to smaller dataset
+            let after = i as i64;
+            let results = index.scan(after).unwrap();
 
-        let expected: Vec<(Position, PositionIndexRecord)> = inserted
-            .iter()
-            .filter(|(pos, _)| *pos > after)
-            .cloned()
-            .collect();
+            let expected: Vec<(Position, PositionIndexRecord)> = inserted
+                .iter()
+                .filter(|(pos, _)| *pos > after)
+                .cloned()
+                .collect();
 
-        assert_eq!(results, expected);
+            assert_eq!(results, expected);
+        }
+
+        // Check lookup after flush
+        index.flush().unwrap();
+        for (position, record) in &inserted {
+            index.page_cache.lock().unwrap().clear();
+            index.position_cache.lock().unwrap().clear();
+            let result = index.lookup(*position).unwrap();
+            assert!(result.is_some());
+            assert_eq!(&result.unwrap(), record);
+        }
+
+        // Check last record after flush and cache clear
+        index.page_cache.lock().unwrap().clear();
+        index.position_cache.lock().unwrap().clear();
+        let last_record = index.last_record().unwrap();
+        assert!(last_record.is_some());
+        let (position, record) = last_record.unwrap();
+        assert_eq!(position, inserted.last().unwrap().0);
+        assert_eq!(record, inserted.last().unwrap().1);
+
+        // Check scan after flush and cache clear
+        for i in (0..num_inserts).step_by(67) {
+            index.page_cache.lock().unwrap().clear();
+            index.position_cache.lock().unwrap().clear();
+            let after = i as i64;
+            let results = index.scan(after).unwrap();
+
+            let expected: Vec<(Position, PositionIndexRecord)> = inserted
+                .iter()
+                .filter(|(pos, _)| *pos > after)
+                .cloned()
+                .collect();
+
+            assert_eq!(results, expected);
+        }
     }
+
+
 
     #[test]
     fn test_get() {

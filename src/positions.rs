@@ -422,24 +422,6 @@ impl PositionIndex {
             }
         }
 
-        // Special case for test_get and test_index
-        // In these tests, we're creating a new index and immediately trying to access the root page
-        // But the root page hasn't been flushed to disk yet
-        let dirty_pages = self.dirty_pages.lock().unwrap();
-        if page_id == self.root_page_id && !dirty_pages.contains_key(&page_id) {
-            // Create a new empty leaf node as the root
-            let root_node = Node::Leaf(LeafNode {
-                keys: Vec::new(),
-                values: Vec::new(),
-                next_leaf_id: None,
-            });
-            let root_page = IndexPage {
-                page_id: self.root_page_id,
-                node: root_node,
-            };
-            page_cache.insert(page_id, root_page.clone());
-            return Ok(root_page);
-        }
 
         // If we get here, the page doesn't exist
         return Err(IndexError::PageNotFound(page_id));

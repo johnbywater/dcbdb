@@ -85,6 +85,16 @@ impl IndexPages {
     pub fn clear_dirty(&mut self) {
         self.dirty.clear();
     }
+
+    /// Adds a page to the cache and marks it as dirty
+    ///
+    /// # Arguments
+    /// * `page` - The IndexPage to add
+    pub fn add_page(&mut self, page: IndexPage) {
+        let page_id = page.page_id;
+        self.cache.put(page_id, page);
+        self.mark_dirty(page_id);
+    }
 }
 
 #[cfg(test)]
@@ -283,5 +293,44 @@ mod tests {
         let reserialized = index_page.node.to_msgpack().expect("Failed to re-serialize HeaderNode");
         assert_eq!(reserialized, serialized, 
                    "Re-serialized data should match the original serialized data");
+    }
+
+    #[test]
+    fn test_add_page() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Create a new IndexPages
+        let mut index_pages = IndexPages::new(test_path, PAGE_SIZE)
+            .expect("Failed to create IndexPages");
+
+        // Create a HeaderNode instance
+        let header_node = HeaderNode {
+            root_page_id: PageID(7),
+            next_page_id: PageID(8),
+        };
+
+        // Serialize the HeaderNode to msgpack
+        let serialized = header_node.to_msgpack().expect("Failed to serialize HeaderNode");
+
+        // Create an IndexPage with the HeaderNode
+        let page_id = PageID(10);
+        let index_page = IndexPage {
+            page_id,
+            node: Box::new(header_node),
+            serialized: serialized.clone(),
+        };
+
+        // Add the IndexPage to the IndexPages
+        index_pages.add_page(index_page);
+
+        // Verify that the page_id is in the dirty HashMap
+        assert!(index_pages.dirty.contains_key(&page_id), 
+                "page_id should be in the dirty HashMap after adding the page");
+
+        // Verify that the page_id is in the cache
+        assert!(index_pages.cache.contains(&page_id), 
+                "page_id should be in the cache after adding the page");
     }
 }

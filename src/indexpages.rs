@@ -24,7 +24,7 @@ impl HeaderNode {
     ///
     /// # Returns
     /// * `Result<Vec<u8>, rmp_serde::encode::Error>` - The serialized data or an error
-    pub fn to_msgpack(&self) -> Result<Vec<u8>, rmp_serde::encode::Error> {
+    pub fn to_msgpack(&self) -> Result<Vec<u8>, encode::Error> {
         encode::to_vec(self)
     }
 }
@@ -63,12 +63,6 @@ impl IndexPages {
 mod tests {
     use super::*;
     use tempfile::TempDir;
-
-    #[test]
-    fn hello_world() {
-        println!("Hello, world!");
-        assert!(true);
-    }
 
     #[test]
     fn test_index_pages_creation() {

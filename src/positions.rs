@@ -6,9 +6,7 @@
 //! of the event record.
 
 use std::collections::HashMap;
-use std::fmt;
 use std::fs::{File, OpenOptions};
-use std::hash::Hash;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::Mutex;

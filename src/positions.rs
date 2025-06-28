@@ -230,22 +230,22 @@ pub struct PageGuard<'a> {
     page: &'a mut IndexPage,
 }
 
-impl<'a> PageGuard<'a> {
-    // Create a new PageGuard
-    fn new(guard: std::sync::MutexGuard<'a, PageCache>, page: &'a mut IndexPage) -> Self {
-        Self { _guard: guard, page }
-    }
-
-    // Get a mutable reference to the page
-    pub fn page_mut(&mut self) -> &mut IndexPage {
-        self.page
-    }
-
-    // Get an immutable reference to the page
-    pub fn page(&self) -> &IndexPage {
-        self.page
-    }
-}
+// impl<'a> PageGuard<'a> {
+//     // Create a new PageGuard
+//     fn new(guard: std::sync::MutexGuard<'a, PageCache>, page: &'a mut IndexPage) -> Self {
+//         Self { _guard: guard, page }
+//     }
+// 
+//     // Get a mutable reference to the page
+//     pub fn page_mut(&mut self) -> &mut IndexPage {
+//         self.page
+//     }
+// 
+//     // Get an immutable reference to the page
+//     pub fn page(&self) -> &IndexPage {
+//         self.page
+//     }
+// }
 
 impl<'a> std::ops::Deref for PageGuard<'a> {
     type Target = IndexPage;
@@ -264,6 +264,7 @@ impl<'a> std::ops::DerefMut for PageGuard<'a> {
 // Position index
 pub struct PositionIndex {
     file: Mutex<File>,
+    header_page_id: PageID,
     root_page_id: PageID,
     next_page_id: PageID,
     page_cache: Mutex<PageCache>,
@@ -291,6 +292,7 @@ impl PositionIndex {
 
         let mut index = Self {
             file: Mutex::new(file),
+            header_page_id: PageID(0),
             root_page_id: PageID(1),
             next_page_id: PageID(2),
             page_cache: Mutex::new(PageCache::new(cache_size)),
@@ -327,7 +329,7 @@ impl PositionIndex {
             next_page_id: self.next_page_id,
         });
         let header_page = IndexPage {
-            page_id: PageID(0),
+            page_id: self.header_page_id,
             node: header_node,
         };
         self.add_page(&header_page)
@@ -335,7 +337,7 @@ impl PositionIndex {
 
     // Read the header from the file
     fn read_header(&mut self) -> IndexResult<()> {
-        let header_page = self.get_page(PageID(0))?;
+        let header_page = self.get_page(self.header_page_id)?;
         match &header_page.node {
             Node::Header(header) => {
                 self.root_page_id = header.root_page_id;
@@ -464,27 +466,27 @@ impl PositionIndex {
         Err(IndexError::DatabaseCorrupted("Failed to get page after inserting it into cache".to_string()))
     }
 
-    // Get a page from the index with a mutable reference
-    // This returns a borrowed mutable reference instead of cloning the page
-    fn get_page_mut(&self, page_id: PageID) -> IndexResult<&mut IndexPage> {
-        // We need to modify the implementation to return a borrowed mutable reference
-        // However, this is challenging because:
-        // 1. The page_cache is wrapped in a Mutex, which means we need to keep the lock
-        // 2. The method has multiple return points, including cases where it reads from disk
-        // 3. The method signature has &self, which means it can't return a mutable reference
-        //    to something owned by self without using interior mutability
-
-        // Given these constraints, it's not straightforward to modify get_page() to return
-        // a mutable reference. We would need to redesign the API to support this use case.
-        // Some possible approaches:
-        // 1. Create a custom PageGuard struct that holds both the MutexGuard and the page reference
-        // 2. Use a callback-based API where the caller provides a function to operate on the page
-        //    (see the with_page_mut method above for an implementation of this approach)
-        // 3. Use interior mutability with RefCell or Mutex for the pages themselves
-
-        // For now, we'll return an error to indicate that this functionality is not implemented
-        Err(IndexError::DatabaseCorrupted("get_page_mut() is not implemented".to_string()))
-    }
+    // // Get a page from the index with a mutable reference
+    // // This returns a borrowed mutable reference instead of cloning the page
+    // fn get_page_mut(&self, page_id: PageID) -> IndexResult<&mut IndexPage> {
+    //     // We need to modify the implementation to return a borrowed mutable reference
+    //     // However, this is challenging because:
+    //     // 1. The page_cache is wrapped in a Mutex, which means we need to keep the lock
+    //     // 2. The method has multiple return points, including cases where it reads from disk
+    //     // 3. The method signature has &self, which means it can't return a mutable reference
+    //     //    to something owned by self without using interior mutability
+    // 
+    //     // Given these constraints, it's not straightforward to modify get_page() to return
+    //     // a mutable reference. We would need to redesign the API to support this use case.
+    //     // Some possible approaches:
+    //     // 1. Create a custom PageGuard struct that holds both the MutexGuard and the page reference
+    //     // 2. Use a callback-based API where the caller provides a function to operate on the page
+    //     //    (see the with_page_mut method above for an implementation of this approach)
+    //     // 3. Use interior mutability with RefCell or Mutex for the pages themselves
+    // 
+    //     // For now, we'll return an error to indicate that this functionality is not implemented
+    //     Err(IndexError::DatabaseCorrupted("get_page_mut() is not implemented".to_string()))
+    // }
 
     // Serialize a page
     fn serialize_page(&self, page: &IndexPage) -> IndexResult<Vec<u8>> {
@@ -582,7 +584,7 @@ impl PositionIndex {
         }
 
         // Second phase: insert into the leaf node
-        let mut page = self.get_page(current_page_id)?;
+        let page = self.get_page(current_page_id)?;
         if let Node::Leaf(mut leaf) = page.node {
             // Insert the key-value pair into the leaf
             if leaf.keys.is_empty() || key > *leaf.keys.last().unwrap() {
@@ -1618,8 +1620,8 @@ mod tests {
         let position = 1;
 
         // Key should not exist yet
-        let result = index.lookup(position).unwrap();
-        assert!(result.is_none());
+        let result = index.get(position);
+        assert!(matches!(result, Err(IndexError::KeyNotFound(_))));
 
         // Insert a record
         let record = PositionIndexRecord {
@@ -1770,11 +1772,12 @@ mod tests {
         let serialized = index.serialize_page(&page).unwrap();
 
         // Print the actual size for debugging
-        println!("Leaf node serialized size: {}", serialized.len());
+        // println!("Leaf node serialized size: {}", serialized.len());
 
         // Check that the serialized data is compact (msgpack is more compact than bincode)
-        assert!(serialized.len() < 200); // Allow some flexibility in the exact size
-        assert!(serialized.len() > 50); // Reduced threshold for msgpack's more compact format
+        // assert!(serialized.len() < 200); // Allow some flexibility in the exact size
+        // assert!(serialized.len() > 50); // Reduced threshold for msgpack's more compact format
+        assert!(serialized.len() == 59);
 
         // Check that the node type byte is correct
         assert_eq!(serialized[0], 2); // 2 is the node type byte for leaf nodes
@@ -1816,11 +1819,12 @@ mod tests {
         let serialized = index.serialize_page(&page).unwrap();
 
         // Print the actual size for debugging
-        println!("Internal node serialized size: {}", serialized.len());
+        // println!("Internal node serialized size: {}", serialized.len());
 
         // Check that the serialized data is compact (msgpack is more compact than bincode)
-        assert!(serialized.len() < 200); // Allow some flexibility in the exact size
-        assert!(serialized.len() > 10); // Reduced threshold for msgpack's more compact format
+        // assert!(serialized.len() < 200); // Allow some flexibility in the exact size
+        // assert!(serialized.len() > 10); // Reduced threshold for msgpack's more compact format
+        assert!(serialized.len() == 17);
 
         // Check that the node type byte is correct
         assert_eq!(serialized[0], 3); // 3 is the node type byte for internal nodes

@@ -25,21 +25,13 @@ use crate::segments::check_crc;
 use crate::segments::SegmentError;
 use crate::wal::calc_crc;
 use crate::wal::Position;
+use crate::pagedfile::PageID;
 
 // Constants
 const PAGE_SIZE: usize = 4096;
 const TYPE_HASH_LEN: usize = 8;
 const HEADER_SIZE: usize = 7; // 1 (node_type) + 4 (crc) + 2 (data_len)
 
-// Page ID type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
-pub struct PageID(pub u32);
-
-impl fmt::Display for PageID {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
 
 // Error types for index operations
 #[derive(Debug, thiserror::Error)]

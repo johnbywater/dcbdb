@@ -2,10 +2,22 @@
 use std::path::{Path, PathBuf};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write, Seek, SeekFrom};
+use std::fmt;
 use thiserror::Error;
+use serde::{Serialize, Deserialize};
 
 // Constants
 pub const PAGE_SIZE: usize = 4096;
+
+// Page ID type
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
+pub struct PageID(pub u32);
+
+impl fmt::Display for PageID {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum PagedFileError {
@@ -54,21 +66,21 @@ impl PagedFile {
     /// Writes data to a specific page in the file
     ///
     /// # Arguments
-    /// * `page_number` - The page number to write to
+    /// * `page_id` - The page ID to write to
     /// * `page_data` - The data to write to the page
     ///
     /// # Returns
     /// * `Ok(())` if the write was successful
     /// * `Err(PagedFileError::DataTooLarge)` if the data is too large for a page
     /// * `Err(PagedFileError::Io)` if there was an IO error
-    pub fn write_page(&mut self, page_number: usize, page_data: &[u8]) -> Result<(), PagedFileError> {
+    pub fn write_page(&mut self, page_id: PageID, page_data: &[u8]) -> Result<(), PagedFileError> {
         // Check if the data is too large
         if page_data.len() > self.page_size {
             return Err(PagedFileError::DataTooLarge(page_data.len(), self.page_size));
         }
 
         // Calculate the offset in the file
-        let offset = page_number * self.page_size;
+        let offset = page_id.0 as usize * self.page_size;
 
         // Seek to the correct position in the file
         self.file.seek(SeekFrom::Start(offset as u64))?;
@@ -91,14 +103,14 @@ impl PagedFile {
     /// Reads data from a specific page in the file
     ///
     /// # Arguments
-    /// * `page_number` - The page number to read from
+    /// * `page_id` - The page ID to read from
     ///
     /// # Returns
     /// * `Ok(Vec<u8>)` containing the page data if the read was successful
     /// * `Err(PagedFileError::Io)` if there was an IO error
-    pub fn read_page(&mut self, page_number: usize) -> Result<Vec<u8>, PagedFileError> {
+    pub fn read_page(&mut self, page_id: PageID) -> Result<Vec<u8>, PagedFileError> {
         // Calculate the offset in the file
-        let offset = page_number * self.page_size;
+        let offset = page_id.0 as usize * self.page_size;
 
         // Seek to the correct position in the file
         self.file.seek(SeekFrom::Start(offset as u64))?;
@@ -183,15 +195,15 @@ mod tests {
         let page1_data = b"This is different data for page 1".to_vec();
 
         // Write data to different pages
-        paged_file.write_page(0, &page0_data)
+        paged_file.write_page(PageID(0), &page0_data)
             .expect("Failed to write to page 0");
-        paged_file.write_page(1, &page1_data)
+        paged_file.write_page(PageID(1), &page1_data)
             .expect("Failed to write to page 1");
 
         // Read the data back and verify it matches
-        let read_page0 = paged_file.read_page(0)
+        let read_page0 = paged_file.read_page(PageID(0))
             .expect("Failed to read page 0");
-        let read_page1 = paged_file.read_page(1)
+        let read_page1 = paged_file.read_page(PageID(1))
             .expect("Failed to read page 1");
 
         // Verify the data matches (note: we only compare the actual data part, not the padding)
@@ -208,9 +220,9 @@ mod tests {
             .expect("Failed to create second PagedFile");
 
         // Read the data again to verify persistence
-        let read_page0_again = second_paged_file.read_page(0)
+        let read_page0_again = second_paged_file.read_page(PageID(0))
             .expect("Failed to read page 0 with second instance");
-        let read_page1_again = second_paged_file.read_page(1)
+        let read_page1_again = second_paged_file.read_page(PageID(1))
             .expect("Failed to read page 1 with second instance");
 
         // Verify the data still matches
@@ -219,15 +231,15 @@ mod tests {
 
         // Write more data with the second instance
         let page2_data = b"This is data written by the second instance to page 2".to_vec();
-        second_paged_file.write_page(2, &page2_data)
+        second_paged_file.write_page(PageID(2), &page2_data)
             .expect("Failed to write to page 2 with second instance");
 
         // Read back all pages and verify
-        let read_page0_final = second_paged_file.read_page(0)
+        let read_page0_final = second_paged_file.read_page(PageID(0))
             .expect("Failed to read page 0 after writing page 2");
-        let read_page1_final = second_paged_file.read_page(1)
+        let read_page1_final = second_paged_file.read_page(PageID(1))
             .expect("Failed to read page 1 after writing page 2");
-        let read_page2 = second_paged_file.read_page(2)
+        let read_page2 = second_paged_file.read_page(PageID(2))
             .expect("Failed to read page 2");
 
         // Verify all data is correctly stored
@@ -250,7 +262,7 @@ mod tests {
         let test_data = b"This is data that will be flushed and fsynced".to_vec();
 
         // Write data to a page
-        paged_file.write_page(0, &test_data)
+        paged_file.write_page(PageID(0), &test_data)
             .expect("Failed to write to page");
 
         // Explicitly call flush_and_fsync
@@ -262,7 +274,7 @@ mod tests {
             .expect("Failed to create second PagedFile");
 
         // Read the data back
-        let read_data = second_paged_file.read_page(0)
+        let read_data = second_paged_file.read_page(PageID(0))
             .expect("Failed to read page");
 
         // Verify the data matches
@@ -284,7 +296,7 @@ mod tests {
         let large_data = vec![1u8; page_size + 50]; // 50 bytes more than page_size
 
         // Attempt to write data that is too large
-        let result = paged_file.write_page(0, &large_data);
+        let result = paged_file.write_page(PageID(0), &large_data);
 
         // Verify that the correct error is returned
         match result {

@@ -3,6 +3,16 @@ use std::collections::HashMap;
 use crate::pagedfile::{PagedFile, PAGE_SIZE, PageID};
 use serde::{Serialize, Deserialize};
 use rmp_serde::{encode, decode};
+use lru::LruCache;
+
+/// A trait for nodes that can be serialized to msgpack format
+pub trait Node {
+    /// Serializes the node to msgpack format
+    ///
+    /// # Returns
+    /// * `Result<Vec<u8>, rmp_serde::encode::Error>` - The serialized data or an error
+    fn to_msgpack(&self) -> Result<Vec<u8>, encode::Error>;
+}
 
 /// A structure that manages index pages
 pub struct IndexPages {
@@ -10,6 +20,9 @@ pub struct IndexPages {
     dirty: HashMap<PageID, bool>,
     header_page_id: PageID,
     pub header_node: HeaderNode,
+    /// Cache of IndexPage objects keyed by PageID
+    /// This cache must be unbounded and should never be changed to a bounded cache
+    cache: LruCache<PageID, IndexPage<HeaderNode>>,
 }
 
 /// A structure that represents a header node in the index
@@ -29,6 +42,19 @@ impl HeaderNode {
     }
 }
 
+impl Node for HeaderNode {
+    fn to_msgpack(&self) -> Result<Vec<u8>, encode::Error> {
+        encode::to_vec(self)
+    }
+}
+
+/// A structure that represents an index page
+pub struct IndexPage<T: Node> {
+    pub page_id: PageID,
+    pub node: T,
+    pub serialized: Vec<u8>,
+}
+
 impl IndexPages {
     /// Creates a new IndexPages with the given path and page size
     pub fn new<P: AsRef<Path>>(path: P, page_size: usize) -> std::io::Result<Self> {
@@ -42,6 +68,8 @@ impl IndexPages {
                 root_page_id: PageID(1),
                 next_page_id: PageID(2),
             },
+            // Initialize the cache as unbounded - this is a requirement and must not be changed
+            cache: LruCache::unbounded(),
         })
     }
 
@@ -87,6 +115,10 @@ mod tests {
         // Check that header_node.next_page_id equals PageID(2)
         assert_eq!(index_pages.header_node.next_page_id, PageID(2),
                    "header_node.next_page_id should be initialized to PageID(2)");
+
+        // Check that the cache is initialized and empty
+        assert!(index_pages.cache.is_empty(), 
+                "Cache should be initialized as empty");
 
         // The temporary directory will be automatically deleted when temp_dir goes out of scope
     }
@@ -219,5 +251,39 @@ mod tests {
                    "root_page_id should match after serialization/deserialization");
         assert_eq!(deserialized.next_page_id, header_node.next_page_id, 
                    "next_page_id should match after serialization/deserialization");
+    }
+
+    #[test]
+    fn test_index_page_with_header_node() {
+        // Create a HeaderNode instance
+        let header_node = HeaderNode {
+            root_page_id: PageID(7),
+            next_page_id: PageID(8),
+        };
+
+        // Serialize the HeaderNode to msgpack
+        let serialized = header_node.to_msgpack().expect("Failed to serialize HeaderNode");
+
+        // Create an IndexPage with the HeaderNode
+        let index_page = IndexPage {
+            page_id: PageID(9),
+            node: header_node,
+            serialized: serialized.clone(),
+        };
+
+        // Verify that the IndexPage has the correct values
+        assert_eq!(index_page.page_id, PageID(9), 
+                   "page_id should be initialized to the provided value");
+        assert_eq!(index_page.node.root_page_id, PageID(7), 
+                   "node.root_page_id should match the original HeaderNode");
+        assert_eq!(index_page.node.next_page_id, PageID(8), 
+                   "node.next_page_id should match the original HeaderNode");
+        assert_eq!(index_page.serialized, serialized, 
+                   "serialized should match the serialized HeaderNode");
+
+        // Verify that we can use the Node trait methods on the node field
+        let reserialized = index_page.node.to_msgpack().expect("Failed to re-serialize HeaderNode");
+        assert_eq!(reserialized, serialized, 
+                   "Re-serialized data should match the original serialized data");
     }
 }

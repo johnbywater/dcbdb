@@ -5,6 +5,9 @@ use serde::{Serialize, Deserialize};
 use rmp_serde::{encode, decode};
 use lru::LruCache;
 
+/// Constant for the header node type
+pub const HEADER_NODE_TYPE: u8 = 1;
+
 /// A trait for nodes that can be serialized to msgpack format
 pub trait Node {
     /// Serializes the node to msgpack format
@@ -12,6 +15,12 @@ pub trait Node {
     /// # Returns
     /// * `Result<Vec<u8>, rmp_serde::encode::Error>` - The serialized data or an error
     fn to_msgpack(&self) -> Result<Vec<u8>, encode::Error>;
+
+    /// Returns a byte that identifies the type of node
+    ///
+    /// # Returns
+    /// * `u8` - A byte that identifies the type of node
+    fn node_type_byte(&self) -> u8;
 }
 
 /// A structure that manages index pages
@@ -45,6 +54,10 @@ impl HeaderNode {
 impl Node for HeaderNode {
     fn to_msgpack(&self) -> Result<Vec<u8>, encode::Error> {
         encode::to_vec(self)
+    }
+
+    fn node_type_byte(&self) -> u8 {
+        HEADER_NODE_TYPE
     }
 }
 
@@ -364,5 +377,29 @@ mod tests {
                    "root_page_id should match after serialization/deserialization");
         assert_eq!(deserialized.next_page_id, header_node.next_page_id, 
                    "next_page_id should match after serialization/deserialization");
+    }
+
+    #[test]
+    fn test_node_type_byte() {
+        // Create a HeaderNode instance
+        let header_node = HeaderNode {
+            root_page_id: PageID(14),
+            next_page_id: PageID(15),
+        };
+
+        // Verify that node_type_byte returns HEADER_NODE_TYPE
+        assert_eq!(header_node.node_type_byte(), HEADER_NODE_TYPE, 
+                   "node_type_byte should return HEADER_NODE_TYPE");
+
+        // Create an IndexPage with the HeaderNode
+        let index_page = IndexPage {
+            page_id: PageID(16),
+            node: Box::new(header_node),
+            serialized: Vec::new(),
+        };
+
+        // Verify that node_type_byte can be called through the trait object
+        assert_eq!(index_page.node.node_type_byte(), HEADER_NODE_TYPE, 
+                   "node_type_byte should return HEADER_NODE_TYPE when called through trait object");
     }
 }

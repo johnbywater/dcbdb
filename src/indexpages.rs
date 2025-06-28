@@ -203,7 +203,6 @@ pub struct IndexPages {
     paged_file: PagedFile,
     dirty: HashMap<PageID, bool>,
     header_page_id: PageID,
-    pub header_node: HeaderNode,
     /// The header page containing the header node
     pub header_page: IndexPage,
     /// Cache of IndexPage objects keyed by PageID
@@ -214,6 +213,24 @@ pub struct IndexPages {
 }
 
 impl IndexPages {
+    /// Gets a reference to the HeaderNode from the header page
+    ///
+    /// # Returns
+    /// * `&HeaderNode` - A reference to the HeaderNode
+    fn header_node(&self) -> &HeaderNode {
+        self.header_page.node.as_any().downcast_ref::<HeaderNode>()
+            .expect("Failed to downcast node to HeaderNode")
+    }
+
+    /// Gets a mutable reference to the HeaderNode from the header page
+    ///
+    /// # Returns
+    /// * `&mut HeaderNode` - A mutable reference to the HeaderNode
+    fn header_node_mut(&mut self) -> &mut HeaderNode {
+        self.header_page.node.as_any_mut().downcast_mut::<HeaderNode>()
+            .expect("Failed to downcast node to HeaderNode")
+    }
+
     /// Creates a new IndexPages with the given path and page size
     pub fn new<P: AsRef<Path>>(path: P, page_size: usize) -> std::io::Result<Self> {
         let mut paged_file = PagedFile::new(path, Some(page_size))?;
@@ -231,7 +248,7 @@ impl IndexPages {
         let header_page_id = PageID(0);
 
         // Check if the file exists
-        let (header_node, header_page) = if paged_file.new {
+        let header_page = if paged_file.new {
             // File exists, read the header page from disk
             let header_page_data = paged_file.read_page(header_page_id)
                 .map_err(|e| std::io::Error::new(
@@ -243,22 +260,11 @@ impl IndexPages {
                 ))?;
 
             // Deserialize the header page
-            let deserialized_page = deserializer.deserialise_page(&header_page_data, header_page_id)
+            deserializer.deserialise_page(&header_page_data, header_page_id)
                 .map_err(|e| std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     format!("Failed to deserialize header page: {}", e)
-                ))?;
-
-            // Get the header node from the deserialized page using downcasting
-            let header_node = match deserialized_page.node.as_any().downcast_ref::<HeaderNode>() {
-                Some(header_node) => *header_node, // Copy the HeaderNode (it's Copy)
-                None => return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Failed to downcast node to HeaderNode"
-                )),
-            };
-
-            (header_node, deserialized_page)
+                ))?
         } else {
             // File doesn't exist, create a new header node with default values
             let header_node = HeaderNode {
@@ -267,13 +273,11 @@ impl IndexPages {
             };
 
             // Create the header page
-            let header_page = IndexPage {
+            IndexPage {
                 page_id: header_page_id,
                 node: Box::new(header_node),
                 serialized: Vec::new(),
-            };
-
-            (header_node, header_page)
+            }
         };
 
         // Create the IndexPages instance
@@ -281,7 +285,6 @@ impl IndexPages {
             paged_file,
             dirty: HashMap::new(),
             header_page_id,
-            header_node,
             header_page,
             // Initialize the cache as unbounded - this is a requirement and must not be changed
             cache: LruCache::unbounded(),
@@ -325,12 +328,8 @@ impl IndexPages {
     /// # Arguments
     /// * `root_page_id` - The new root page ID
     pub fn set_root_page_id(&mut self, root_page_id: PageID) {
-        // Update the root_page_id in the header_node
-        self.header_node.root_page_id = root_page_id;
-
         // Get a mutable reference to the HeaderNode in the heap
-        let header_node = self.header_page.node.as_any_mut().downcast_mut::<HeaderNode>()
-            .expect("Failed to downcast node to HeaderNode");
+        let header_node = self.header_node_mut();
 
         // Update the root_page_id directly in the heap
         header_node.root_page_id = root_page_id;
@@ -344,12 +343,8 @@ impl IndexPages {
     /// # Arguments
     /// * `next_page_id` - The new next page ID
     pub fn set_next_page_id(&mut self, next_page_id: PageID) {
-        // Update the next_page_id in the header_node
-        self.header_node.next_page_id = next_page_id;
-
         // Get a mutable reference to the HeaderNode in the heap
-        let header_node = self.header_page.node.as_any_mut().downcast_mut::<HeaderNode>()
-            .expect("Failed to downcast node to HeaderNode");
+        let header_node = self.header_node_mut();
 
         // Update the next_page_id directly in the heap
         header_node.next_page_id = next_page_id;
@@ -431,11 +426,11 @@ mod tests {
                    "header_page_id should be initialized to PageID(0)");
 
         // Check that header_node.root_page_id equals PageID(1)
-        assert_eq!(index_pages.header_node.root_page_id, PageID(1),
+        assert_eq!(index_pages.header_node().root_page_id, PageID(1),
                    "header_node.root_page_id should be initialized to PageID(1)");
 
         // Check that header_node.next_page_id equals PageID(2)
-        assert_eq!(index_pages.header_node.next_page_id, PageID(2),
+        assert_eq!(index_pages.header_node().next_page_id, PageID(2),
                    "header_node.next_page_id should be initialized to PageID(2)");
 
         // Check that the cache is initialized and empty
@@ -867,7 +862,7 @@ mod tests {
             .expect("Failed to create IndexPages");
 
         // Check the initial root_page_id
-        assert_eq!(index_pages.header_node.root_page_id, PageID(1),
+        assert_eq!(index_pages.header_node().root_page_id, PageID(1),
                    "Initial root_page_id should be PageID(1)");
 
         // Set a new root_page_id
@@ -875,7 +870,7 @@ mod tests {
         index_pages.set_root_page_id(new_root_page_id);
 
         // Check that the root_page_id was updated
-        assert_eq!(index_pages.header_node.root_page_id, new_root_page_id,
+        assert_eq!(index_pages.header_node().root_page_id, new_root_page_id,
                    "root_page_id should be updated to the new value");
 
         // Check that the header_page_id was marked as dirty
@@ -920,7 +915,7 @@ mod tests {
             .expect("Failed to create IndexPages");
 
         // Check the initial next_page_id
-        assert_eq!(index_pages.header_node.next_page_id, PageID(2),
+        assert_eq!(index_pages.header_node().next_page_id, PageID(2),
                    "Initial next_page_id should be PageID(2)");
 
         // Set a new next_page_id
@@ -928,7 +923,7 @@ mod tests {
         index_pages.set_next_page_id(new_next_page_id);
 
         // Check that the next_page_id was updated
-        assert_eq!(index_pages.header_node.next_page_id, new_next_page_id,
+        assert_eq!(index_pages.header_node().next_page_id, new_next_page_id,
                    "next_page_id should be updated to the new value");
 
         // Check that the header_page_id was marked as dirty
@@ -1076,9 +1071,9 @@ mod tests {
             .expect("Failed to create first IndexPages instance");
 
         // Check the initial values
-        assert_eq!(index_pages1.header_node.root_page_id, PageID(1),
+        assert_eq!(index_pages1.header_node().root_page_id, PageID(1),
                    "Initial root_page_id should be PageID(1)");
-        assert_eq!(index_pages1.header_node.next_page_id, PageID(2),
+        assert_eq!(index_pages1.header_node().next_page_id, PageID(2),
                    "Initial next_page_id should be PageID(2)");
 
         // Step 2: Create a second IndexPages instance
@@ -1086,9 +1081,9 @@ mod tests {
             .expect("Failed to create second IndexPages instance");
 
         // Check that the values are the same as in the first instance
-        assert_eq!(index_pages2.header_node.root_page_id, index_pages1.header_node.root_page_id,
+        assert_eq!(index_pages2.header_node().root_page_id, index_pages1.header_node().root_page_id,
                    "root_page_id should be the same in the second instance");
-        assert_eq!(index_pages2.header_node.next_page_id, index_pages1.header_node.next_page_id,
+        assert_eq!(index_pages2.header_node().next_page_id, index_pages1.header_node().next_page_id,
                    "next_page_id should be the same in the second instance");
 
         // Set new values for root_page_id and next_page_id
@@ -1106,9 +1101,9 @@ mod tests {
             .expect("Failed to create third IndexPages instance");
 
         // Check that the values are the same as the modified values in the second instance
-        assert_eq!(index_pages3.header_node.root_page_id, new_root_page_id,
+        assert_eq!(index_pages3.header_node().root_page_id, new_root_page_id,
                    "root_page_id should be the modified value in the third instance");
-        assert_eq!(index_pages3.header_node.next_page_id, new_next_page_id,
+        assert_eq!(index_pages3.header_node().next_page_id, new_next_page_id,
                    "next_page_id should be the modified value in the third instance");
     }
 }

@@ -306,6 +306,56 @@ impl IndexPages {
         // Mark the header page as dirty
         self.mark_dirty(self.header_page_id);
     }
+
+    /// Flushes all dirty pages to disk
+    ///
+    /// # Returns
+    /// * `std::io::Result<()>` - Success or an error
+    pub fn flush(&mut self) -> std::io::Result<()> {
+        // Iterate over the PageID values in the dirty HashMap
+        for page_id in self.dirty.keys() {
+            // Get the page
+            let page = if *page_id == self.header_page_id {
+                // If the page is the header page, use header_page
+                &self.header_page
+            } else {
+                // Otherwise, get the page from the cache
+                match self.cache.get(page_id) {
+                    Some(page) => page,
+                    None => return Err(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!("Page not found in cache: {:?}", page_id)
+                    )),
+                }
+            };
+
+            // Serialize the page
+            let serialized_data = page.serialize_page()
+                .map_err(|e| std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Failed to serialize page: {}", e)
+                ))?;
+
+            // Write the page to the paged file
+            self.paged_file.write_page(*page_id, &serialized_data)
+                .map_err(|e| std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Failed to write page: {}", e)
+                ))?;
+        }
+
+        // Flush and fsync the paged file
+        self.paged_file.flush_and_fsync()
+            .map_err(|e| std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Failed to flush and fsync: {}", e)
+            ))?;
+
+        // Clear the dirty HashMap
+        self.clear_dirty();
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -859,5 +909,108 @@ mod tests {
         // Check that the next_page_id in the deserialized header_node matches the new value
         assert_eq!(deserialized_header_node.next_page_id, new_next_page_id,
                    "next_page_id in deserialized header_node should match the new value");
+    }
+
+    #[test]
+    fn test_flush() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Create a new IndexPages
+        let mut index_pages = IndexPages::new(test_path.clone(), PAGE_SIZE)
+            .expect("Failed to create IndexPages");
+
+        // Mark the header page as dirty
+        index_pages.mark_dirty(index_pages.header_page_id);
+
+        // Create and add a few more pages to the cache
+        let page_id1 = PageID(1);
+        let page_id2 = PageID(2);
+
+        // Create a HeaderNode instance for page 1
+        let header_node1 = HeaderNode {
+            root_page_id: PageID(3),
+            next_page_id: PageID(4),
+        };
+
+        // Create an IndexPage with the HeaderNode
+        let index_page1 = IndexPage {
+            page_id: page_id1,
+            node: Box::new(header_node1),
+            serialized: Vec::new(),
+        };
+
+        // Create a HeaderNode instance for page 2
+        let header_node2 = HeaderNode {
+            root_page_id: PageID(5),
+            next_page_id: PageID(6),
+        };
+
+        // Create an IndexPage with the HeaderNode
+        let index_page2 = IndexPage {
+            page_id: page_id2,
+            node: Box::new(header_node2),
+            serialized: Vec::new(),
+        };
+
+        // Add the pages to the cache and mark them as dirty
+        index_pages.add_page(index_page1);
+        index_pages.add_page(index_page2);
+
+        // Verify that the pages are marked as dirty
+        assert!(index_pages.dirty.contains_key(&index_pages.header_page_id),
+                "header_page_id should be marked as dirty");
+        assert!(index_pages.dirty.contains_key(&page_id1),
+                "page_id1 should be marked as dirty");
+        assert!(index_pages.dirty.contains_key(&page_id2),
+                "page_id2 should be marked as dirty");
+
+        // Flush the pages
+        index_pages.flush().expect("Failed to flush pages");
+
+        // Verify that the dirty HashMap is cleared
+        assert!(index_pages.dirty.is_empty(),
+                "dirty HashMap should be empty after flushing");
+
+        // Create a new IndexPages instance to read the pages from disk
+        let mut new_index_pages = IndexPages::new(test_path, PAGE_SIZE)
+            .expect("Failed to create new IndexPages");
+
+        // Read the header page from disk
+        let header_page_data = new_index_pages.paged_file.read_page(index_pages.header_page_id)
+            .expect("Failed to read header page from disk");
+
+        // Deserialize the header page
+        let deserialized_header_page = new_index_pages.deserializer.deserialise_page(&header_page_data, index_pages.header_page_id)
+            .expect("Failed to deserialize header page");
+
+        // Verify that the deserialized header page has the correct page_id
+        assert_eq!(deserialized_header_page.page_id, index_pages.header_page_id,
+                   "Deserialized header page_id should match header_page_id");
+
+        // Read page 1 from disk
+        let page1_data = new_index_pages.paged_file.read_page(page_id1)
+            .expect("Failed to read page 1 from disk");
+
+        // Deserialize page 1
+        let deserialized_page1 = new_index_pages.deserializer.deserialise_page(&page1_data, page_id1)
+            .expect("Failed to deserialize page 1");
+
+        // Verify that the deserialized page 1 has the correct page_id
+        assert_eq!(deserialized_page1.page_id, page_id1,
+                   "Deserialized page 1 page_id should match page_id1");
+
+        // Read page 2 from disk
+        let page2_data = new_index_pages.paged_file.read_page(page_id2)
+            .expect("Failed to read page 2 from disk");
+
+        // Deserialize page 2
+        let deserialized_page2 = new_index_pages.deserializer.deserialise_page(&page2_data, page_id2)
+            .expect("Failed to deserialize page 2");
+
+        // Verify that the deserialized page 2 has the correct page_id
+        assert_eq!(deserialized_page2.page_id, page_id2,
+                   "Deserialized page 2 page_id should match page_id2");
     }
 }

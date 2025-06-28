@@ -274,4 +274,32 @@ mod tests {
         // Verify the data matches
         assert_eq!(&read_data[..test_data.len()], &test_data[..]);
     }
+
+    #[test]
+    fn test_write_page_data_too_large() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+        let test_path = temp_dir.path().join("position-index.dat");
+
+        // Create a PagedFile instance with a small page size for testing
+        let page_size = 100; // Small page size for testing
+        let mut paged_file = PagedFile::new(test_path.clone(), Some(page_size))
+            .expect("Failed to create PagedFile");
+
+        // Create test data that is larger than the page size
+        let large_data = vec![1u8; page_size + 50]; // 50 bytes more than page_size
+
+        // Attempt to write data that is too large
+        let result = paged_file.write_page(0, &large_data);
+
+        // Verify that the correct error is returned
+        match result {
+            Err(PagedFileError::DataTooLarge(actual_size, max_size)) => {
+                // Check that the error contains the correct size information
+                assert_eq!(actual_size, large_data.len());
+                assert_eq!(max_size, page_size);
+            },
+            _ => panic!("Expected DataTooLarge error, but got: {:?}", result),
+        }
+    }
 }

@@ -111,6 +111,21 @@ impl PagedFile {
 
         Ok(buffer)
     }
+
+    /// Flushes the file to OS buffers and then fsyncs the data to disk
+    ///
+    /// # Returns
+    /// * `Ok(())` if the operation was successful
+    /// * `Err(PagedFileError::Io)` if there was an IO error
+    pub fn flush_and_fsync(&mut self) -> Result<(), PagedFileError> {
+        // Flush to ensure data is written to OS buffers
+        self.file.flush()?;
+
+        // Fsync to ensure data is written to disk
+        self.file.sync_all()?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -225,5 +240,38 @@ mod tests {
         assert_eq!(&read_page0_final[..page0_data.len()], &page0_data[..]);
         assert_eq!(&read_page1_final[..page1_data.len()], &page1_data[..]);
         assert_eq!(&read_page2[..page2_data.len()], &page2_data[..]);
+    }
+
+    #[test]
+    fn test_flush_and_fsync() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+        let test_path = temp_dir.path().join("position-index.dat");
+
+        // Create a PagedFile instance
+        let mut paged_file = PagedFile::new(test_path.clone(), None)
+            .expect("Failed to create PagedFile");
+
+        // Create test data
+        let test_data = b"This is data that will be flushed and fsynced".to_vec();
+
+        // Write data to a page
+        paged_file.write_page(0, &test_data)
+            .expect("Failed to write to page");
+
+        // Explicitly call flush_and_fsync
+        paged_file.flush_and_fsync()
+            .expect("Failed to flush and fsync");
+
+        // Create a new PagedFile instance with the same path to verify data persistence
+        let mut second_paged_file = PagedFile::new(test_path.clone(), None)
+            .expect("Failed to create second PagedFile");
+
+        // Read the data back
+        let read_data = second_paged_file.read_page(0)
+            .expect("Failed to read page");
+
+        // Verify the data matches
+        assert_eq!(&read_data[..test_data.len()], &test_data[..]);
     }
 }

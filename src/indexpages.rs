@@ -4,6 +4,7 @@ use crate::pagedfile::{PagedFile, PAGE_SIZE, PageID};
 use serde::{Serialize, Deserialize};
 use rmp_serde::{encode, decode};
 use lru::LruCache;
+use crate::wal::calc_crc;
 
 /// Constant for the header node type
 pub const HEADER_NODE_TYPE: u8 = 1;
@@ -69,12 +70,33 @@ pub struct IndexPage {
 }
 
 impl IndexPage {
-    /// Serializes the node data
+    /// Serializes the page data
     ///
     /// # Returns
     /// * `Result<Vec<u8>, encode::Error>` - The serialized data or an error
-    pub fn serialize(&self) -> Result<Vec<u8>, encode::Error> {
-        self.node.to_msgpack()
+    pub fn serialize_page(&self) -> Result<Vec<u8>, encode::Error> {
+        // Call node.to_msgpack() only once
+        let node_data = self.node.to_msgpack()?;
+
+        // Get the node type byte
+        let node_type_byte = self.node.node_type_byte();
+
+        // Calculate CRC
+        let crc = calc_crc(&node_data);
+
+        // Get the length of the serialized data
+        let data_len = node_data.len() as u32;
+
+        // Create a buffer with enough capacity for all components
+        let mut result = Vec::with_capacity(1 + 4 + 4 + node_data.len());
+
+        // Concatenate: node type byte + CRC + length + serialized data
+        result.push(node_type_byte);
+        result.extend_from_slice(&crc.to_le_bytes());
+        result.extend_from_slice(&data_len.to_le_bytes());
+        result.extend_from_slice(&node_data);
+
+        Ok(result)
     }
 }
 
@@ -306,12 +328,16 @@ mod tests {
                    "page_id should be initialized to the provided value");
 
         // Serialize the node data using the new method
-        let serialized_data = index_page.serialize().expect("Failed to serialize node data");
+        let serialized_data = index_page.serialize_page().expect("Failed to serialize node data");
 
-        // Verify that we can use the Node trait methods on the node field
-        let reserialized = index_page.node.to_msgpack().expect("Failed to re-serialize HeaderNode");
-        assert_eq!(reserialized, serialized_data, 
-                   "Re-serialized data should match the serialized data from the serialize method");
+        // Get the raw node data for comparison
+        let node_data = index_page.node.to_msgpack().expect("Failed to re-serialize HeaderNode");
+
+        // Verify that the serialized data contains the node data
+        assert!(serialized_data.len() > node_data.len(), 
+                "Serialized data should be larger than just the node data");
+        assert!(serialized_data.ends_with(&node_data), 
+                "Serialized data should end with the node data");
     }
 
     #[test]
@@ -351,7 +377,7 @@ mod tests {
     }
 
     #[test]
-    fn test_serialize() {
+    fn test_serialize_page() {
         // Create a HeaderNode instance
         let header_node = HeaderNode {
             root_page_id: PageID(11),
@@ -365,12 +391,43 @@ mod tests {
             serialized: Vec::new(), // Empty value for serialized
         };
 
-        // Serialize the node data using the new method
-        let serialized_data = index_page.serialize().expect("Failed to serialize node data");
+        // Serialize the page data using the new method
+        let serialized_data = index_page.serialize_page().expect("Failed to serialize page data");
 
-        // Verify that the serialized data can be deserialized back to a HeaderNode
-        let deserialized: HeaderNode = decode::from_slice(&serialized_data)
-            .expect("Failed to deserialize serialized data");
+        // Get the raw node data
+        let node_data = index_page.node.to_msgpack().expect("Failed to serialize node data");
+
+        // Verify the structure of the serialized data
+        assert!(serialized_data.len() >= 1 + 4 + 4 + node_data.len(), 
+                "Serialized data should include node type byte, CRC, length, and node data");
+
+        // Extract components from the serialized data
+        let node_type_byte = serialized_data[0];
+        let crc_bytes = &serialized_data[1..5];
+        let len_bytes = &serialized_data[5..9];
+        let data = &serialized_data[9..];
+
+        // Verify node type byte
+        assert_eq!(node_type_byte, HEADER_NODE_TYPE, 
+                   "Node type byte should be HEADER_NODE_TYPE");
+
+        // Verify data length
+        let data_len = u32::from_le_bytes([len_bytes[0], len_bytes[1], len_bytes[2], len_bytes[3]]);
+        assert_eq!(data_len as usize, node_data.len(), 
+                   "Data length should match the length of the node data");
+
+        // Verify data
+        assert_eq!(data, node_data, 
+                   "Data should match the node data");
+
+        // Verify CRC
+        let crc = u32::from_le_bytes([crc_bytes[0], crc_bytes[1], crc_bytes[2], crc_bytes[3]]);
+        assert_eq!(crc, calc_crc(&node_data), 
+                   "CRC should match the calculated CRC of the node data");
+
+        // Verify that the node data can be deserialized back to a HeaderNode
+        let deserialized: HeaderNode = decode::from_slice(&node_data)
+            .expect("Failed to deserialize node data");
 
         // Verify that the deserialized HeaderNode matches the original
         assert_eq!(deserialized.root_page_id, header_node.root_page_id, 

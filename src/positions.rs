@@ -215,6 +215,83 @@ impl PageCache {
     pub fn clear(&mut self) {
         self.cache.clear();
     }
+
+    // Load a page from disk if it's not in the cache
+    pub fn load_page(&mut self, file: &mut File, page_id: PageID, page_size: usize) -> IndexResult<IndexPage> {
+        // First check if the page is in the cache
+        if let Some(page) = self.get(page_id) {
+            return Ok(page);
+        }
+
+        // If not in cache, read from disk
+        let offset = page_id.0 as u64 * page_size as u64;
+
+        // Check if the file is large enough to contain this page
+        let file_size = file.seek(SeekFrom::End(0))?;
+        if offset + page_size as u64 <= file_size {
+            // File is large enough, seek back to the page offset
+            file.seek(SeekFrom::Start(offset))?;
+
+            let mut buffer = vec![0u8; page_size];
+            match file.read_exact(&mut buffer) {
+                Ok(_) => {
+                    // Parse the page
+                    let node_type_byte = buffer[0];
+                    let crc = u32::from_le_bytes([buffer[1], buffer[2], buffer[3], buffer[4]]);
+                    let data_len = u16::from_le_bytes([buffer[5], buffer[6]]);
+
+                    let data = &buffer[HEADER_SIZE..HEADER_SIZE + data_len as usize];
+                    check_crc(data, crc).map_err(|e| {
+                        if let SegmentError::DatabaseCorrupted(msg) = e {
+                            IndexError::DatabaseCorrupted(msg)
+                        } else {
+                            IndexError::DatabaseCorrupted("CRC check failed".to_string())
+                        }
+                    })?;
+
+                    // Deserialize the node based on its type
+                    let node = Node::from_byte_and_data(node_type_byte, data)?;
+
+                    let page = IndexPage {
+                        page_id,
+                        node,
+                    };
+
+                    // Add the page to the cache
+                    self.insert(page_id, page.clone());
+                    return Ok(page);
+                }
+                Err(e) => {
+                    // Return the error unless it's an unexpected EOF
+                    if e.kind() != io::ErrorKind::UnexpectedEof {
+                        return Err(IndexError::Io(e));
+                    }
+                }
+            }
+        }
+
+        // If we get here, the page doesn't exist
+        Err(IndexError::PageNotFound(page_id))
+    }
+
+    // Get a page from the cache or load it from disk
+    pub fn get_or_load_page(&mut self, file: &mut File, page_id: PageID, page_size: usize) -> IndexResult<IndexPage> {
+        self.load_page(file, page_id, page_size)
+    }
+
+    // Get a mutable reference to a page in the cache, loading it from disk if necessary
+    pub fn get_mut_or_load_page(&mut self, file: &mut File, page_id: PageID, page_size: usize) -> IndexResult<&mut IndexPage> {
+        // First try to get the page from the cache
+        if self.cache.contains(&page_id) {
+            return Ok(self.cache.get_mut(&page_id).unwrap());
+        }
+
+        // If not in cache, load it from disk
+        let page = self.load_page(file, page_id, page_size)?;
+
+        // Now it should be in the cache, so get a mutable reference
+        Ok(self.cache.get_mut(&page_id).unwrap())
+    }
 }
 
 // Hash a type string to a fixed-length byte array
@@ -376,57 +453,14 @@ impl PositionIndex {
             return Ok(page.clone());
         }
 
-        // We'll try to read the page from disk first
-        // If that fails, and it's the root page, we'll create a new empty leaf node
+        // Not in cache, try to load from disk
         let mut file = self.file.lock().unwrap();
-        let offset = page_id.0 as u64 * self.page_size as u64;
+        let result = page_cache.load_page(&mut file, page_id, self.page_size);
 
-        // Check if the file is large enough to contain this page
-        let file_size = file.seek(SeekFrom::End(0))?;
-        if offset + self.page_size as u64 <= file_size {
-            // File is large enough, seek back to the page offset
-            file.seek(SeekFrom::Start(offset))?;
+        // Release the file lock as soon as possible
+        drop(file);
 
-            let mut buffer = vec![0u8; self.page_size];
-            match file.read_exact(&mut buffer) {
-                Ok(_) => {
-                    // Parse the page
-                    let node_type_byte = buffer[0];
-                    let crc = u32::from_le_bytes([buffer[1], buffer[2], buffer[3], buffer[4]]);
-                    let data_len = u16::from_le_bytes([buffer[5], buffer[6]]);
-
-                    let data = &buffer[HEADER_SIZE..HEADER_SIZE + data_len as usize];
-                    check_crc(data, crc).map_err(|e| {
-                        if let SegmentError::DatabaseCorrupted(msg) = e {
-                            IndexError::DatabaseCorrupted(msg)
-                        } else {
-                            IndexError::DatabaseCorrupted("CRC check failed".to_string())
-                        }
-                    })?;
-
-                    // Deserialize the node based on its type
-                    let node = Node::from_byte_and_data(node_type_byte, data)?;
-
-                    let page = IndexPage {
-                        page_id,
-                        node,
-                    };
-
-                    page_cache.insert(page_id, page.clone());
-                    return Ok(page);
-                }
-                Err(e) => {
-                    // Fall through to the special case below
-                    if e.kind() != io::ErrorKind::UnexpectedEof {
-                        return Err(IndexError::Io(e));
-                    }
-                }
-            }
-        }
-
-
-        // If we get here, the page doesn't exist
-        return Err(IndexError::PageNotFound(page_id));
+        result
     }
 
     // Get a page from the index and apply a function to it with a mutable reference
@@ -550,6 +584,9 @@ impl PositionIndex {
 
     // Insert a key-value pair into the index
     pub fn insert(&mut self, key: Position, value: PositionIndexRecord) -> IndexResult<()> {
+        // Get a locked reference to the page cache
+        let mut page_cache = self.page_cache.lock().unwrap();
+
         // Stack to keep track of the path from root to leaf
         // Each entry is a page ID and the index of the child to follow
         let mut stack: Vec<(PageID, usize)> = Vec::new();
@@ -557,7 +594,12 @@ impl PositionIndex {
 
         // First phase: traverse down to the leaf node
         loop {
-            let page = self.get_page(current_page_id)?;
+            // Get the page from the cache or load it from disk
+            let mut file = self.file.lock().unwrap();
+            let page_result = page_cache.load_page(&mut file, current_page_id, self.page_size);
+            drop(file);
+
+            let page = page_result?;
 
             match &page.node {
                 Node::Leaf(_) => {
@@ -584,8 +626,14 @@ impl PositionIndex {
         }
 
         // Second phase: insert into the leaf node
-        let page = self.get_page(current_page_id)?;
-        if let Node::Leaf(mut leaf) = page.node {
+        // Get a mutable reference to the page from the cache
+        let mut file = self.file.lock().unwrap();
+        let page_result = page_cache.load_page(&mut file, current_page_id, self.page_size);
+        drop(file);
+
+        let page = page_result?;
+
+        if let Node::Leaf(mut leaf) = page.node.clone() {
             // Insert the key-value pair into the leaf
             if leaf.keys.is_empty() || key > *leaf.keys.last().unwrap() {
                 leaf.keys.push(key);
@@ -616,10 +664,13 @@ impl PositionIndex {
             // Check if this page needs splitting
             let mut split_info = None;
             if self.needs_splitting(&new_page)? {
+                // Release the page_cache lock before calling split_leaf
+                drop(page_cache);
                 split_info = Some(self.split_leaf(&new_page)?);
+                // Re-acquire the lock
+                page_cache = self.page_cache.lock().unwrap();
             } else {
-                // Just mark the page as dirty if it doesn't need splitting
-                let mut page_cache = self.page_cache.lock().unwrap();
+                // Update the page in the cache and mark it as dirty
                 page_cache.insert(current_page_id, new_page);
                 self.mark_dirty(current_page_id);
             }
@@ -629,21 +680,35 @@ impl PositionIndex {
                 if stack.is_empty() {
                     // We've reached the root, create a new root
                     let (promoted_position, new_page_id) = split_child;
+
+                    // Release the page_cache lock before calling methods that require mutable access to self
+                    drop(page_cache);
+
+                    let new_root_page_id = self.alloc_page_id();
+                    let root_page_id = self.root_page_id;
+
                     let new_root = IndexPage {
-                        page_id: self.alloc_page_id(),
+                        page_id: new_root_page_id,
                         node: Node::Internal(InternalNode {
                             keys: vec![promoted_position],
-                            child_ids: vec![self.root_page_id, new_page_id],
+                            child_ids: vec![root_page_id, new_page_id],
                         }),
                     };
+
                     self.add_page(&new_root)?;
                     self.root_page_id = new_root.page_id;
                     self.write_header()?;
+
+                    // No need to re-acquire the lock since we're breaking out of the loop
                     break;
                 }
 
                 // Pop the parent from the stack
                 let (parent_id, _) = stack.pop().unwrap();
+
+                // Release the page_cache lock before calling get_page
+                drop(page_cache);
+
                 let parent_page = self.get_page(parent_id)?;
 
                 if let Node::Internal(mut internal) = parent_page.node {
@@ -666,10 +731,16 @@ impl PositionIndex {
 
                     // Check if this page needs splitting
                     if self.needs_splitting(&new_page)? {
+                        // No need to drop the lock since we already did
                         split_info = Some(self.split_internal(&new_page)?);
+
+                        // Re-acquire the lock for the next iteration
+                        page_cache = self.page_cache.lock().unwrap();
                     } else {
+                        // Re-acquire the lock to update the page cache
+                        page_cache = self.page_cache.lock().unwrap();
+
                         // Just mark the page as dirty if it doesn't need splitting
-                        let mut page_cache = self.page_cache.lock().unwrap();
                         page_cache.insert(parent_id, new_page);
                         self.mark_dirty(parent_id);
                         split_info = None;
@@ -1541,38 +1612,38 @@ mod tests {
             index.insert(position, record.clone()).unwrap();
             inserted.push((position, record));
         }
-        
+
         // Check lookup
         for (position, record) in &inserted {
             let result = index.lookup(*position).unwrap();
             assert!(result.is_some());
             assert_eq!(&result.unwrap(), record);
         }
-        
+
         // Check last record
         let last_record = index.last_record().unwrap();
         assert!(last_record.is_some());
         let (position, record) = last_record.unwrap();
         assert_eq!(position, inserted.last().unwrap().0);
         assert_eq!(record, inserted.last().unwrap().1);
-        
+
         // Check scan
         for i in (0..num_inserts).step_by(1) { // Using step of 67 instead of 678 due to smaller dataset
             let after = i as i64;
             let results = index.scan(after).unwrap();
-        
+
             let expected: Vec<(Position, PositionIndexRecord)> = inserted
                 .iter()
                 .filter(|(pos, _)| *pos > after)
                 .cloned()
                 .collect();
-        
+
             assert_eq!(results, expected);
         }
-        
+
         // Check lookup after flush
         index.flush().unwrap();
-        
+
         // Check only the first few keys
         for i in (0..num_inserts).step_by(1) {
             let (position, record) = &inserted[i as usize];
@@ -1582,7 +1653,7 @@ mod tests {
             assert!(result.is_some());
             assert_eq!(&result.unwrap(), record);
         }
-        
+
         // Check last record after flush and cache clear
         index.page_cache.lock().unwrap().clear();
         index.position_cache.lock().unwrap().clear();
@@ -1591,20 +1662,20 @@ mod tests {
         let (position, record) = last_record.unwrap();
         assert_eq!(position, inserted.last().unwrap().0);
         assert_eq!(record, inserted.last().unwrap().1);
-        
+
         // Check scan after flush and cache clear
         for i in (0..num_inserts).step_by(1) {
             index.page_cache.lock().unwrap().clear();
             index.position_cache.lock().unwrap().clear();
             let after = i as i64;
             let results = index.scan(after).unwrap();
-        
+
             let expected: Vec<(Position, PositionIndexRecord)> = inserted
                 .iter()
                 .filter(|(pos, _)| *pos > after)
                 .cloned()
                 .collect();
-        
+
             assert_eq!(results, expected);
         }
     }

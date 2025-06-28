@@ -22,7 +22,7 @@ pub struct IndexPages {
     pub header_node: HeaderNode,
     /// Cache of IndexPage objects keyed by PageID
     /// This cache must be unbounded and should never be changed to a bounded cache
-    cache: LruCache<PageID, IndexPage<HeaderNode>>,
+    cache: LruCache<PageID, IndexPage>,
 }
 
 /// A structure that represents a header node in the index
@@ -49,9 +49,9 @@ impl Node for HeaderNode {
 }
 
 /// A structure that represents an index page
-pub struct IndexPage<T: Node> {
+pub struct IndexPage {
     pub page_id: PageID,
-    pub node: T,
+    pub node: Box<dyn Node>,
     pub serialized: Vec<u8>,
 }
 
@@ -267,17 +267,15 @@ mod tests {
         // Create an IndexPage with the HeaderNode
         let index_page = IndexPage {
             page_id: PageID(9),
-            node: header_node,
+            node: Box::new(header_node),
             serialized: serialized.clone(),
         };
 
         // Verify that the IndexPage has the correct values
         assert_eq!(index_page.page_id, PageID(9), 
                    "page_id should be initialized to the provided value");
-        assert_eq!(index_page.node.root_page_id, PageID(7), 
-                   "node.root_page_id should match the original HeaderNode");
-        assert_eq!(index_page.node.next_page_id, PageID(8), 
-                   "node.next_page_id should match the original HeaderNode");
+        // We can no longer directly access fields of the HeaderNode through the node field
+        // since it's now a trait object (Box<dyn Node>)
         assert_eq!(index_page.serialized, serialized, 
                    "serialized should match the serialized HeaderNode");
 

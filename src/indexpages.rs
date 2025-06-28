@@ -26,6 +26,9 @@ pub trait Node: Any {
 
     /// Returns self as Any for downcasting
     fn as_any(&self) -> &dyn Any;
+
+    /// Returns self as mutable Any for downcasting
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
 /// A structure that represents a header node in the index
@@ -55,6 +58,10 @@ impl Node for HeaderNode {
     }
 
     fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 }
@@ -321,16 +328,22 @@ impl IndexPages {
         // Update the root_page_id in the header_node
         self.header_node.root_page_id = root_page_id;
 
-        // Update the node in the header_page
-        let header_node = HeaderNode {
-            root_page_id,
-            next_page_id: self.header_node.next_page_id,
-        };
-        self.header_page = IndexPage {
-            page_id: self.header_page_id,
-            node: Box::new(header_node),
-            serialized: Vec::new(),
-        };
+        // Get a mutable reference to the HeaderNode in the heap
+        if let Some(header_node) = self.header_page.node.as_any_mut().downcast_mut::<HeaderNode>() {
+            // Update the root_page_id directly in the heap
+            header_node.root_page_id = root_page_id;
+        } else {
+            // If downcasting fails, fall back to the old approach
+            let header_node = HeaderNode {
+                root_page_id,
+                next_page_id: self.header_node.next_page_id,
+            };
+            self.header_page = IndexPage {
+                page_id: self.header_page_id,
+                node: Box::new(header_node),
+                serialized: Vec::new(),
+            };
+        }
 
         // Mark the header page as dirty
         self.mark_dirty(self.header_page_id);
@@ -344,16 +357,22 @@ impl IndexPages {
         // Update the next_page_id in the header_node
         self.header_node.next_page_id = next_page_id;
 
-        // Update the node in the header_page
-        let header_node = HeaderNode {
-            root_page_id: self.header_node.root_page_id,
-            next_page_id,
-        };
-        self.header_page = IndexPage {
-            page_id: self.header_page_id,
-            node: Box::new(header_node),
-            serialized: Vec::new(),
-        };
+        // Get a mutable reference to the HeaderNode in the heap
+        if let Some(header_node) = self.header_page.node.as_any_mut().downcast_mut::<HeaderNode>() {
+            // Update the next_page_id directly in the heap
+            header_node.next_page_id = next_page_id;
+        } else {
+            // If downcasting fails, fall back to the old approach
+            let header_node = HeaderNode {
+                root_page_id: self.header_node.root_page_id,
+                next_page_id,
+            };
+            self.header_page = IndexPage {
+                page_id: self.header_page_id,
+                node: Box::new(header_node),
+                serialized: Vec::new(),
+            };
+        }
 
         // Mark the header page as dirty
         self.mark_dirty(self.header_page_id);

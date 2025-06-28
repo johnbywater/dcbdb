@@ -1,19 +1,32 @@
 use std::path::Path;
 use std::collections::HashMap;
 use crate::pagedfile::{PagedFile, PAGE_SIZE, PageID};
+use serde::{Serialize, Deserialize};
+use rmp_serde::{encode, decode};
 
 /// A structure that manages index pages
 pub struct IndexPages {
     paged_file: PagedFile,
     dirty: HashMap<PageID, bool>,
     header_page_id: PageID,
+    pub header_node: HeaderNode,
 }
 
 /// A structure that represents a header node in the index
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeaderNode {
     pub root_page_id: PageID,
     pub next_page_id: PageID,
+}
+
+impl HeaderNode {
+    /// Serializes the HeaderNode to msgpack format
+    ///
+    /// # Returns
+    /// * `Result<Vec<u8>, rmp_serde::encode::Error>` - The serialized data or an error
+    pub fn to_msgpack(&self) -> Result<Vec<u8>, rmp_serde::encode::Error> {
+        encode::to_vec(self)
+    }
 }
 
 impl IndexPages {
@@ -25,6 +38,10 @@ impl IndexPages {
             paged_file,
             dirty: HashMap::new(),
             header_page_id: PageID(0),
+            header_node: HeaderNode {
+                root_page_id: PageID(1),
+                next_page_id: PageID(2),
+            },
         })
     }
 
@@ -68,6 +85,14 @@ mod tests {
         // Check that header_page_id equals PageID(0)
         assert_eq!(index_pages.header_page_id, PageID(0), 
                    "header_page_id should be initialized to PageID(0)");
+
+        // Check that header_node.root_page_id equals PageID(1)
+        assert_eq!(index_pages.header_node.root_page_id, PageID(1),
+                   "header_node.root_page_id should be initialized to PageID(1)");
+
+        // Check that header_node.next_page_id equals PageID(2)
+        assert_eq!(index_pages.header_node.next_page_id, PageID(2),
+                   "header_node.next_page_id should be initialized to PageID(2)");
 
         // The temporary directory will be automatically deleted when temp_dir goes out of scope
     }
@@ -176,5 +201,29 @@ mod tests {
                    "root_page_id should be updated to the new value");
         assert_eq!(header_node.next_page_id, new_next_page_id, 
                    "next_page_id should be updated to the new value");
+    }
+
+    #[test]
+    fn test_header_node_msgpack() {
+        // Create a HeaderNode instance
+        let header_node = HeaderNode {
+            root_page_id: PageID(5),
+            next_page_id: PageID(6),
+        };
+
+        // Serialize the HeaderNode to msgpack
+        let serialized = header_node.to_msgpack().expect("Failed to serialize HeaderNode");
+
+        // Deserialize the msgpack data back to a HeaderNode
+        let deserialized: HeaderNode = decode::from_slice(&serialized)
+            .expect("Failed to deserialize HeaderNode");
+
+        // Verify that the deserialized HeaderNode matches the original
+        assert_eq!(deserialized, header_node, 
+                   "Deserialized HeaderNode should match the original");
+        assert_eq!(deserialized.root_page_id, header_node.root_page_id, 
+                   "root_page_id should match after serialization/deserialization");
+        assert_eq!(deserialized.next_page_id, header_node.next_page_id, 
+                   "next_page_id should match after serialization/deserialization");
     }
 }

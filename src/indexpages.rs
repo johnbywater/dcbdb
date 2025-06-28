@@ -11,7 +11,7 @@ use std::any::Any;
 pub const HEADER_NODE_TYPE: u8 = 1;
 
 /// A trait for nodes that can be serialized to msgpack format
-pub trait Node {
+pub trait Node: Any {
     /// Serializes the node to msgpack format
     ///
     /// # Returns
@@ -23,6 +23,9 @@ pub trait Node {
     /// # Returns
     /// * `u8` - A byte that identifies the type of node
     fn node_type_byte(&self) -> u8;
+
+    /// Returns self as Any for downcasting
+    fn as_any(&self) -> &dyn Any;
 }
 
 /// A structure that represents a header node in the index
@@ -49,6 +52,10 @@ impl Node for HeaderNode {
 
     fn node_type_byte(&self) -> u8 {
         HEADER_NODE_TYPE
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
@@ -235,19 +242,14 @@ impl IndexPages {
                     format!("Failed to deserialize header page: {}", e)
                 ))?;
 
-            // Get the header node from the deserialized page
-            let node_data = deserialized_page.node.to_msgpack()
-                .map_err(|e| std::io::Error::new(
+            // Get the header node from the deserialized page using downcasting
+            let header_node = match deserialized_page.node.as_any().downcast_ref::<HeaderNode>() {
+                Some(header_node) => *header_node, // Copy the HeaderNode (it's Copy)
+                None => return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!("Failed to serialize node data: {}", e)
-                ))?;
-
-            // Deserialize the header node
-            let header_node: HeaderNode = decode::from_slice(&node_data)
-                .map_err(|e| std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("Failed to deserialize header node: {}", e)
-                ))?;
+                    "Failed to downcast node to HeaderNode"
+                )),
+            };
 
             (header_node, deserialized_page)
         } else {

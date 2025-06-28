@@ -9,6 +9,13 @@ pub struct IndexPages {
     header_page_id: PageID,
 }
 
+/// A structure that represents a header node in the index
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HeaderNode {
+    pub root_page_id: PageID,
+    pub next_page_id: PageID,
+}
+
 impl IndexPages {
     /// Creates a new IndexPages with the given path and page size
     pub fn new<P: AsRef<Path>>(path: P, page_size: usize) -> std::io::Result<Self> {
@@ -137,5 +144,37 @@ mod tests {
 
         // Verify that the dirty HashMap is now empty
         assert!(index_pages.dirty.is_empty(), "Dirty HashMap should be empty after clearing");
+    }
+
+    #[test]
+    fn test_header_node() {
+        // Create initial PageID values
+        let initial_root_page_id = PageID(1);
+        let initial_next_page_id = PageID(2);
+
+        // Create a HeaderNode instance
+        let mut header_node = HeaderNode {
+            root_page_id: initial_root_page_id,
+            next_page_id: initial_next_page_id,
+        };
+
+        // Verify initial values
+        assert_eq!(header_node.root_page_id, initial_root_page_id, 
+                   "root_page_id should be initialized to the provided value");
+        assert_eq!(header_node.next_page_id, initial_next_page_id, 
+                   "next_page_id should be initialized to the provided value");
+
+        // Change the values
+        let new_root_page_id = PageID(3);
+        let new_next_page_id = PageID(4);
+
+        header_node.root_page_id = new_root_page_id;
+        header_node.next_page_id = new_next_page_id;
+
+        // Verify the new values
+        assert_eq!(header_node.root_page_id, new_root_page_id, 
+                   "root_page_id should be updated to the new value");
+        assert_eq!(header_node.next_page_id, new_next_page_id, 
+                   "next_page_id should be updated to the new value");
     }
 }

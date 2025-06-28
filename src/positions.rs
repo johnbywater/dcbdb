@@ -225,10 +225,10 @@ pub fn hash_type(type_str: &str) -> Vec<u8> {
 }
 
 // PageGuard struct to hold both the MutexGuard and provide access to the mutable page
-pub struct PageGuard<'a> {
-    _guard: std::sync::MutexGuard<'a, PageCache>,
-    page: &'a mut IndexPage,
-}
+// pub struct PageGuard<'a> {
+//     _guard: std::sync::MutexGuard<'a, PageCache>,
+//     page: &'a mut IndexPage,
+// }
 
 // impl<'a> PageGuard<'a> {
 //     // Create a new PageGuard
@@ -246,20 +246,20 @@ pub struct PageGuard<'a> {
 //         self.page
 //     }
 // }
-
-impl<'a> std::ops::Deref for PageGuard<'a> {
-    type Target = IndexPage;
-
-    fn deref(&self) -> &Self::Target {
-        self.page
-    }
-}
-
-impl<'a> std::ops::DerefMut for PageGuard<'a> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.page
-    }
-}
+// 
+// impl<'a> std::ops::Deref for PageGuard<'a> {
+//     type Target = IndexPage;
+// 
+//     fn deref(&self) -> &Self::Target {
+//         self.page
+//     }
+// }
+// 
+// impl<'a> std::ops::DerefMut for PageGuard<'a> {
+//     fn deref_mut(&mut self) -> &mut Self::Target {
+//         self.page
+//     }
+// }
 
 // Position index
 pub struct PositionIndex {
@@ -1541,72 +1541,72 @@ mod tests {
             index.insert(position, record.clone()).unwrap();
             inserted.push((position, record));
         }
-        // 
-        // // Check lookup
-        // for (position, record) in &inserted {
-        //     let result = index.lookup(*position).unwrap();
-        //     assert!(result.is_some());
-        //     assert_eq!(&result.unwrap(), record);
-        // }
-        // 
-        // // Check last record
-        // let last_record = index.last_record().unwrap();
-        // assert!(last_record.is_some());
-        // let (position, record) = last_record.unwrap();
-        // assert_eq!(position, inserted.last().unwrap().0);
-        // assert_eq!(record, inserted.last().unwrap().1);
-        // 
-        // // Check scan
-        // for i in (0..num_inserts).step_by(67) { // Using step of 67 instead of 678 due to smaller dataset
-        //     let after = i as i64;
-        //     let results = index.scan(after).unwrap();
-        // 
-        //     let expected: Vec<(Position, PositionIndexRecord)> = inserted
-        //         .iter()
-        //         .filter(|(pos, _)| *pos > after)
-        //         .cloned()
-        //         .collect();
-        // 
-        //     assert_eq!(results, expected);
-        // }
-        // 
-        // // Check lookup after flush
-        // index.flush().unwrap();
-        // 
-        // // Check only the first few keys
-        // for i in 0..5 {
-        //     let (position, record) = &inserted[i];
-        //     index.page_cache.lock().unwrap().clear();
-        //     index.position_cache.lock().unwrap().clear();
-        //     let result = index.lookup(*position).unwrap();
-        //     assert!(result.is_some());
-        //     assert_eq!(&result.unwrap(), record);
-        // }
-        // 
-        // // Check last record after flush and cache clear
-        // index.page_cache.lock().unwrap().clear();
-        // index.position_cache.lock().unwrap().clear();
-        // let last_record = index.last_record().unwrap();
-        // assert!(last_record.is_some());
-        // let (position, record) = last_record.unwrap();
-        // assert_eq!(position, inserted.last().unwrap().0);
-        // assert_eq!(record, inserted.last().unwrap().1);
-        // 
-        // // Check scan after flush and cache clear
-        // for i in (0..num_inserts).step_by(67) {
-        //     index.page_cache.lock().unwrap().clear();
-        //     index.position_cache.lock().unwrap().clear();
-        //     let after = i as i64;
-        //     let results = index.scan(after).unwrap();
-        // 
-        //     let expected: Vec<(Position, PositionIndexRecord)> = inserted
-        //         .iter()
-        //         .filter(|(pos, _)| *pos > after)
-        //         .cloned()
-        //         .collect();
-        // 
-        //     assert_eq!(results, expected);
-        // }
+        
+        // Check lookup
+        for (position, record) in &inserted {
+            let result = index.lookup(*position).unwrap();
+            assert!(result.is_some());
+            assert_eq!(&result.unwrap(), record);
+        }
+        
+        // Check last record
+        let last_record = index.last_record().unwrap();
+        assert!(last_record.is_some());
+        let (position, record) = last_record.unwrap();
+        assert_eq!(position, inserted.last().unwrap().0);
+        assert_eq!(record, inserted.last().unwrap().1);
+        
+        // Check scan
+        for i in (0..num_inserts).step_by(1) { // Using step of 67 instead of 678 due to smaller dataset
+            let after = i as i64;
+            let results = index.scan(after).unwrap();
+        
+            let expected: Vec<(Position, PositionIndexRecord)> = inserted
+                .iter()
+                .filter(|(pos, _)| *pos > after)
+                .cloned()
+                .collect();
+        
+            assert_eq!(results, expected);
+        }
+        
+        // Check lookup after flush
+        index.flush().unwrap();
+        
+        // Check only the first few keys
+        for i in (0..num_inserts).step_by(1) {
+            let (position, record) = &inserted[i as usize];
+            index.page_cache.lock().unwrap().clear();
+            index.position_cache.lock().unwrap().clear();
+            let result = index.lookup(*position).unwrap();
+            assert!(result.is_some());
+            assert_eq!(&result.unwrap(), record);
+        }
+        
+        // Check last record after flush and cache clear
+        index.page_cache.lock().unwrap().clear();
+        index.position_cache.lock().unwrap().clear();
+        let last_record = index.last_record().unwrap();
+        assert!(last_record.is_some());
+        let (position, record) = last_record.unwrap();
+        assert_eq!(position, inserted.last().unwrap().0);
+        assert_eq!(record, inserted.last().unwrap().1);
+        
+        // Check scan after flush and cache clear
+        for i in (0..num_inserts).step_by(1) {
+            index.page_cache.lock().unwrap().clear();
+            index.position_cache.lock().unwrap().clear();
+            let after = i as i64;
+            let results = index.scan(after).unwrap();
+        
+            let expected: Vec<(Position, PositionIndexRecord)> = inserted
+                .iter()
+                .filter(|(pos, _)| *pos > after)
+                .cloned()
+                .collect();
+        
+            assert_eq!(results, expected);
+        }
     }
 
 

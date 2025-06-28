@@ -6,6 +6,7 @@ use crate::pagedfile::{PagedFile, PAGE_SIZE, PageID};
 pub struct IndexPages {
     paged_file: PagedFile,
     dirty: HashMap<PageID, bool>,
+    header_page_id: PageID,
 }
 
 impl IndexPages {
@@ -16,6 +17,7 @@ impl IndexPages {
         Ok(IndexPages {
             paged_file,
             dirty: HashMap::new(),
+            header_page_id: PageID(0),
         })
     }
 
@@ -53,8 +55,12 @@ mod tests {
         let test_path = temp_dir.path().join("index.dat");
 
         // Create a new IndexPages using the constructor
-        let _index_pages = IndexPages::new(test_path, PAGE_SIZE)
+        let index_pages = IndexPages::new(test_path, PAGE_SIZE)
             .expect("Failed to create IndexPages");
+
+        // Check that header_page_id equals PageID(0)
+        assert_eq!(index_pages.header_page_id, PageID(0), 
+                   "header_page_id should be initialized to PageID(0)");
 
         // The temporary directory will be automatically deleted when temp_dir goes out of scope
     }

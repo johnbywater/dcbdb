@@ -26,6 +26,11 @@ impl IndexPages {
     pub fn mark_dirty(&mut self, page_id: PageID) {
         self.dirty.insert(page_id, true);
     }
+
+    /// Clears all entries from the dirty HashMap
+    pub fn clear_dirty(&mut self) {
+        self.dirty.clear();
+    }
 }
 
 #[cfg(test)]
@@ -96,5 +101,35 @@ mod tests {
         // Verify that the number of entries in the dirty HashMap matches the expected count
         assert_eq!(index_pages.dirty.len(), expected_page_ids.len(), 
                    "Number of entries in dirty HashMap does not match expected count");
+    }
+
+    #[test]
+    fn test_clear_dirty() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Create a new IndexPages
+        let mut index_pages = IndexPages::new(test_path, PAGE_SIZE)
+            .expect("Failed to create IndexPages");
+
+        // Create a few PageID instances
+        let page_id1 = PageID(1);
+        let page_id2 = PageID(2);
+        let page_id3 = PageID(3);
+
+        // Mark some pages as dirty
+        index_pages.mark_dirty(page_id1);
+        index_pages.mark_dirty(page_id2);
+        index_pages.mark_dirty(page_id3);
+
+        // Verify that the dirty HashMap is not empty
+        assert!(!index_pages.dirty.is_empty(), "Dirty HashMap should not be empty before clearing");
+
+        // Clear the dirty HashMap
+        index_pages.clear_dirty();
+
+        // Verify that the dirty HashMap is now empty
+        assert!(index_pages.dirty.is_empty(), "Dirty HashMap should be empty after clearing");
     }
 }

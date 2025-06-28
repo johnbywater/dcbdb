@@ -11,9 +11,9 @@ lru = "0.15.0"
 rmp = "0.8.12"
 rmp-serde = "1.1.2"
 serde = { version = "1.0.188", features = ["derive"] }
+tempfile = "3.8.0"
 thiserror = "1.0.48"
 uuid = { version = "1.4.1", features = ["v5", "v4"] }
 
 [dev-dependencies]
 # Add test dependencies as needed
-tempfile = "3.8.0"

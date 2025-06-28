@@ -17,6 +17,7 @@ use lru::LruCache;
 
 use rmp_serde::{decode, encode};
 use serde::{Deserialize, Serialize};
+use tempfile;
 use uuid::Uuid;
 use uuid::uuid;
 
@@ -181,15 +182,27 @@ impl PositionCache {
 
 // Page cache
 pub struct PageCache {
+    file: Mutex<File>,
     cache: LruCache<PageID, IndexPage>,
     capacity: usize,
+    page_size: usize,
 }
 
 impl PageCache {
+    // For backward compatibility with tests
     pub fn new(capacity: usize) -> Self {
+        // Create a temporary file for tests
+        let file = tempfile::tempfile().unwrap();
+        Self::with_file(file, capacity, 4096) // Default page size
+    }
+
+    // Create a new PageCache with a file
+    pub fn with_file(file: File, capacity: usize, page_size: usize) -> Self {
         Self {
+            file: Mutex::new(file),
             cache: LruCache::unbounded(),
             capacity,
+            page_size,
         }
     }
 
@@ -217,54 +230,66 @@ impl PageCache {
     }
 
     // Load a page from disk if it's not in the cache
-    pub fn load_page(&mut self, file: &mut File, page_id: PageID, page_size: usize) -> IndexResult<IndexPage> {
+    pub fn load_page(&mut self, page_id: PageID) -> IndexResult<IndexPage> {
         // First check if the page is in the cache
         if let Some(page) = self.get(page_id) {
             return Ok(page);
         }
 
         // If not in cache, read from disk
-        let offset = page_id.0 as u64 * page_size as u64;
+        let offset = page_id.0 as u64 * self.page_size as u64;
 
         // Check if the file is large enough to contain this page
-        let file_size = file.seek(SeekFrom::End(0))?;
-        if offset + page_size as u64 <= file_size {
+        let file_size = {
+            let mut file = self.file.lock().unwrap();
+            file.seek(SeekFrom::End(0))?
+        };
+
+        if offset + self.page_size as u64 <= file_size {
             // File is large enough, seek back to the page offset
-            file.seek(SeekFrom::Start(offset))?;
+            let mut buffer = vec![0u8; self.page_size];
+            {
+                let mut file = self.file.lock().unwrap();
+                file.seek(SeekFrom::Start(offset))?;
+                match file.read_exact(&mut buffer) {
+                    Ok(_) => {
+                        // Parse the page
+                        let node_type_byte = buffer[0];
+                        let crc = u32::from_le_bytes([buffer[1], buffer[2], buffer[3], buffer[4]]);
+                        let data_len = u16::from_le_bytes([buffer[5], buffer[6]]);
 
-            let mut buffer = vec![0u8; page_size];
-            match file.read_exact(&mut buffer) {
-                Ok(_) => {
-                    // Parse the page
-                    let node_type_byte = buffer[0];
-                    let crc = u32::from_le_bytes([buffer[1], buffer[2], buffer[3], buffer[4]]);
-                    let data_len = u16::from_le_bytes([buffer[5], buffer[6]]);
+                        let data = &buffer[HEADER_SIZE..HEADER_SIZE + data_len as usize];
+                        check_crc(data, crc).map_err(|e| {
+                            if let SegmentError::DatabaseCorrupted(msg) = e {
+                                IndexError::DatabaseCorrupted(msg)
+                            } else {
+                                IndexError::DatabaseCorrupted("CRC check failed".to_string())
+                            }
+                        })?;
 
-                    let data = &buffer[HEADER_SIZE..HEADER_SIZE + data_len as usize];
-                    check_crc(data, crc).map_err(|e| {
-                        if let SegmentError::DatabaseCorrupted(msg) = e {
-                            IndexError::DatabaseCorrupted(msg)
-                        } else {
-                            IndexError::DatabaseCorrupted("CRC check failed".to_string())
+                        // Deserialize the node based on its type
+                        let node = Node::from_byte_and_data(node_type_byte, data)?;
+
+                        let page = IndexPage {
+                            page_id,
+                            node,
+                        };
+
+                        // Clone the page before releasing the lock
+                        let page_clone = page.clone();
+
+                        // Release the file lock
+                        drop(file);
+
+                        // Add the page to the cache
+                        self.insert(page_id, page_clone.clone());
+                        return Ok(page_clone);
+                    }
+                    Err(e) => {
+                        // Return the error unless it's an unexpected EOF
+                        if e.kind() != io::ErrorKind::UnexpectedEof {
+                            return Err(IndexError::Io(e));
                         }
-                    })?;
-
-                    // Deserialize the node based on its type
-                    let node = Node::from_byte_and_data(node_type_byte, data)?;
-
-                    let page = IndexPage {
-                        page_id,
-                        node,
-                    };
-
-                    // Add the page to the cache
-                    self.insert(page_id, page.clone());
-                    return Ok(page);
-                }
-                Err(e) => {
-                    // Return the error unless it's an unexpected EOF
-                    if e.kind() != io::ErrorKind::UnexpectedEof {
-                        return Err(IndexError::Io(e));
                     }
                 }
             }
@@ -275,19 +300,19 @@ impl PageCache {
     }
 
     // Get a page from the cache or load it from disk
-    pub fn get_or_load_page(&mut self, file: &mut File, page_id: PageID, page_size: usize) -> IndexResult<IndexPage> {
-        self.load_page(file, page_id, page_size)
+    pub fn get_or_load_page(&mut self, page_id: PageID) -> IndexResult<IndexPage> {
+        self.load_page(page_id)
     }
 
     // Get a mutable reference to a page in the cache, loading it from disk if necessary
-    pub fn get_mut_or_load_page(&mut self, file: &mut File, page_id: PageID, page_size: usize) -> IndexResult<&mut IndexPage> {
+    pub fn get_mut_or_load_page(&mut self, page_id: PageID) -> IndexResult<&mut IndexPage> {
         // First try to get the page from the cache
         if self.cache.contains(&page_id) {
             return Ok(self.cache.get_mut(&page_id).unwrap());
         }
 
         // If not in cache, load it from disk
-        let page = self.load_page(file, page_id, page_size)?;
+        let page = self.load_page(page_id)?;
 
         // Now it should be in the cache, so get a mutable reference
         Ok(self.cache.get_mut(&page_id).unwrap())
@@ -368,11 +393,11 @@ impl PositionIndex {
             .open(&path_buf)?;
 
         let mut index = Self {
-            file: Mutex::new(file),
+            file: Mutex::new(file.try_clone()?),
             header_page_id: PageID(0),
             root_page_id: PageID(1),
             next_page_id: PageID(2),
-            page_cache: Mutex::new(PageCache::new(cache_size)),
+            page_cache: Mutex::new(PageCache::with_file(file, cache_size, page_size)),
             position_cache: Mutex::new(PositionCache::new(cache_size)),
             dirty_pages: Mutex::new(HashMap::new()),
             page_size,
@@ -454,11 +479,7 @@ impl PositionIndex {
         }
 
         // Not in cache, try to load from disk
-        let mut file = self.file.lock().unwrap();
-        let result = page_cache.load_page(&mut file, page_id, self.page_size);
-
-        // Release the file lock as soon as possible
-        drop(file);
+        let result = page_cache.load_page(page_id);
 
         result
     }
@@ -545,43 +566,6 @@ impl PositionIndex {
         Ok(result)
     }
 
-    // Flush dirty pages to disk
-    pub fn flush(&self) -> IndexResult<()> {
-        let mut file = self.file.lock().unwrap();
-        let mut dirty_pages = self.dirty_pages.lock().unwrap();
-        let mut page_cache = self.page_cache.lock().unwrap();
-
-        for (page_id, _) in dirty_pages.iter() {
-            if let Some(page) = page_cache.get(*page_id) {
-                let serialized = self.serialize_page(&page)?;
-                let offset = page_id.0 as u64 * self.page_size as u64;
-                file.seek(SeekFrom::Start(offset))?;
-
-                // Create a buffer of page_size filled with zeros
-                let mut padded_data = vec![0u8; self.page_size];
-
-                // Copy the serialized data into the buffer
-                padded_data[..serialized.len()].copy_from_slice(&serialized);
-
-                // Write the padded data to the file
-                file.write_all(&padded_data)?;
-            }
-        }
-
-        file.flush()?;
-        file.sync_all()?;
-        dirty_pages.clear();
-
-        // Reduce caches to capacity after flush
-        page_cache.reduce_to_capacity();
-        drop(page_cache); // Release the lock before acquiring another one
-
-        let mut position_cache = self.position_cache.lock().unwrap();
-        position_cache.reduce_to_capacity();
-
-        Ok(())
-    }
-
     // Insert a key-value pair into the index
     pub fn insert(&mut self, key: Position, value: PositionIndexRecord) -> IndexResult<()> {
         // Get a locked reference to the page cache
@@ -595,10 +579,7 @@ impl PositionIndex {
         // First phase: traverse down to the leaf node
         loop {
             // Get the page from the cache or load it from disk
-            let mut file = self.file.lock().unwrap();
-            let page_result = page_cache.load_page(&mut file, current_page_id, self.page_size);
-            drop(file);
-
+            let page_result = page_cache.load_page(current_page_id);
             let page = page_result?;
 
             match &page.node {
@@ -627,10 +608,7 @@ impl PositionIndex {
 
         // Second phase: insert into the leaf node
         // Get a mutable reference to the page from the cache
-        let mut file = self.file.lock().unwrap();
-        let page_result = page_cache.load_page(&mut file, current_page_id, self.page_size);
-        drop(file);
-
+        let page_result = page_cache.load_page(current_page_id);
         let page = page_result?;
 
         if let Node::Leaf(mut leaf) = page.node.clone() {
@@ -760,12 +738,12 @@ impl PositionIndex {
         Ok(())
     }
 
-
     // Check if a page needs splitting
     fn needs_splitting(&self, page: &IndexPage) -> IndexResult<bool> {
         let serialized = self.serialize_page(page)?;
         Ok(serialized.len() > self.page_size - 100) // Keep some space free
     }
+
 
     // Split a leaf node
     fn split_leaf(&mut self, page: &IndexPage) -> IndexResult<(Position, PageID)> {
@@ -982,6 +960,43 @@ impl PositionIndex {
         }
 
         Ok(result)
+    }
+
+    // Flush dirty pages to disk
+    pub fn flush(&self) -> IndexResult<()> {
+        let mut file = self.file.lock().unwrap();
+        let mut dirty_pages = self.dirty_pages.lock().unwrap();
+        let mut page_cache = self.page_cache.lock().unwrap();
+
+        for (page_id, _) in dirty_pages.iter() {
+            if let Some(page) = page_cache.get(*page_id) {
+                let serialized = self.serialize_page(&page)?;
+                let offset = page_id.0 as u64 * self.page_size as u64;
+                file.seek(SeekFrom::Start(offset))?;
+
+                // Create a buffer of page_size filled with zeros
+                let mut padded_data = vec![0u8; self.page_size];
+
+                // Copy the serialized data into the buffer
+                padded_data[..serialized.len()].copy_from_slice(&serialized);
+
+                // Write the padded data to the file
+                file.write_all(&padded_data)?;
+            }
+        }
+
+        file.flush()?;
+        file.sync_all()?;
+        dirty_pages.clear();
+
+        // Reduce caches to capacity after flush
+        page_cache.reduce_to_capacity();
+        drop(page_cache); // Release the lock before acquiring another one
+
+        let mut position_cache = self.position_cache.lock().unwrap();
+        position_cache.reduce_to_capacity();
+
+        Ok(())
     }
 
     // Close the index

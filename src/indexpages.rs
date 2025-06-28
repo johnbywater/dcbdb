@@ -25,21 +25,6 @@ pub trait Node {
     fn node_type_byte(&self) -> u8;
 }
 
-/// A structure that manages index pages
-pub struct IndexPages {
-    paged_file: PagedFile,
-    dirty: HashMap<PageID, bool>,
-    header_page_id: PageID,
-    pub header_node: HeaderNode,
-    /// The header page containing the header node
-    pub header_page: IndexPage,
-    /// Cache of IndexPage objects keyed by PageID
-    /// This cache must be unbounded and should never be changed to a bounded cache
-    cache: LruCache<PageID, IndexPage>,
-    /// Deserializer for index pages
-    pub deserializer: Deserializer,
-}
-
 /// A structure that represents a header node in the index
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeaderNode {
@@ -199,6 +184,21 @@ impl IndexPage {
     }
 }
 
+/// A structure that manages index pages
+pub struct IndexPages {
+    paged_file: PagedFile,
+    dirty: HashMap<PageID, bool>,
+    header_page_id: PageID,
+    pub header_node: HeaderNode,
+    /// The header page containing the header node
+    pub header_page: IndexPage,
+    /// Cache of IndexPage objects keyed by PageID
+    /// This cache must be unbounded and should never be changed to a bounded cache
+    cache: LruCache<PageID, IndexPage>,
+    /// Deserializer for index pages
+    pub deserializer: Deserializer,
+}
+
 impl IndexPages {
     /// Creates a new IndexPages with the given path and page size
     pub fn new<P: AsRef<Path>>(path: P, page_size: usize) -> std::io::Result<Self> {
@@ -273,6 +273,29 @@ impl IndexPages {
         let header_node = HeaderNode {
             root_page_id,
             next_page_id: self.header_node.next_page_id,
+        };
+        self.header_page = IndexPage {
+            page_id: self.header_page_id,
+            node: Box::new(header_node),
+            serialized: Vec::new(),
+        };
+
+        // Mark the header page as dirty
+        self.mark_dirty(self.header_page_id);
+    }
+
+    /// Sets the next page ID in the header node and marks the header page as dirty
+    ///
+    /// # Arguments
+    /// * `next_page_id` - The new next page ID
+    pub fn set_next_page_id(&mut self, next_page_id: PageID) {
+        // Update the next_page_id in the header_node
+        self.header_node.next_page_id = next_page_id;
+
+        // Update the node in the header_page
+        let header_node = HeaderNode {
+            root_page_id: self.header_node.root_page_id,
+            next_page_id,
         };
         self.header_page = IndexPage {
             page_id: self.header_page_id,
@@ -783,5 +806,58 @@ mod tests {
         // Check that the root_page_id in the deserialized header_node matches the new value
         assert_eq!(deserialized_header_node.root_page_id, new_root_page_id,
                    "root_page_id in deserialized header_node should match the new value");
+    }
+
+    #[test]
+    fn test_set_next_page_id() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Create a new IndexPages
+        let mut index_pages = IndexPages::new(test_path, PAGE_SIZE)
+            .expect("Failed to create IndexPages");
+
+        // Check the initial next_page_id
+        assert_eq!(index_pages.header_node.next_page_id, PageID(2),
+                   "Initial next_page_id should be PageID(2)");
+
+        // Set a new next_page_id
+        let new_next_page_id = PageID(42);
+        index_pages.set_next_page_id(new_next_page_id);
+
+        // Check that the next_page_id was updated
+        assert_eq!(index_pages.header_node.next_page_id, new_next_page_id,
+                   "next_page_id should be updated to the new value");
+
+        // Check that the header_page_id was marked as dirty
+        assert!(index_pages.dirty.contains_key(&index_pages.header_page_id),
+                "header_page_id should be marked as dirty");
+
+        // Serialize the header_page
+        let serialized_data = index_pages.header_page.serialize_page()
+            .expect("Failed to serialize header_page");
+
+        // Deserialize the serialized data into another instance of IndexPage
+        let deserialized_page = index_pages.deserializer.deserialise_page(&serialized_data, index_pages.header_page_id)
+            .expect("Failed to deserialize header_page");
+
+        // Check that the deserialized page has the correct page_id
+        assert_eq!(deserialized_page.page_id, index_pages.header_page_id,
+                   "Deserialized page_id should match header_page_id");
+
+        // Check that the deserialized page has the correct node type
+        assert_eq!(deserialized_page.node.node_type_byte(), HEADER_NODE_TYPE,
+                   "Deserialized node_type_byte should be HEADER_NODE_TYPE");
+
+        // Get the header_node from the deserialized page
+        let node_data = deserialized_page.node.to_msgpack()
+            .expect("Failed to serialize node data");
+        let deserialized_header_node: HeaderNode = decode::from_slice(&node_data)
+            .expect("Failed to deserialize node data");
+
+        // Check that the next_page_id in the deserialized header_node matches the new value
+        assert_eq!(deserialized_header_node.next_page_id, new_next_page_id,
+                   "next_page_id in deserialized header_node should match the new value");
     }
 }

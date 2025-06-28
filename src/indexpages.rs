@@ -34,6 +34,8 @@ pub struct IndexPages {
     /// Cache of IndexPage objects keyed by PageID
     /// This cache must be unbounded and should never be changed to a bounded cache
     cache: LruCache<PageID, IndexPage>,
+    /// Deserializer for index pages
+    pub deserializer: Deserializer,
 }
 
 /// A structure that represents a header node in the index
@@ -200,6 +202,15 @@ impl IndexPages {
     pub fn new<P: AsRef<Path>>(path: P, page_size: usize) -> std::io::Result<Self> {
         let paged_file = PagedFile::new(path, Some(page_size))?;
 
+        // Create a new Deserializer
+        let mut deserializer = Deserializer::new();
+
+        // Register the HEADER_NODE_TYPE with a decode function for HeaderNode
+        deserializer.register(HEADER_NODE_TYPE, |data| {
+            let header_node: HeaderNode = decode::from_slice(data)?;
+            Ok(Box::new(header_node) as Box<dyn Node>)
+        });
+
         Ok(IndexPages {
             paged_file,
             dirty: HashMap::new(),
@@ -210,6 +221,7 @@ impl IndexPages {
             },
             // Initialize the cache as unbounded - this is a requirement and must not be changed
             cache: LruCache::unbounded(),
+            deserializer,
         })
     }
 
@@ -269,6 +281,42 @@ mod tests {
         // Check that the cache is initialized and empty
         assert!(index_pages.cache.is_empty(), 
                 "Cache should be initialized as empty");
+
+        // Check that the deserializer field exists and has HEADER_NODE_TYPE registered
+        // Create an IndexPage with a HeaderNode
+        let header_node = HeaderNode {
+            root_page_id: PageID(3),
+            next_page_id: PageID(4),
+        };
+        let index_page = IndexPage {
+            page_id: PageID(5),
+            node: Box::new(header_node),
+            serialized: Vec::new(),
+        };
+
+        // Serialize the page data
+        let serialized_data = index_page.serialize_page().expect("Failed to serialize page data");
+
+        // Use the deserializer to deserialize the page data
+        let deserialized_page = index_pages.deserializer.deserialise_page(&serialized_data, PageID(5))
+            .expect("Failed to deserialize page data");
+
+        // Verify that the deserialized page has the correct page_id
+        assert_eq!(deserialized_page.page_id, PageID(5), 
+                   "page_id should match after deserialization");
+
+        // Verify that the deserialized page has the correct node type
+        assert_eq!(deserialized_page.node.node_type_byte(), HEADER_NODE_TYPE, 
+                   "node_type_byte should match after deserialization");
+
+        // Serialize the node data from the deserialized page
+        let reserialized_data = deserialized_page.node.to_msgpack()
+            .expect("Failed to serialize node data from deserialized page");
+
+        // Deserialize the original node data for comparison
+        let original_node_data = &serialized_data[9..];
+        assert_eq!(reserialized_data, original_node_data, 
+                   "Reserialized node data should match the original node data");
 
         // The temporary directory will be automatically deleted when temp_dir goes out of scope
     }

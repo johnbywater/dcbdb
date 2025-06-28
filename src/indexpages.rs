@@ -1,6 +1,6 @@
 use std::path::Path;
 use std::collections::HashMap;
-use crate::pagedfile::{PagedFile, PAGE_SIZE, PageID};
+use crate::pagedfile::{PagedFile, PAGE_SIZE, PageID, PagedFileError};
 use serde::{Serialize, Deserialize};
 use rmp_serde::{encode, decode};
 use lru::LruCache;
@@ -202,7 +202,7 @@ pub struct IndexPages {
 impl IndexPages {
     /// Creates a new IndexPages with the given path and page size
     pub fn new<P: AsRef<Path>>(path: P, page_size: usize) -> std::io::Result<Self> {
-        let paged_file = PagedFile::new(path, Some(page_size))?;
+        let mut paged_file = PagedFile::new(path, Some(page_size))?;
 
         // Create a new Deserializer
         let mut deserializer = Deserializer::new();
@@ -213,29 +213,79 @@ impl IndexPages {
             Ok(Box::new(header_node) as Box<dyn Node>)
         });
 
-        // Create the header node
-        let header_node = HeaderNode {
-            root_page_id: PageID(1),
-            next_page_id: PageID(2),
+        // Define the header page ID
+        let header_page_id = PageID(0);
+
+        // Check if the file exists
+        let (header_node, header_page) = if paged_file.new {
+            // File exists, read the header page from disk
+            let header_page_data = paged_file.read_page(header_page_id)
+                .map_err(|e| std::io::Error::new(
+                    match e {
+                        PagedFileError::Io(ref io_err) => io_err.kind(),
+                        _ => std::io::ErrorKind::Other,
+                    },
+                    format!("Failed to read header page: {}", e)
+                ))?;
+
+            // Deserialize the header page
+            let deserialized_page = deserializer.deserialise_page(&header_page_data, header_page_id)
+                .map_err(|e| std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Failed to deserialize header page: {}", e)
+                ))?;
+
+            // Get the header node from the deserialized page
+            let node_data = deserialized_page.node.to_msgpack()
+                .map_err(|e| std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Failed to serialize node data: {}", e)
+                ))?;
+
+            // Deserialize the header node
+            let header_node: HeaderNode = decode::from_slice(&node_data)
+                .map_err(|e| std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Failed to deserialize header node: {}", e)
+                ))?;
+
+            (header_node, deserialized_page)
+        } else {
+            // File doesn't exist, create a new header node with default values
+            let header_node = HeaderNode {
+                root_page_id: PageID(1),
+                next_page_id: PageID(2),
+            };
+
+            // Create the header page
+            let header_page = IndexPage {
+                page_id: header_page_id,
+                node: Box::new(header_node),
+                serialized: Vec::new(),
+            };
+
+            (header_node, header_page)
         };
 
-        // Create the header page
-        let header_page = IndexPage {
-            page_id: PageID(0),
-            node: Box::new(header_node),
-            serialized: Vec::new(),
-        };
-
-        Ok(IndexPages {
+        // Create the IndexPages instance
+        let mut index_pages = IndexPages {
             paged_file,
             dirty: HashMap::new(),
-            header_page_id: PageID(0),
+            header_page_id,
             header_node,
             header_page,
             // Initialize the cache as unbounded - this is a requirement and must not be changed
             cache: LruCache::unbounded(),
             deserializer,
-        })
+        };
+
+        // If the file doesn't exist, mark the header page as dirty and flush it to disk
+        if !index_pages.paged_file.new {
+            index_pages.mark_dirty(header_page_id);
+            index_pages.flush()?;
+        }
+
+        Ok(index_pages)
     }
 
     /// Marks a page as dirty
@@ -1012,5 +1062,52 @@ mod tests {
         // Verify that the deserialized page 2 has the correct page_id
         assert_eq!(deserialized_page2.page_id, page_id2,
                    "Deserialized page 2 page_id should match page_id2");
+    }
+
+    #[test]
+    fn test_persistence() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Step 1: Create an initial IndexPages instance
+        let index_pages1 = IndexPages::new(test_path.clone(), PAGE_SIZE)
+            .expect("Failed to create first IndexPages instance");
+
+        // Check the initial values
+        assert_eq!(index_pages1.header_node.root_page_id, PageID(1),
+                   "Initial root_page_id should be PageID(1)");
+        assert_eq!(index_pages1.header_node.next_page_id, PageID(2),
+                   "Initial next_page_id should be PageID(2)");
+
+        // Step 2: Create a second IndexPages instance
+        let mut index_pages2 = IndexPages::new(test_path.clone(), PAGE_SIZE)
+            .expect("Failed to create second IndexPages instance");
+
+        // Check that the values are the same as in the first instance
+        assert_eq!(index_pages2.header_node.root_page_id, index_pages1.header_node.root_page_id,
+                   "root_page_id should be the same in the second instance");
+        assert_eq!(index_pages2.header_node.next_page_id, index_pages1.header_node.next_page_id,
+                   "next_page_id should be the same in the second instance");
+
+        // Set new values for root_page_id and next_page_id
+        let new_root_page_id = PageID(42);
+        let new_next_page_id = PageID(43);
+
+        index_pages2.set_root_page_id(new_root_page_id);
+        index_pages2.set_next_page_id(new_next_page_id);
+
+        // Flush the changes to disk
+        index_pages2.flush().expect("Failed to flush changes");
+
+        // Step 3: Create a third IndexPages instance
+        let index_pages3 = IndexPages::new(test_path, PAGE_SIZE)
+            .expect("Failed to create third IndexPages instance");
+
+        // Check that the values are the same as the modified values in the second instance
+        assert_eq!(index_pages3.header_node.root_page_id, new_root_page_id,
+                   "root_page_id should be the modified value in the third instance");
+        assert_eq!(index_pages3.header_node.next_page_id, new_next_page_id,
+                   "next_page_id should be the modified value in the third instance");
     }
 }

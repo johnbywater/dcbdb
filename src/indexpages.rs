@@ -329,21 +329,11 @@ impl IndexPages {
         self.header_node.root_page_id = root_page_id;
 
         // Get a mutable reference to the HeaderNode in the heap
-        if let Some(header_node) = self.header_page.node.as_any_mut().downcast_mut::<HeaderNode>() {
-            // Update the root_page_id directly in the heap
-            header_node.root_page_id = root_page_id;
-        } else {
-            // If downcasting fails, fall back to the old approach
-            let header_node = HeaderNode {
-                root_page_id,
-                next_page_id: self.header_node.next_page_id,
-            };
-            self.header_page = IndexPage {
-                page_id: self.header_page_id,
-                node: Box::new(header_node),
-                serialized: Vec::new(),
-            };
-        }
+        let header_node = self.header_page.node.as_any_mut().downcast_mut::<HeaderNode>()
+            .expect("Failed to downcast node to HeaderNode");
+
+        // Update the root_page_id directly in the heap
+        header_node.root_page_id = root_page_id;
 
         // Mark the header page as dirty
         self.mark_dirty(self.header_page_id);
@@ -358,21 +348,11 @@ impl IndexPages {
         self.header_node.next_page_id = next_page_id;
 
         // Get a mutable reference to the HeaderNode in the heap
-        if let Some(header_node) = self.header_page.node.as_any_mut().downcast_mut::<HeaderNode>() {
-            // Update the next_page_id directly in the heap
-            header_node.next_page_id = next_page_id;
-        } else {
-            // If downcasting fails, fall back to the old approach
-            let header_node = HeaderNode {
-                root_page_id: self.header_node.root_page_id,
-                next_page_id,
-            };
-            self.header_page = IndexPage {
-                page_id: self.header_page_id,
-                node: Box::new(header_node),
-                serialized: Vec::new(),
-            };
-        }
+        let header_node = self.header_page.node.as_any_mut().downcast_mut::<HeaderNode>()
+            .expect("Failed to downcast node to HeaderNode");
+
+        // Update the next_page_id directly in the heap
+        header_node.next_page_id = next_page_id;
 
         // Mark the header page as dirty
         self.mark_dirty(self.header_page_id);

@@ -5,6 +5,7 @@ use serde::{Serialize, Deserialize};
 use rmp_serde::{encode, decode};
 use lru::LruCache;
 use crate::wal::calc_crc;
+use std::any::Any;
 
 /// Constant for the header node type
 pub const HEADER_NODE_TYPE: u8 = 1;
@@ -67,6 +68,100 @@ pub struct IndexPage {
     pub page_id: PageID,
     pub node: Box<dyn Node>,
     pub serialized: Vec<u8>,
+}
+
+/// A type for node-specific decode functions
+pub type DecodeFn = fn(&[u8]) -> Result<Box<dyn Node>, decode::Error>;
+
+/// A structure that can deserialize index pages
+pub struct Deserializer {
+    /// Map of node type bytes to decode functions
+    decoders: HashMap<u8, DecodeFn>,
+}
+
+impl Deserializer {
+    /// Creates a new Deserializer
+    pub fn new() -> Self {
+        Deserializer {
+            decoders: HashMap::new(),
+        }
+    }
+
+    /// Registers a decode function for a node type byte
+    ///
+    /// # Arguments
+    /// * `node_type_byte` - The node type byte
+    /// * `decode_fn` - The decode function
+    pub fn register(&mut self, node_type_byte: u8, decode_fn: DecodeFn) {
+        self.decoders.insert(node_type_byte, decode_fn);
+    }
+
+    /// Deserializes a page
+    ///
+    /// # Arguments
+    /// * `data` - The serialized page data
+    /// * `page_id` - The page ID
+    ///
+    /// # Returns
+    /// * `Result<IndexPage, decode::Error>` - The deserialized page or an error
+    pub fn deserialise_page(&self, data: &[u8], page_id: PageID) -> Result<IndexPage, decode::Error> {
+        // Extract the node type byte
+        if data.is_empty() {
+            return Err(decode::Error::InvalidMarkerRead(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "Empty data",
+            )));
+        }
+        let node_type_byte = data[0];
+
+        // Extract the CRC and blob length
+        if data.len() < 9 {
+            return Err(decode::Error::InvalidMarkerRead(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "Data too short for header",
+            )));
+        }
+        let crc_bytes = &data[1..5];
+        let len_bytes = &data[5..9];
+        let crc = u32::from_le_bytes([crc_bytes[0], crc_bytes[1], crc_bytes[2], crc_bytes[3]]);
+        let blob_len = u32::from_le_bytes([len_bytes[0], len_bytes[1], len_bytes[2], len_bytes[3]]) as usize;
+
+        // Extract the blob
+        if data.len() < 9 + blob_len {
+            return Err(decode::Error::InvalidMarkerRead(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "Data too short for blob",
+            )));
+        }
+        let blob = &data[9..9 + blob_len];
+
+        // Verify the CRC
+        let calculated_crc = calc_crc(blob);
+        if calculated_crc != crc {
+            return Err(decode::Error::InvalidMarkerRead(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "CRC mismatch",
+            )));
+        }
+
+        // Get the decode function for the node type
+        let decode_fn = self.decoders.get(&node_type_byte).ok_or_else(|| {
+            decode::Error::InvalidMarkerRead(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("No decoder registered for node type byte: {}", node_type_byte),
+            ))
+        })?;
+
+        // Deserialize the node
+        let node = decode_fn(blob)?;
+
+        // Create and return the IndexPage
+        Ok(IndexPage {
+            page_id,
+            node,
+            serialized: Vec::new(),
+        })
+    }
 }
 
 impl IndexPage {
@@ -458,5 +553,92 @@ mod tests {
         // Verify that node_type_byte can be called through the trait object
         assert_eq!(index_page.node.node_type_byte(), HEADER_NODE_TYPE, 
                    "node_type_byte should return HEADER_NODE_TYPE when called through trait object");
+    }
+
+    #[test]
+    fn test_deserializer() {
+        // Create a HeaderNode instance
+        let header_node = HeaderNode {
+            root_page_id: PageID(17),
+            next_page_id: PageID(18),
+        };
+
+        // Create an IndexPage with the HeaderNode
+        let index_page = IndexPage {
+            page_id: PageID(19),
+            node: Box::new(header_node),
+            serialized: Vec::new(),
+        };
+
+        // Serialize the page data
+        let serialized_data = index_page.serialize_page().expect("Failed to serialize page data");
+
+        // Create a Deserializer
+        let mut deserializer = Deserializer::new();
+
+        // Register a decode function for HeaderNode
+        deserializer.register(HEADER_NODE_TYPE, |data| {
+            let header_node: HeaderNode = decode::from_slice(data)?;
+            Ok(Box::new(header_node) as Box<dyn Node>)
+        });
+
+        // Deserialize the page data
+        let deserialized_page = deserializer.deserialise_page(&serialized_data, PageID(19))
+            .expect("Failed to deserialize page data");
+
+        // Verify that the deserialized page has the correct page_id
+        assert_eq!(deserialized_page.page_id, PageID(19), 
+                   "page_id should match after deserialization");
+
+        // Verify that the deserialized page has the correct node type
+        assert_eq!(deserialized_page.node.node_type_byte(), HEADER_NODE_TYPE, 
+                   "node_type_byte should match after deserialization");
+
+        // Serialize the node data from the deserialized page
+        let reserialized_data = deserialized_page.node.to_msgpack()
+            .expect("Failed to serialize node data from deserialized page");
+
+        // Deserialize the original node data for comparison
+        let original_node_data = &serialized_data[9..];
+        assert_eq!(reserialized_data, original_node_data, 
+                   "Reserialized node data should match the original node data");
+    }
+
+    #[test]
+    fn test_deserializer_error_handling() {
+        // Create a Deserializer
+        let mut deserializer = Deserializer::new();
+
+        // Register a decode function for HeaderNode
+        deserializer.register(HEADER_NODE_TYPE, |data| {
+            let header_node: HeaderNode = decode::from_slice(data)?;
+            Ok(Box::new(header_node) as Box<dyn Node>)
+        });
+
+        // Test with empty data
+        let result = deserializer.deserialise_page(&[], PageID(20));
+        assert!(result.is_err(), "Should return an error for empty data");
+
+        // Test with data that's too short for the header
+        let result = deserializer.deserialise_page(&[HEADER_NODE_TYPE], PageID(20));
+        assert!(result.is_err(), "Should return an error for data that's too short for the header");
+
+        // Test with an unregistered node type
+        let unregistered_type = 99;
+        let mut invalid_data = Vec::new();
+        invalid_data.push(unregistered_type);
+        invalid_data.extend_from_slice(&[0, 0, 0, 0]); // CRC
+        invalid_data.extend_from_slice(&[0, 0, 0, 0]); // Length
+        let result = deserializer.deserialise_page(&invalid_data, PageID(20));
+        assert!(result.is_err(), "Should return an error for an unregistered node type");
+
+        // Test with invalid CRC
+        let mut invalid_crc_data = Vec::new();
+        invalid_crc_data.push(HEADER_NODE_TYPE);
+        invalid_crc_data.extend_from_slice(&[1, 2, 3, 4]); // Invalid CRC
+        invalid_crc_data.extend_from_slice(&[4, 0, 0, 0]); // Length = 4
+        invalid_crc_data.extend_from_slice(&[0, 0, 0, 0]); // Some data
+        let result = deserializer.deserialise_page(&invalid_crc_data, PageID(20));
+        assert!(result.is_err(), "Should return an error for invalid CRC");
     }
 }

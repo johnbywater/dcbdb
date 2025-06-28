@@ -312,7 +312,7 @@ impl PageCache {
         }
 
         // If not in cache, load it from disk
-        let page = self.load_page(page_id)?;
+        self.load_page(page_id)?;
 
         // Now it should be in the cache, so get a mutable reference
         Ok(self.cache.get_mut(&page_id).unwrap())

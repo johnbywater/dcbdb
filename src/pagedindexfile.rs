@@ -1,10 +1,20 @@
 // Paged Index File module
 use std::path::{Path, PathBuf};
 use std::fs::{File, OpenOptions};
-use std::io;
+use std::io::{self, Read, Write, Seek, SeekFrom};
+use thiserror::Error;
 
 // Constants
 pub const PAGE_SIZE: usize = 4096;
+
+#[derive(Debug, Error)]
+pub enum PagedFileError {
+    #[error("IO error: {0}")]
+    Io(#[from] io::Error),
+
+    #[error("Data too large: size {0} exceeds page size {1}")]
+    DataTooLarge(usize, usize),
+}
 
 /// A paged file structure that manages file access
 pub struct PagedFile {
@@ -39,6 +49,67 @@ impl PagedFile {
             file,
             page_size,
         })
+    }
+
+    /// Writes data to a specific page in the file
+    ///
+    /// # Arguments
+    /// * `page_number` - The page number to write to
+    /// * `page_data` - The data to write to the page
+    ///
+    /// # Returns
+    /// * `Ok(())` if the write was successful
+    /// * `Err(PagedFileError::DataTooLarge)` if the data is too large for a page
+    /// * `Err(PagedFileError::Io)` if there was an IO error
+    pub fn write_page(&mut self, page_number: usize, page_data: &[u8]) -> Result<(), PagedFileError> {
+        // Check if the data is too large
+        if page_data.len() > self.page_size {
+            return Err(PagedFileError::DataTooLarge(page_data.len(), self.page_size));
+        }
+
+        // Calculate the offset in the file
+        let offset = page_number * self.page_size;
+
+        // Seek to the correct position in the file
+        self.file.seek(SeekFrom::Start(offset as u64))?;
+
+        // Write the data
+        self.file.write_all(page_data)?;
+
+        // If the data is smaller than page_size, pad with zeros
+        if page_data.len() < self.page_size {
+            let padding = vec![0u8; self.page_size - page_data.len()];
+            self.file.write_all(&padding)?;
+        }
+
+        // Flush to ensure data is written to disk
+        self.file.flush()?;
+
+        Ok(())
+    }
+
+    /// Reads data from a specific page in the file
+    ///
+    /// # Arguments
+    /// * `page_number` - The page number to read from
+    ///
+    /// # Returns
+    /// * `Ok(Vec<u8>)` containing the page data if the read was successful
+    /// * `Err(PagedFileError::Io)` if there was an IO error
+    pub fn read_page(&mut self, page_number: usize) -> Result<Vec<u8>, PagedFileError> {
+        // Calculate the offset in the file
+        let offset = page_number * self.page_size;
+
+        // Seek to the correct position in the file
+        self.file.seek(SeekFrom::Start(offset as u64))?;
+
+        // Create a buffer to hold the data
+        let mut buffer = vec![0u8; self.page_size];
+
+        // Read the data
+        self.file.read_exact(&mut buffer)?;
+
+        Ok(buffer)
     }
 }
 
@@ -86,5 +157,73 @@ mod tests {
         assert_eq!(second_paged_file.page_size, custom_page_size);
 
         // The temporary directory will be automatically deleted when temp_dir goes out of scope
+    }
+
+    #[test]
+    fn test_write_and_read_pages() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+        let test_path = temp_dir.path().join("position-index.dat");
+
+        // Create a PagedFile instance
+        let mut paged_file = PagedFile::new(test_path.clone(), None)
+            .expect("Failed to create PagedFile");
+
+        // Create test data for different pages
+        let page0_data = b"This is data for page 0".to_vec();
+        let page1_data = b"This is different data for page 1".to_vec();
+
+        // Write data to different pages
+        paged_file.write_page(0, &page0_data)
+            .expect("Failed to write to page 0");
+        paged_file.write_page(1, &page1_data)
+            .expect("Failed to write to page 1");
+
+        // Read the data back and verify it matches
+        let read_page0 = paged_file.read_page(0)
+            .expect("Failed to read page 0");
+        let read_page1 = paged_file.read_page(1)
+            .expect("Failed to read page 1");
+
+        // Verify the data matches (note: we only compare the actual data part, not the padding)
+        assert_eq!(&read_page0[..page0_data.len()], &page0_data[..]);
+        assert_eq!(&read_page1[..page1_data.len()], &page1_data[..]);
+
+        // Verify the rest of the page is padded with zeros
+        for i in page0_data.len()..PAGE_SIZE {
+            assert_eq!(read_page0[i], 0, "Padding byte at index {} is not zero", i);
+        }
+
+        // Create a new PagedFile instance with the same path
+        let mut second_paged_file = PagedFile::new(test_path.clone(), None)
+            .expect("Failed to create second PagedFile");
+
+        // Read the data again to verify persistence
+        let read_page0_again = second_paged_file.read_page(0)
+            .expect("Failed to read page 0 with second instance");
+        let read_page1_again = second_paged_file.read_page(1)
+            .expect("Failed to read page 1 with second instance");
+
+        // Verify the data still matches
+        assert_eq!(&read_page0_again[..page0_data.len()], &page0_data[..]);
+        assert_eq!(&read_page1_again[..page1_data.len()], &page1_data[..]);
+
+        // Write more data with the second instance
+        let page2_data = b"This is data written by the second instance to page 2".to_vec();
+        second_paged_file.write_page(2, &page2_data)
+            .expect("Failed to write to page 2 with second instance");
+
+        // Read back all pages and verify
+        let read_page0_final = second_paged_file.read_page(0)
+            .expect("Failed to read page 0 after writing page 2");
+        let read_page1_final = second_paged_file.read_page(1)
+            .expect("Failed to read page 1 after writing page 2");
+        let read_page2 = second_paged_file.read_page(2)
+            .expect("Failed to read page 2");
+
+        // Verify all data is correctly stored
+        assert_eq!(&read_page0_final[..page0_data.len()], &page0_data[..]);
+        assert_eq!(&read_page1_final[..page1_data.len()], &page1_data[..]);
+        assert_eq!(&read_page2[..page2_data.len()], &page2_data[..]);
     }
 }

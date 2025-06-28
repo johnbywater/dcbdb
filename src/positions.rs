@@ -269,11 +269,17 @@ pub struct PositionIndex {
     page_cache: Mutex<PageCache>,
     position_cache: Mutex<PositionCache>,
     dirty_pages: Mutex<HashMap<PageID, bool>>,
+    page_size: usize,
 }
 
 impl PositionIndex {
     // Create a new position index
     pub fn new<P: AsRef<Path>>(path: P, cache_size: usize) -> IndexResult<Self> {
+        Self::new_with_page_size(path, cache_size, PAGE_SIZE)
+    }
+
+    // Create a new position index with a custom page size
+    pub fn new_with_page_size<P: AsRef<Path>>(path: P, cache_size: usize, page_size: usize) -> IndexResult<Self> {
         let path_buf = path.as_ref().to_path_buf();
         let file_exists = path_buf.exists();
 
@@ -290,6 +296,7 @@ impl PositionIndex {
             page_cache: Mutex::new(PageCache::new(cache_size)),
             position_cache: Mutex::new(PositionCache::new(cache_size)),
             dirty_pages: Mutex::new(HashMap::new()),
+            page_size,
         };
 
         if !file_exists {
@@ -370,15 +377,15 @@ impl PositionIndex {
         // We'll try to read the page from disk first
         // If that fails, and it's the root page, we'll create a new empty leaf node
         let mut file = self.file.lock().unwrap();
-        let offset = page_id.0 as u64 * PAGE_SIZE as u64;
+        let offset = page_id.0 as u64 * self.page_size as u64;
 
         // Check if the file is large enough to contain this page
         let file_size = file.seek(SeekFrom::End(0))?;
-        if offset + PAGE_SIZE as u64 <= file_size {
+        if offset + self.page_size as u64 <= file_size {
             // File is large enough, seek back to the page offset
             file.seek(SeekFrom::Start(offset))?;
 
-            let mut buffer = vec![0u8; PAGE_SIZE];
+            let mut buffer = vec![0u8; self.page_size];
             match file.read_exact(&mut buffer) {
                 Ok(_) => {
                     // Parse the page
@@ -529,11 +536,11 @@ impl PositionIndex {
         for (page_id, _) in dirty_pages.iter() {
             if let Some(page) = page_cache.get(*page_id) {
                 let serialized = self.serialize_page(&page)?;
-                let offset = page_id.0 as u64 * PAGE_SIZE as u64;
+                let offset = page_id.0 as u64 * self.page_size as u64;
                 file.seek(SeekFrom::Start(offset))?;
 
-                // Create a buffer of PAGE_SIZE filled with zeros
-                let mut padded_data = vec![0u8; PAGE_SIZE];
+                // Create a buffer of page_size filled with zeros
+                let mut padded_data = vec![0u8; self.page_size];
 
                 // Copy the serialized data into the buffer
                 padded_data[..serialized.len()].copy_from_slice(&serialized);
@@ -702,7 +709,7 @@ impl PositionIndex {
     // Check if a page needs splitting
     fn needs_splitting(&self, page: &IndexPage) -> IndexResult<bool> {
         let serialized = self.serialize_page(page)?;
-        Ok(serialized.len() > PAGE_SIZE - 100) // Keep some space free
+        Ok(serialized.len() > self.page_size - 100) // Keep some space free
     }
 
     // Split a leaf node
@@ -1528,11 +1535,12 @@ mod tests {
     fn test_index() {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("position_index.db");
-        let mut index = PositionIndex::new(&path, 100).unwrap(); // Use a larger cache size
+        // Use a smaller page size to trigger node splits with fewer inserts
+        let mut index = PositionIndex::new_with_page_size(&path, 100, 256).unwrap(); // Use a larger cache size
 
         // Insert some positions
         let mut inserted: Vec<(Position, PositionIndexRecord)> = Vec::new();
-        let num_inserts = 22000; // Using 1500 instead of 150,000 for performance in tests
+        let num_inserts = 500; // Using 1500 instead of 150,000 for performance in tests
 
         for i in 0..num_inserts {
             let position = (i + 1).into();
@@ -1745,7 +1753,8 @@ mod tests {
     fn test_serialize_page_leaf_node() {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("position_index.db");
-        let index = PositionIndex::new(&path, 1).unwrap();
+        let page_size = 4096;
+        let index = PositionIndex::new_with_page_size(&path, 1, page_size).unwrap();
 
         // Create a simple leaf node
         let leaf_node = LeafNode {
@@ -1791,9 +1800,9 @@ mod tests {
         // Extract the data length from the serialized data
         let data_len = u16::from_le_bytes([serialized[5], serialized[6]]);
 
-        // Check that the data length is reasonable (greater than 0 and less than PAGE_SIZE - HEADER_SIZE)
+        // Check that the data length is reasonable (greater than 0 and less than page_size - HEADER_SIZE)
         assert!(data_len > 0);
-        assert!(data_len < (PAGE_SIZE - HEADER_SIZE) as u16);
+        assert!(data_len < (page_size - HEADER_SIZE) as u16);
 
         // Check that the actual data is present in the serialized buffer
         let data = &serialized[HEADER_SIZE..HEADER_SIZE + data_len as usize];
@@ -1807,7 +1816,8 @@ mod tests {
     fn test_serialize_page_internal_node() {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("position_index.db");
-        let index = PositionIndex::new(&path, 1).unwrap();
+        let page_size = 4096;
+        let index = PositionIndex::new_with_page_size(&path, 1, page_size).unwrap();
 
         // Create a simple internal node
         let internal_node = InternalNode {
@@ -1836,9 +1846,9 @@ mod tests {
         // Extract the data length from the serialized data
         let data_len = u16::from_le_bytes([serialized[5], serialized[6]]);
 
-        // Check that the data length is reasonable (greater than 0 and less than PAGE_SIZE - HEADER_SIZE)
+        // Check that the data length is reasonable (greater than 0 and less than page_size - HEADER_SIZE)
         assert!(data_len > 0);
-        assert!(data_len < (PAGE_SIZE - HEADER_SIZE) as u16);
+        assert!(data_len < (page_size - HEADER_SIZE) as u16);
 
         // Check that the actual data is present in the serialized buffer
         let data = &serialized[HEADER_SIZE..HEADER_SIZE + data_len as usize];

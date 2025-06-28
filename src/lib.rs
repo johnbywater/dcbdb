@@ -16,7 +16,7 @@ pub mod segments;
 pub mod positions;
 
 // Export the Paged Index File module
-pub mod pagedindexfile;
+pub mod pagedfile;
 
 #[cfg(test)]
 mod tests {

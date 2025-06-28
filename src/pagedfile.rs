@@ -134,12 +134,6 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn hello_world() {
-        println!("Hello, world!");
-        assert!(true);
-    }
-
-    #[test]
     fn test_paged_file_creation() {
         // Create a temporary directory that will be cleaned up when it goes out of scope
         let temp_dir = TempDir::new().expect("Failed to create temporary directory");

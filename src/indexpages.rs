@@ -55,6 +55,16 @@ pub struct IndexPage {
     pub serialized: Vec<u8>,
 }
 
+impl IndexPage {
+    /// Serializes the node data
+    ///
+    /// # Returns
+    /// * `Result<Vec<u8>, encode::Error>` - The serialized data or an error
+    pub fn serialize(&self) -> Result<Vec<u8>, encode::Error> {
+        self.node.to_msgpack()
+    }
+}
+
 impl IndexPages {
     /// Creates a new IndexPages with the given path and page size
     pub fn new<P: AsRef<Path>>(path: P, page_size: usize) -> std::io::Result<Self> {
@@ -271,28 +281,24 @@ mod tests {
             next_page_id: PageID(8),
         };
 
-        // Serialize the HeaderNode to msgpack
-        let serialized = header_node.to_msgpack().expect("Failed to serialize HeaderNode");
-
-        // Create an IndexPage with the HeaderNode
+        // Create an IndexPage with the HeaderNode and empty serialized data
         let index_page = IndexPage {
             page_id: PageID(9),
             node: Box::new(header_node),
-            serialized: serialized.clone(),
+            serialized: Vec::new(), // Empty value for serialized
         };
 
         // Verify that the IndexPage has the correct values
         assert_eq!(index_page.page_id, PageID(9), 
                    "page_id should be initialized to the provided value");
-        // We can no longer directly access fields of the HeaderNode through the node field
-        // since it's now a trait object (Box<dyn Node>)
-        assert_eq!(index_page.serialized, serialized, 
-                   "serialized should match the serialized HeaderNode");
+
+        // Serialize the node data using the new method
+        let serialized_data = index_page.serialize().expect("Failed to serialize node data");
 
         // Verify that we can use the Node trait methods on the node field
         let reserialized = index_page.node.to_msgpack().expect("Failed to re-serialize HeaderNode");
-        assert_eq!(reserialized, serialized, 
-                   "Re-serialized data should match the original serialized data");
+        assert_eq!(reserialized, serialized_data, 
+                   "Re-serialized data should match the serialized data from the serialize method");
     }
 
     #[test]
@@ -311,15 +317,12 @@ mod tests {
             next_page_id: PageID(8),
         };
 
-        // Serialize the HeaderNode to msgpack
-        let serialized = header_node.to_msgpack().expect("Failed to serialize HeaderNode");
-
-        // Create an IndexPage with the HeaderNode
+        // Create an IndexPage with the HeaderNode and empty serialized data
         let page_id = PageID(10);
         let index_page = IndexPage {
             page_id,
             node: Box::new(header_node),
-            serialized: serialized.clone(),
+            serialized: Vec::new(), // Empty value for serialized
         };
 
         // Add the IndexPage to the IndexPages
@@ -332,5 +335,34 @@ mod tests {
         // Verify that the page_id is in the cache
         assert!(index_pages.cache.contains(&page_id), 
                 "page_id should be in the cache after adding the page");
+    }
+
+    #[test]
+    fn test_serialize() {
+        // Create a HeaderNode instance
+        let header_node = HeaderNode {
+            root_page_id: PageID(11),
+            next_page_id: PageID(12),
+        };
+
+        // Create an IndexPage with the HeaderNode and empty serialized data
+        let index_page = IndexPage {
+            page_id: PageID(13),
+            node: Box::new(header_node),
+            serialized: Vec::new(), // Empty value for serialized
+        };
+
+        // Serialize the node data using the new method
+        let serialized_data = index_page.serialize().expect("Failed to serialize node data");
+
+        // Verify that the serialized data can be deserialized back to a HeaderNode
+        let deserialized: HeaderNode = decode::from_slice(&serialized_data)
+            .expect("Failed to deserialize serialized data");
+
+        // Verify that the deserialized HeaderNode matches the original
+        assert_eq!(deserialized.root_page_id, header_node.root_page_id, 
+                   "root_page_id should match after serialization/deserialization");
+        assert_eq!(deserialized.next_page_id, header_node.next_page_id, 
+                   "next_page_id should match after serialization/deserialization");
     }
 }

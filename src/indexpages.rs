@@ -322,6 +322,14 @@ impl IndexPages {
         self.dirty.clear();
     }
 
+    /// Reduces the cache to the cache_capacity by removing the least recently used items
+    pub fn reduce_cache(&mut self) {
+        // Evict entries until we're at capacity
+        while self.cache.len() > self.cache_capacity {
+            self.cache.pop_lru();
+        }
+    }
+
     /// Adds a page to the cache and marks it as dirty
     ///
     /// # Arguments
@@ -1414,5 +1422,66 @@ mod tests {
                    "HeaderNode should have the correct root_page_id");
         assert_eq!(node.next_page_id, PageID(6),
                    "HeaderNode should have the second modified next_page_id");
+    }
+
+    #[test]
+    fn test_reduce_cache() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Create a new IndexPages with cache_capacity of 5
+        let mut index_pages = IndexPages::new_with_cache_capacity(test_path, PAGE_SIZE, Some(5))
+            .expect("Failed to create IndexPages");
+
+        // Create and add seven pages to the cache
+        for i in 1..=7 {
+            let page_id = PageID(i);
+
+            // Create a HeaderNode instance for the page
+            let header_node = HeaderNode {
+                root_page_id: PageID(i * 10),
+                next_page_id: PageID(i * 10 + 1),
+            };
+
+            // Create an IndexPage with the HeaderNode
+            let index_page = IndexPage {
+                page_id,
+                node: Box::new(header_node),
+                serialized: Vec::new(),
+            };
+
+            // Add the page to the cache
+            index_pages.add_page(index_page);
+        }
+
+        // Get the first and third pages to make them recently used
+        let _ = index_pages.get_page(PageID(1)).expect("Failed to get page 1");
+        let _ = index_pages.get_page(PageID(3)).expect("Failed to get page 3");
+
+        // Call reduce_cache to remove the least recently used items
+        index_pages.reduce_cache();
+
+        // Check that the second and fourth pages are not in the cache
+        assert!(!index_pages.cache.contains(&PageID(2)), 
+                "Page 2 should not be in the cache after reduce_cache");
+        assert!(!index_pages.cache.contains(&PageID(4)), 
+                "Page 4 should not be in the cache after reduce_cache");
+
+        // Check that the other five pages are in the cache
+        assert!(index_pages.cache.contains(&PageID(1)), 
+                "Page 1 should be in the cache after reduce_cache");
+        assert!(index_pages.cache.contains(&PageID(3)), 
+                "Page 3 should be in the cache after reduce_cache");
+        assert!(index_pages.cache.contains(&PageID(5)), 
+                "Page 5 should be in the cache after reduce_cache");
+        assert!(index_pages.cache.contains(&PageID(6)), 
+                "Page 6 should be in the cache after reduce_cache");
+        assert!(index_pages.cache.contains(&PageID(7)), 
+                "Page 7 should be in the cache after reduce_cache");
+
+        // Verify that the cache size is equal to the cache_capacity
+        assert_eq!(index_pages.cache.len(), index_pages.cache_capacity,
+                   "Cache size should be equal to cache_capacity after reduce_cache");
     }
 }

@@ -231,6 +231,91 @@ impl PositionIndex {
             Some((last_key, new_page_id))
         }
     }
+
+    /// Adds a key and value to an internal node, splitting it if necessary
+    ///
+    /// # Arguments
+    /// * `page_id` - The PageID of the page to add the key and value to
+    /// * `key` - The key to add
+    /// * `child_id` - The child ID to add
+    ///
+    /// # Returns
+    /// * `Option<(Position, PageID)>` - If the internal node was split, returns the promoted key and the new page ID
+    pub fn append_internal_key_and_value(&mut self, page_id: PageID, key: Position, child_id: PageID) -> Option<(Position, PageID)> {
+        // Add the key and child_id to the internal node
+        {
+            // Get a mutable reference to the page
+            let page = self.index_pages.get_page_mut(page_id).unwrap();
+
+            // Downcast the node to an InternalNode
+            let internal_node = page.node.as_any_mut().downcast_mut::<InternalNode>().unwrap();
+
+            // Add the key and child_id
+            internal_node.keys.push(key);
+            internal_node.child_ids.push(child_id);
+        }
+
+        // Check if the page needs splitting by serializing it and checking if it's too large
+        let needs_splitting = {
+            let page = self.index_pages.get_page_mut(page_id).unwrap();
+            let serialized = page.serialize_page().unwrap();
+            serialized.len() > self.index_pages.paged_file.page_size
+        };
+
+        if !needs_splitting {
+            // If the internal node doesn't need splitting, just mark the page as dirty
+            self.index_pages.mark_dirty(page_id);
+            None
+        } else {
+            // If the internal node needs splitting, split it according to the specified logic
+            // Extract the promote_key, last key, and last two child_ids from the internal node
+            let (promote_key, last_key, last_two_child_ids) = {
+                // Get a mutable reference to the page
+                let page = self.index_pages.get_page_mut(page_id).unwrap();
+
+                // Downcast the node to an InternalNode
+                let internal_node = page.node.as_any_mut().downcast_mut::<InternalNode>().unwrap();
+
+
+                // Get the last key
+                let last_key = internal_node.keys.pop().unwrap();
+
+                // Get the promote_key (second-to-last key)
+                let promote_key = internal_node.keys.pop().unwrap();
+
+                // Get the last two child_ids
+                let last_child_id = internal_node.child_ids.pop().unwrap();
+                let second_last_child_id = internal_node.child_ids.pop().unwrap();
+
+                (promote_key, last_key, vec![second_last_child_id, last_child_id])
+            };
+
+            // Allocate a new page ID
+            let new_page_id = self.index_pages.alloc_page_id();
+
+            // Create a new InternalNode with the last key and last two child_ids
+            let new_internal_node = InternalNode {
+                keys: vec![last_key],
+                child_ids: last_two_child_ids,
+            };
+
+            // Create a new IndexPage with the new InternalNode
+            let new_page = IndexPage {
+                page_id: new_page_id,
+                node: Box::new(new_internal_node),
+                serialized: Vec::new(),
+            };
+
+            // Mark the original page as dirty
+            self.index_pages.mark_dirty(page_id);
+
+            // Add the new page to the collection
+            self.index_pages.add_page(new_page);
+
+            // Return the promote_key and the new page ID
+            Some((promote_key, new_page_id))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -841,6 +926,192 @@ mod tests {
         assert_eq!(leaf2.keys[10], 9999);
         assert_eq!(leaf2.values[10].segment, 9);
         assert_eq!(leaf2.values[10].offset, 999);
+
+        // No need to clean up the test file, it will be removed when temp_dir goes out of scope
+    }
+
+    #[test]
+    fn test_append_internal_key_and_value_with_split() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+
+        // Append the filename to the directory path
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Construct a PageID
+        let page_id = PageID(40);
+
+        // Create an InternalNode with 5 keys and 6 child_ids
+        let mut keys = Vec::new();
+        let mut child_ids = Vec::new();
+        for i in 0..5 {
+            keys.push((i * 1000) as i64);
+            child_ids.push(PageID(i * 100));
+        }
+        child_ids.push(PageID(500)); // One more child_id than keys
+
+        let mut internal_node = InternalNode {
+            keys,
+            child_ids,
+        };
+
+        // Create an IndexPage with the InternalNode
+        let mut internal_page = IndexPage {
+            page_id,
+            node: Box::new(internal_node),
+            serialized: Vec::new(),
+        };
+
+        // Serialize the page to get its length
+        let serialized = internal_page.serialize_page().unwrap();
+        let page_size = serialized.len();
+
+        // Create a new PositionIndex instance with a page size that is exactly the serialized length
+        // This will ensure that the page needs splitting when we add another key and child_id
+        let mut position_index = PositionIndex::new(&test_path, page_size).unwrap();
+
+        // Add the page to the index
+        position_index.index_pages.add_page(internal_page);
+
+        // Add a new key and child_id that will cause the internal node to split
+        let new_key = 5000i64;
+        let new_child_id = PageID(600);
+
+        // Call append_internal_key_and_value with the page_id, key, and child_id
+        let split_result = position_index.append_internal_key_and_value(page_id, new_key, new_child_id);
+
+        // Verify that the internal node was split
+        assert!(split_result.is_some());
+        let (promote_key, new_page_id) = split_result.unwrap();
+
+        // Verify the promote_key
+        assert_eq!(promote_key, 4000i64);
+
+        // Get the original page and verify it has 4 keys and 5 child_ids
+        let original_page = position_index.index_pages.get_page(page_id).unwrap();
+        let original_internal = original_page.node.as_any().downcast_ref::<InternalNode>().unwrap();
+        assert_eq!(original_internal.keys.len(), 4);
+        assert_eq!(original_internal.child_ids.len(), 5);
+        assert_eq!(original_internal.keys[0], 0i64);
+        assert_eq!(original_internal.keys[1], 1000i64);
+        assert_eq!(original_internal.keys[2], 2000i64);
+        assert_eq!(original_internal.keys[3], 3000i64);
+        assert_eq!(original_internal.child_ids[0], PageID(0));
+        assert_eq!(original_internal.child_ids[1], PageID(100));
+        assert_eq!(original_internal.child_ids[2], PageID(200));
+        assert_eq!(original_internal.child_ids[3], PageID(300));
+        assert_eq!(original_internal.child_ids[4], PageID(400));
+
+        // Get the new page and verify it has 1 key and 2 child_ids
+        let new_page = position_index.index_pages.get_page(new_page_id).unwrap();
+        let new_internal = new_page.node.as_any().downcast_ref::<InternalNode>().unwrap();
+        assert_eq!(new_internal.keys.len(), 1);
+        assert_eq!(new_internal.child_ids.len(), 2);
+        assert_eq!(new_internal.keys[0], 5000i64);
+        assert_eq!(new_internal.child_ids[0], PageID(500));
+        assert_eq!(new_internal.child_ids[1], PageID(600));
+
+        // Flush changes to disk
+        position_index.index_pages.flush().unwrap();
+
+        // Create another instance of PositionIndex
+        let mut position_index2 = PositionIndex::new(&test_path, page_size).unwrap();
+
+        // Get the original page and verify it has 4 keys and 5 child_ids
+        let original_page = position_index2.index_pages.get_page(page_id).unwrap();
+        let original_internal = original_page.node.as_any().downcast_ref::<InternalNode>().unwrap();
+        assert_eq!(original_internal.keys.len(), 4);
+        assert_eq!(original_internal.child_ids.len(), 5);
+        assert_eq!(original_internal.keys[0], 0i64);
+        assert_eq!(original_internal.keys[1], 1000i64);
+        assert_eq!(original_internal.keys[2], 2000i64);
+        assert_eq!(original_internal.keys[3], 3000i64);
+        assert_eq!(original_internal.child_ids[0], PageID(0));
+        assert_eq!(original_internal.child_ids[1], PageID(100));
+        assert_eq!(original_internal.child_ids[2], PageID(200));
+        assert_eq!(original_internal.child_ids[3], PageID(300));
+        assert_eq!(original_internal.child_ids[4], PageID(400));
+
+        // Get the new page and verify it has 1 key and 2 child_ids
+        let new_page = position_index2.index_pages.get_page(new_page_id).unwrap();
+        let new_internal = new_page.node.as_any().downcast_ref::<InternalNode>().unwrap();
+        assert_eq!(new_internal.keys.len(), 1);
+        assert_eq!(new_internal.child_ids.len(), 2);
+        assert_eq!(new_internal.keys[0], 5000i64);
+        assert_eq!(new_internal.child_ids[0], PageID(500));
+        assert_eq!(new_internal.child_ids[1], PageID(600));
+        // No need to clean up the test file, it will be removed when temp_dir goes out of scope
+    }
+
+    #[test]
+    fn test_append_internal_key_and_value_without_split() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+
+        // Append the filename to the directory path
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Create a new PositionIndex instance with a large page size to avoid splitting
+        let mut position_index = PositionIndex::new(&test_path, 4096).unwrap();
+
+        // Construct a PageID
+        let page_id = PageID(40);
+
+        // Create an InternalNode with 4 keys and 5 child_ids
+        let mut keys = Vec::new();
+        let mut child_ids = Vec::new();
+        for i in 0..4 {
+            keys.push((i * 1000) as i64);
+            child_ids.push(PageID(i * 100));
+        }
+        child_ids.push(PageID(400)); // One more child_id than keys
+
+        let internal_node = InternalNode {
+            keys,
+            child_ids,
+        };
+
+        // Create an IndexPage with the InternalNode
+        let internal_page = IndexPage {
+            page_id,
+            node: Box::new(internal_node),
+            serialized: Vec::new(),
+        };
+
+        // Add the page to the index
+        position_index.index_pages.add_page(internal_page);
+
+        // Add a new key and child_id that will not cause the internal node to split
+        let new_key = 4000i64;
+        let new_child_id = PageID(500);
+
+        // Call append_internal_key_and_value with the page_id, key, and child_id
+        let split_result = position_index.append_internal_key_and_value(page_id, new_key, new_child_id);
+
+        // Verify that the internal node was not split
+        assert!(split_result.is_none());
+
+        // Get the page and verify it has 5 keys and 6 child_ids
+        let page = position_index.index_pages.get_page(page_id).unwrap();
+        let internal = page.node.as_any().downcast_ref::<InternalNode>().unwrap();
+        assert_eq!(internal.keys.len(), 5);
+        assert_eq!(internal.child_ids.len(), 6);
+        assert_eq!(internal.keys[4], 4000i64);
+        assert_eq!(internal.child_ids[5], PageID(500));
+
+        // Flush changes to disk
+        position_index.index_pages.flush().unwrap();
+
+        // Create another instance of PositionIndex
+        let mut position_index2 = PositionIndex::new(&test_path, 4096).unwrap();
+
+        // Get the page and verify it has 5 keys and 6 child_ids
+        let page2 = position_index2.index_pages.get_page(page_id).unwrap();
+        let internal2 = page2.node.as_any().downcast_ref::<InternalNode>().unwrap();
+        assert_eq!(internal2.keys.len(), 5);
+        assert_eq!(internal2.child_ids.len(), 6);
+        assert_eq!(internal2.keys[4], 4000i64);
+        assert_eq!(internal2.child_ids[5], PageID(500));
 
         // No need to clean up the test file, it will be removed when temp_dir goes out of scope
     }

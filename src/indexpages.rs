@@ -433,9 +433,12 @@ impl IndexPages {
     /// # Returns
     /// * `std::io::Result<&mut IndexPage>` - A mutable reference to the page or an error
     pub fn get_page_mut(&mut self, page_id: PageID) -> std::io::Result<&mut IndexPage> {
-        // If the page is the header page, return a mutable reference to the header page
+        // If the page is the header page, return an error
         if page_id == self.header_page_id {
-            return Ok(&mut self.header_page);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Cannot get header page from cache",
+            ));
         }
 
         // Check if the page is in the cache

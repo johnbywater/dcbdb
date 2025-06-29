@@ -1185,7 +1185,7 @@ mod tests {
     }
 
     #[test]
-    fn test_simple_insert_lookup() {
+    fn test_insert_lookup_no_split() {
         // Create a temporary directory
         let temp_dir = TempDir::new().expect("Failed to create temporary directory");
 
@@ -1222,6 +1222,55 @@ mod tests {
 
         // Create another instance of PositionIndex
         let mut position_index2 = PositionIndex::new(&test_path, 4096).unwrap();
+
+
+        // Check lookup after flush
+        for (position, record) in &inserted {
+            let result = position_index2.lookup(*position).unwrap();
+            assert!(result.is_some());
+            assert_eq!(&result.unwrap(), record);
+        }
+    }    
+    
+    #[test]
+    fn test_insert_lookup_split_leaf_node() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+
+        // Append the filename to the directory path
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Create a new PositionIndex instance with a large page size to avoid splitting
+        let page_size = 250;
+        let mut position_index = PositionIndex::new(&test_path, page_size).unwrap();
+
+
+        // Insert a few records
+        let mut inserted: Vec<(Position, PositionIndexRecord)> = Vec::new();
+        for i in 0..20 {
+            let position = (i + 1).into();
+            let record = PositionIndexRecord {
+                segment: i,
+                offset: i * 10,
+                type_hash: hash_type(&format!("test-{}", i)),
+            };
+
+            position_index.insert(position, record.clone()).unwrap();
+            inserted.push((position, record));
+        }
+
+        // Check lookup before flush
+        for (position, record) in &inserted {
+            let result = position_index.lookup(*position).unwrap();
+            assert!(result.is_some());
+            assert_eq!(&result.unwrap(), record);
+        }
+
+        // Flush changes to disk
+        position_index.index_pages.flush().unwrap();
+
+        // Create another instance of PositionIndex
+        let mut position_index2 = PositionIndex::new(&test_path, page_size).unwrap();
 
 
         // Check lookup after flush

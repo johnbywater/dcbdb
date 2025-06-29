@@ -437,11 +437,14 @@ impl PositionIndex {
             // Downcast the node to a LeafNode
             let leaf_node = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
 
-            // Search for the key in the leaf node's keys
-            for i in 0..leaf_node.keys.len() {
-                if leaf_node.keys[i] == key {
-                    // Return the corresponding value
-                    return Ok(Some(leaf_node.values[i].clone()));
+            // Use binary search to find the key in the leaf node's keys
+            match leaf_node.keys.binary_search(&key) {
+                Ok(index) => {
+                    // Key found, return the corresponding value
+                    return Ok(Some(leaf_node.values[index].clone()));
+                }
+                Err(_) => {
+                    // Key not found
                 }
             }
 
@@ -459,11 +462,14 @@ impl PositionIndex {
                     // Found a leaf node, search for the key
                     let leaf_node = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
 
-                    // Search for the key in the leaf node's keys
-                    for i in 0..leaf_node.keys.len() {
-                        if leaf_node.keys[i] == key {
-                            // Return the corresponding value
-                            return Ok(Some(leaf_node.values[i].clone()));
+                    // Use binary search to find the key in the leaf node's keys
+                    match leaf_node.keys.binary_search(&key) {
+                        Ok(index) => {
+                            // Key found, return the corresponding value
+                            return Ok(Some(leaf_node.values[index].clone()));
+                        }
+                        Err(_) => {
+                            // Key not found
                         }
                     }
 

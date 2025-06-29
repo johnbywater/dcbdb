@@ -368,6 +368,46 @@ impl IndexPages {
         current_next_page_id
     }
 
+    /// Gets a page from the cache or reads it from disk
+    ///
+    /// # Arguments
+    /// * `page_id` - The page ID to get
+    ///
+    /// # Returns
+    /// * `std::io::Result<&IndexPage>` - A reference to the page or an error
+    pub fn get_page(&mut self, page_id: PageID) -> std::io::Result<&IndexPage> {
+        // If the page is the header page, return a reference to the header page
+        if page_id == self.header_page_id {
+            return Ok(&self.header_page);
+        }
+
+        // Check if the page is in the cache
+        if !self.cache.contains(&page_id) {
+            // Page is not in the cache, read it from disk
+            let page_data = self.paged_file.read_page(page_id)
+                .map_err(|e| std::io::Error::new(
+                    match e {
+                        PagedFileError::Io(ref io_err) => io_err.kind(),
+                        _ => std::io::ErrorKind::Other,
+                    },
+                    format!("Failed to read page: {}", e)
+                ))?;
+
+            // Deserialize the page
+            let page = self.deserializer.deserialise_page(&page_data, page_id)
+                .map_err(|e| std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Failed to deserialize page: {}", e)
+                ))?;
+
+            // Add the page to the cache
+            self.cache.put(page_id, page);
+        }
+
+        // Get the page from the cache
+        Ok(self.cache.get(&page_id).unwrap())
+    }
+
     /// Flushes all dirty pages to disk
     ///
     /// # Returns
@@ -1155,5 +1195,64 @@ mod tests {
                    "root_page_id should be the modified value in the third instance");
         assert_eq!(index_pages3.header_node().next_page_id, new_next_page_id,
                    "next_page_id should be the modified value in the third instance");
+    }
+
+    #[test]
+    fn test_get_page() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Create a new IndexPages instance
+        let mut index_pages = IndexPages::new(test_path.clone(), PAGE_SIZE)
+            .expect("Failed to create IndexPages");
+
+        // Create and add a page to the cache
+        let page_id = PageID(1);
+
+        // Create a HeaderNode instance for the page
+        let header_node = HeaderNode {
+            root_page_id: PageID(3),
+            next_page_id: PageID(4),
+        };
+
+        // Create an IndexPage with the HeaderNode
+        let index_page = IndexPage {
+            page_id,
+            node: Box::new(header_node),
+            serialized: Vec::new(),
+        };
+
+        // Add the page to the cache and mark it as dirty
+        index_pages.add_page(index_page);
+
+        // Flush the page to disk
+        index_pages.flush().expect("Failed to flush page to disk");
+
+        // Create a new IndexPages instance to read the page from disk
+        let mut new_index_pages = IndexPages::new(test_path, PAGE_SIZE)
+            .expect("Failed to create new IndexPages");
+
+        // Get the page using get_page()
+        let page = new_index_pages.get_page(page_id)
+            .expect("Failed to get page");
+
+        // Verify that the page has the correct page_id
+        assert_eq!(page.page_id, page_id,
+                   "Page should have the correct page_id");
+
+        // Verify that the page has the correct node type
+        assert_eq!(page.node.node_type_byte(), HEADER_NODE_TYPE,
+                   "Page should have the correct node type");
+
+        // Get the HeaderNode from the page
+        let node = page.node.as_any().downcast_ref::<HeaderNode>()
+            .expect("Failed to downcast node to HeaderNode");
+
+        // Verify that the HeaderNode has the correct values
+        assert_eq!(node.root_page_id, PageID(3),
+                   "HeaderNode should have the correct root_page_id");
+        assert_eq!(node.next_page_id, PageID(4),
+                   "HeaderNode should have the correct next_page_id");
     }
 }

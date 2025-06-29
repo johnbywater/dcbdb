@@ -210,6 +210,8 @@ pub struct IndexPages {
     cache: LruCache<PageID, IndexPage>,
     /// Deserializer for index pages
     pub deserializer: Deserializer,
+    /// Cache capacity
+    pub cache_capacity: usize,
 }
 
 impl IndexPages {
@@ -233,6 +235,12 @@ impl IndexPages {
 
     /// Creates a new IndexPages with the given path and page size
     pub fn new<P: AsRef<Path>>(path: P, page_size: usize) -> std::io::Result<Self> {
+        Self::new_with_cache_capacity(path, page_size, None)
+    }
+
+    /// Creates a new IndexPages with the given path, page size, and cache capacity
+    pub fn new_with_cache_capacity<P: AsRef<Path>>(path: P, page_size: usize, cache_capacity: Option<usize>) -> std::io::Result<Self> {
+        let cache_capacity = cache_capacity.unwrap_or(1024);
         let mut paged_file = PagedFile::new(path, Some(page_size))?;
 
         // Create a new Deserializer
@@ -289,6 +297,7 @@ impl IndexPages {
             // Initialize the cache as unbounded - this is a requirement and must not be changed
             cache: LruCache::unbounded(),
             deserializer,
+            cache_capacity,
         };
 
         // If the file doesn't exist, mark the header page as dirty and flush it to disk
@@ -531,6 +540,10 @@ mod tests {
         // Check that the cache is initialized and empty
         assert!(index_pages.cache.is_empty(), 
                 "Cache should be initialized as empty");
+
+        // Check that cache_capacity equals 1024
+        assert_eq!(index_pages.cache_capacity, 1024,
+                   "cache_capacity should be initialized to 1024");
 
         // Check that header_page has the header_node
         assert_eq!(index_pages.header_page.page_id, index_pages.header_page_id,

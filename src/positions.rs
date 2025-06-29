@@ -160,11 +160,27 @@ impl PositionIndex {
             // Downcast the node to a LeafNode
             let leaf_node = page.node.as_any_mut().downcast_mut::<LeafNode>().unwrap();
 
-            // Check if the key already exists
-            if let Some(index) = leaf_node.keys.iter().position(|&k| k == key) {
-                // Update the existing value
-                leaf_node.values[index] = value;
-                return None;
+            // Optimization for append-only event store:
+            // Since positions are always added in ascending order, we only need to check
+            // if the leaf node is empty or if the key is greater than the last key
+            if !leaf_node.keys.is_empty() {
+                let last_index = leaf_node.keys.len() - 1;
+                let last_key = leaf_node.keys[last_index];
+
+                if key == last_key {
+                    // Update the existing value if the key is the same as the last key
+                    leaf_node.values[last_index] = value;
+                    return None;
+                } else if key < last_key {
+                    // This should not happen in an append-only store, but handle it for robustness
+                    // Check if the key already exists
+                    if let Some(index) = leaf_node.keys.iter().position(|&k| k == key) {
+                        // Update the existing value
+                        leaf_node.values[index] = value;
+                        return None;
+                    }
+                }
+                // If key > last_key, we'll append it below
             }
 
             // Add the key and value
@@ -351,17 +367,11 @@ impl PositionIndex {
                 // Found the leaf node, break out of the loop
                 break;
             } else if page.node.node_type_byte() == INTERNAL_NODE_TYPE {
-                // Internal node, find the child to follow
+                // Internal node, always follow the last child since positions are always added in ascending order
                 let internal_node = page.node.as_any().downcast_ref::<InternalNode>().unwrap();
 
-                // Find the index of the first key greater than or equal to the search key
-                let mut index = internal_node.keys.len();
-                for i in 0..internal_node.keys.len() {
-                    if key <= internal_node.keys[i] {
-                        index = i;
-                        break;
-                    }
-                }
+                // Get the index of the last child
+                let index = internal_node.child_ids.len() - 1;
 
                 // Push the current page and child index onto the stack
                 stack.push((current_page_id, index));

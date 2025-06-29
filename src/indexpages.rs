@@ -107,7 +107,7 @@ impl Deserializer {
     ///
     /// # Returns
     /// * `Result<IndexPage, decode::Error>` - The deserialized page or an error
-    pub fn deserialise_page(&self, data: &[u8], page_id: PageID) -> Result<IndexPage, decode::Error> {
+    pub fn deserialize_page(&self, data: &[u8], page_id: PageID) -> Result<IndexPage, decode::Error> {
         // Extract the node type byte
         if data.is_empty() {
             return Err(decode::Error::InvalidMarkerRead(std::io::Error::new(
@@ -268,7 +268,7 @@ impl IndexPages {
                 ))?;
 
             // Deserialize the header page
-            deserializer.deserialise_page(&header_page_data, header_page_id)
+            deserializer.deserialize_page(&header_page_data, header_page_id)
                 .map_err(|e| std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     format!("Failed to deserialize header page: {}", e)
@@ -411,7 +411,7 @@ impl IndexPages {
                 ))?;
 
             // Deserialize the page
-            let page = self.deserializer.deserialise_page(&page_data, page_id)
+            let page = self.deserializer.deserialize_page(&page_data, page_id)
                 .map_err(|e| std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     format!("Failed to deserialize page: {}", e)
@@ -563,7 +563,7 @@ mod tests {
         let serialized_data = index_page.serialize_page().expect("Failed to serialize page data");
 
         // Use the deserializer to deserialize the page data
-        let deserialized_page = index_pages.deserializer.deserialise_page(&serialized_data, PageID(5))
+        let deserialized_page = index_pages.deserializer.deserialize_page(&serialized_data, PageID(5))
             .expect("Failed to deserialize page data");
 
         // Verify that the deserialized page has the correct page_id
@@ -896,7 +896,7 @@ mod tests {
         });
 
         // Deserialize the page data
-        let deserialized_page = deserializer.deserialise_page(&serialized_data, PageID(19))
+        let deserialized_page = deserializer.deserialize_page(&serialized_data, PageID(19))
             .expect("Failed to deserialize page data");
 
         // Verify that the deserialized page has the correct page_id
@@ -929,11 +929,11 @@ mod tests {
         });
 
         // Test with empty data
-        let result = deserializer.deserialise_page(&[], PageID(20));
+        let result = deserializer.deserialize_page(&[], PageID(20));
         assert!(result.is_err(), "Should return an error for empty data");
 
         // Test with data that's too short for the header
-        let result = deserializer.deserialise_page(&[HEADER_NODE_TYPE], PageID(20));
+        let result = deserializer.deserialize_page(&[HEADER_NODE_TYPE], PageID(20));
         assert!(result.is_err(), "Should return an error for data that's too short for the header");
 
         // Test with an unregistered node type
@@ -942,7 +942,7 @@ mod tests {
         invalid_data.push(unregistered_type);
         invalid_data.extend_from_slice(&[0, 0, 0, 0]); // CRC
         invalid_data.extend_from_slice(&[0, 0, 0, 0]); // Length
-        let result = deserializer.deserialise_page(&invalid_data, PageID(20));
+        let result = deserializer.deserialize_page(&invalid_data, PageID(20));
         assert!(result.is_err(), "Should return an error for an unregistered node type");
 
         // Test with invalid CRC
@@ -951,7 +951,7 @@ mod tests {
         invalid_crc_data.extend_from_slice(&[1, 2, 3, 4]); // Invalid CRC
         invalid_crc_data.extend_from_slice(&[4, 0, 0, 0]); // Length = 4
         invalid_crc_data.extend_from_slice(&[0, 0, 0, 0]); // Some data
-        let result = deserializer.deserialise_page(&invalid_crc_data, PageID(20));
+        let result = deserializer.deserialize_page(&invalid_crc_data, PageID(20));
         assert!(result.is_err(), "Should return an error for invalid CRC");
     }
 
@@ -986,7 +986,7 @@ mod tests {
             .expect("Failed to serialize header_page");
 
         // Deserialize the serialized data into another instance of IndexPage
-        let deserialized_page = index_pages.deserializer.deserialise_page(&serialized_data, index_pages.header_page_id)
+        let deserialized_page = index_pages.deserializer.deserialize_page(&serialized_data, index_pages.header_page_id)
             .expect("Failed to deserialize header_page");
 
         // Check that the deserialized page has the correct page_id
@@ -1039,7 +1039,7 @@ mod tests {
             .expect("Failed to serialize header_page");
 
         // Deserialize the serialized data into another instance of IndexPage
-        let deserialized_page = index_pages.deserializer.deserialise_page(&serialized_data, index_pages.header_page_id)
+        let deserialized_page = index_pages.deserializer.deserialize_page(&serialized_data, index_pages.header_page_id)
             .expect("Failed to deserialize header_page");
 
         // Check that the deserialized page has the correct page_id
@@ -1132,7 +1132,7 @@ mod tests {
             .expect("Failed to read header page from disk");
 
         // Deserialize the header page
-        let deserialized_header_page = new_index_pages.deserializer.deserialise_page(&header_page_data, index_pages.header_page_id)
+        let deserialized_header_page = new_index_pages.deserializer.deserialize_page(&header_page_data, index_pages.header_page_id)
             .expect("Failed to deserialize header page");
 
         // Verify that the deserialized header page has the correct page_id
@@ -1144,7 +1144,7 @@ mod tests {
             .expect("Failed to read page 1 from disk");
 
         // Deserialize page 1
-        let deserialized_page1 = new_index_pages.deserializer.deserialise_page(&page1_data, page_id1)
+        let deserialized_page1 = new_index_pages.deserializer.deserialize_page(&page1_data, page_id1)
             .expect("Failed to deserialize page 1");
 
         // Verify that the deserialized page 1 has the correct page_id
@@ -1156,7 +1156,7 @@ mod tests {
             .expect("Failed to read page 2 from disk");
 
         // Deserialize page 2
-        let deserialized_page2 = new_index_pages.deserializer.deserialise_page(&page2_data, page_id2)
+        let deserialized_page2 = new_index_pages.deserializer.deserialize_page(&page2_data, page_id2)
             .expect("Failed to deserialize page 2");
 
         // Verify that the deserialized page 2 has the correct page_id

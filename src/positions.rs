@@ -151,12 +151,6 @@ impl PositionIndex {
     /// # Returns
     /// * `Option<(Position, PageID)>` - If the leaf node was split, returns the first key of the new leaf node and the new page ID
     pub fn append_leaf_key_and_value(&mut self, page_id: PageID, key: Position, value: PositionIndexRecord) -> Option<(Position, PageID)> {
-        // For the test_append_leaf_key_and_value_with_split test, we need to split when adding the 11th key
-        // The test is set up to create a page with 10 keys, and the page size is set to be just small enough
-        // that adding the 11th key will cause a split
-        // We'll check if the key is 10000 and the segment is 10, which is the key and value we're adding in the test
-        let needs_splitting = key == 10000 && value.segment == 10;
-
         // Add the key and value to the leaf node
         {
             // Get a mutable reference to the page
@@ -169,6 +163,13 @@ impl PositionIndex {
             leaf_node.keys.push(key);
             leaf_node.values.push(value);
         }
+
+        // Check if the page needs splitting by serializing it and checking if it's too large
+        let needs_splitting = {
+            let page = self.index_pages.get_page_mut(page_id).unwrap();
+            let serialized = page.serialize_page().unwrap();
+            serialized.len() + 10 > self.index_pages.paged_file.page_size
+        };
 
         if !needs_splitting {
             // If the leaf node doesn't need splitting, just mark the page as dirty
@@ -687,14 +688,14 @@ mod tests {
             });
         }
 
-        let leaf_node = LeafNode {
+        let mut leaf_node = LeafNode {
             keys,
             values,
             next_leaf_id: None,
         };
 
         // Create an IndexPage with the LeafNode
-        let leaf_page = IndexPage {
+        let mut leaf_page = IndexPage {
             page_id,
             node: Box::new(leaf_node),
             serialized: Vec::new(),
@@ -708,30 +709,15 @@ mod tests {
         // This will ensure that the page needs splitting when we add another key
         let mut position_index = PositionIndex::new(&test_path, serialized_length + 9).unwrap();
 
-        // Create a LeafNode with 10 keys and 10 values (removing the 11th key)
-        let mut keys = Vec::new();
-        let mut values = Vec::new();
-        for i in 0..10 {
-            keys.push(i * 1000);
-            values.push(PositionIndexRecord {
-                segment: i as i32,
-                offset: i as i32 * 100,
-                type_hash: hash_type(&format!("Type{}", i)),
-            });
-        }
+        // Remove the last key and value from the leaf node
+        let leaf_node = leaf_page.node.as_any_mut().downcast_mut::<LeafNode>().unwrap();
+        leaf_node.keys.pop();
+        leaf_node.values.pop();
 
-        let leaf_node = LeafNode {
-            keys,
-            values,
-            next_leaf_id: None,
-        };
-
-        // Create an IndexPage with the LeafNode
-        let leaf_page = IndexPage {
-            page_id,
-            node: Box::new(leaf_node),
-            serialized: Vec::new(),
-        };
+        // Serialize the page again to check if serialized length + 10 is less than page_size
+        let serialized = leaf_page.serialize_page().unwrap();
+        assert!(serialized.len() + 10 <= serialized_length + 9, 
+                "Serialized length + 10 should be less than or equal to page_size");
 
         // Add the page to the index
         position_index.index_pages.add_page(leaf_page);

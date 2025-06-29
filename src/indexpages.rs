@@ -200,7 +200,7 @@ impl IndexPage {
 
 /// A structure that manages index pages
 pub struct IndexPages {
-    paged_file: PagedFile,
+    pub paged_file: PagedFile,
     dirty: HashMap<PageID, bool>,
     header_page_id: PageID,
     /// The header page containing the header node

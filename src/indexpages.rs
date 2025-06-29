@@ -408,6 +408,46 @@ impl IndexPages {
         Ok(self.cache.get(&page_id).unwrap())
     }
 
+    /// Gets a mutable reference to a page from the cache
+    ///
+    /// # Arguments
+    /// * `page_id` - The page ID to get
+    ///
+    /// # Returns
+    /// * `std::io::Result<&mut IndexPage>` - A mutable reference to the page or an error
+    pub fn get_page_mut(&mut self, page_id: PageID) -> std::io::Result<&mut IndexPage> {
+        // If the page is the header page, return a mutable reference to the header page
+        if page_id == self.header_page_id {
+            return Ok(&mut self.header_page);
+        }
+
+        // Check if the page is in the cache
+        if !self.cache.contains(&page_id) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Page not found in cache: {:?}", page_id)
+            ));
+        }
+
+        // Remove the page from the cache
+        let page = self.cache.pop(&page_id).unwrap();
+
+        // Mark the page as dirty
+        self.mark_dirty(page_id);
+
+        // Put the page back in the cache
+        self.cache.put(page_id, page);
+
+        // Get a mutable reference to the page from the cache
+        // This is safe because we just put the page back in the cache
+        // and we have a mutable reference to self
+        let cache_ptr = &mut self.cache as *mut LruCache<PageID, IndexPage>;
+        let cache_ref = unsafe { &mut *cache_ptr };
+        let page_ref = cache_ref.get_mut(&page_id).unwrap();
+
+        Ok(page_ref)
+    }
+
     /// Flushes all dirty pages to disk
     ///
     /// # Returns
@@ -1254,5 +1294,112 @@ mod tests {
                    "HeaderNode should have the correct root_page_id");
         assert_eq!(node.next_page_id, PageID(4),
                    "HeaderNode should have the correct next_page_id");
+    }
+
+    #[test]
+    fn test_get_page_mut() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Create a new IndexPages instance
+        let mut index_pages = IndexPages::new(test_path.clone(), PAGE_SIZE)
+            .expect("Failed to create IndexPages");
+
+        // Create and add a page to the cache
+        let page_id = PageID(1);
+
+        // Create a HeaderNode instance for the page
+        let header_node = HeaderNode {
+            root_page_id: PageID(3),
+            next_page_id: PageID(4),
+        };
+
+        // Create an IndexPage with the HeaderNode
+        let index_page = IndexPage {
+            page_id,
+            node: Box::new(header_node),
+            serialized: Vec::new(),
+        };
+
+        // Add the page to the cache and mark it as dirty
+        index_pages.add_page(index_page);
+
+        // Get a mutable reference to the page using get_page_mut()
+        let page_mut = index_pages.get_page_mut(page_id)
+            .expect("Failed to get mutable page");
+
+        // Modify the node in the page
+        let node_mut = page_mut.node.as_any_mut().downcast_mut::<HeaderNode>()
+            .expect("Failed to downcast node to HeaderNode");
+        node_mut.next_page_id = PageID(5);
+
+        // Flush the changes to disk
+        index_pages.flush().expect("Failed to flush changes");
+
+        // Create a new IndexPages instance to read the page from disk
+        let mut new_index_pages = IndexPages::new(test_path.clone(), PAGE_SIZE)
+            .expect("Failed to create new IndexPages");
+
+        // Get the page using get_page()
+        let page = new_index_pages.get_page(page_id)
+            .expect("Failed to get page");
+
+        // Verify that the page has the correct page_id
+        assert_eq!(page.page_id, page_id,
+                   "Page should have the correct page_id");
+
+        // Verify that the page has the correct node type
+        assert_eq!(page.node.node_type_byte(), HEADER_NODE_TYPE,
+                   "Page should have the correct node type");
+
+        // Get the HeaderNode from the page
+        let node = page.node.as_any().downcast_ref::<HeaderNode>()
+            .expect("Failed to downcast node to HeaderNode");
+
+        // Verify that the HeaderNode has the modified next_page_id
+        assert_eq!(node.root_page_id, PageID(3),
+                   "HeaderNode should have the correct root_page_id");
+        assert_eq!(node.next_page_id, PageID(5),
+                   "HeaderNode should have the modified next_page_id");
+
+        // Get a mutable reference to the page using get_page_mut()
+        let page_mut = new_index_pages.get_page_mut(page_id)
+            .expect("Failed to get mutable page");
+
+        // Modify the node in the page again
+        let node_mut = page_mut.node.as_any_mut().downcast_mut::<HeaderNode>()
+            .expect("Failed to downcast node to HeaderNode");
+        node_mut.next_page_id = PageID(6);
+
+        // Mark the page as dirty and flush the changes to disk
+        new_index_pages.mark_dirty(page_id);
+        new_index_pages.flush().expect("Failed to flush changes");
+
+        // Create another IndexPages instance to read the page from disk
+        let mut third_index_pages = IndexPages::new(test_path, PAGE_SIZE)
+            .expect("Failed to create third IndexPages");
+
+        // Get the page using get_page()
+        let page = third_index_pages.get_page(page_id)
+            .expect("Failed to get page");
+
+        // Verify that the page has the correct page_id
+        assert_eq!(page.page_id, page_id,
+                   "Page should have the correct page_id");
+
+        // Verify that the page has the correct node type
+        assert_eq!(page.node.node_type_byte(), HEADER_NODE_TYPE,
+                   "Page should have the correct node type");
+
+        // Get the HeaderNode from the page
+        let node = page.node.as_any().downcast_ref::<HeaderNode>()
+            .expect("Failed to downcast node to HeaderNode");
+
+        // Verify that the HeaderNode has the second modified next_page_id
+        assert_eq!(node.root_page_id, PageID(3),
+                   "HeaderNode should have the correct root_page_id");
+        assert_eq!(node.next_page_id, PageID(6),
+                   "HeaderNode should have the second modified next_page_id");
     }
 }

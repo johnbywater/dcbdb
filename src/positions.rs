@@ -90,13 +90,37 @@ pub struct PositionIndex {
 impl PositionIndex {
     /// Creates a new PositionIndex with the given path and page size
     pub fn new<P: AsRef<Path>>(path: P, page_size: usize) -> std::io::Result<Self> {
-        let index_pages = IndexPages::new(path, page_size)?;
+        let mut index_pages = IndexPages::new(path, page_size)?;
+
+        // Register deserializers for LeafNode and InternalNode
+        index_pages.deserializer.register(LEAF_NODE_TYPE, |data| {
+            let leaf_node: LeafNode = decode::from_slice(data)?;
+            Ok(Box::new(leaf_node) as Box<dyn Node>)
+        });
+
+        index_pages.deserializer.register(INTERNAL_NODE_TYPE, |data| {
+            let internal_node: InternalNode = decode::from_slice(data)?;
+            Ok(Box::new(internal_node) as Box<dyn Node>)
+        });
+
         Ok(Self { index_pages })
     }
 
     /// Creates a new PositionIndex with the given path, page size, and cache capacity
     pub fn new_with_cache_capacity<P: AsRef<Path>>(path: P, page_size: usize, cache_capacity: Option<usize>) -> std::io::Result<Self> {
-        let index_pages = IndexPages::new_with_cache_capacity(path, page_size, cache_capacity)?;
+        let mut index_pages = IndexPages::new_with_cache_capacity(path, page_size, cache_capacity)?;
+
+        // Register deserializers for LeafNode and InternalNode
+        index_pages.deserializer.register(LEAF_NODE_TYPE, |data| {
+            let leaf_node: LeafNode = decode::from_slice(data)?;
+            Ok(Box::new(leaf_node) as Box<dyn Node>)
+        });
+
+        index_pages.deserializer.register(INTERNAL_NODE_TYPE, |data| {
+            let internal_node: InternalNode = decode::from_slice(data)?;
+            Ok(Box::new(internal_node) as Box<dyn Node>)
+        });
+
         Ok(Self { index_pages })
     }
 }
@@ -105,6 +129,7 @@ impl PositionIndex {
 mod tests {
     use super::*;
     use std::path::Path;
+    use crate::indexpages::IndexPage;
 
     #[test]
     fn test_position_index_construction() {
@@ -195,5 +220,67 @@ mod tests {
 
         // Verify the node type byte
         assert_eq!(internal_node.node_type_byte(), INTERNAL_NODE_TYPE);
+    }
+
+    #[test]
+    fn test_deserializer_registration() {
+        // Create a temporary file path for testing
+        let path = Path::new("test_deserializer_registration.db");
+
+        // Create a new PositionIndex instance
+        let position_index = PositionIndex::new(path, 4096).unwrap();
+
+        // Create a LeafNode and an InternalNode
+        let leaf_node = LeafNode {
+            keys: vec![1000, 2000],
+            values: vec![
+                PositionIndexRecord { segment: 1, offset: 100, type_hash: hash_type("User") },
+                PositionIndexRecord { segment: 2, offset: 200, type_hash: hash_type("Product") },
+            ],
+            next_leaf_id: Some(PageID(42)),
+        };
+
+        let internal_node = InternalNode {
+            keys: vec![1000, 2000],
+            child_ids: vec![PageID(10), PageID(20), PageID(30)],
+        };
+
+        // Create IndexPage instances with the nodes
+        let leaf_page = IndexPage {
+            page_id: PageID(1),
+            node: Box::new(leaf_node.clone()),
+            serialized: Vec::new(),
+        };
+
+        let internal_page = IndexPage {
+            page_id: PageID(2),
+            node: Box::new(internal_node.clone()),
+            serialized: Vec::new(),
+        };
+
+        // Serialize the pages
+        let leaf_serialized = leaf_page.serialize_page().unwrap();
+        let internal_serialized = internal_page.serialize_page().unwrap();
+
+        // Deserialize the pages using the registered deserializers
+        let deserialized_leaf_page = position_index.index_pages.deserializer.deserialize_page(&leaf_serialized, PageID(1)).unwrap();
+        let deserialized_internal_page = position_index.index_pages.deserializer.deserialize_page(&internal_serialized, PageID(2)).unwrap();
+
+        // Verify that the deserialized nodes have the correct type
+        assert_eq!(deserialized_leaf_page.node.node_type_byte(), LEAF_NODE_TYPE);
+        assert_eq!(deserialized_internal_page.node.node_type_byte(), INTERNAL_NODE_TYPE);
+
+        // Downcast and verify the leaf node
+        let deserialized_leaf = deserialized_leaf_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+        assert_eq!(deserialized_leaf.keys.len(), leaf_node.keys.len());
+        assert_eq!(deserialized_leaf.values.len(), leaf_node.values.len());
+
+        // Downcast and verify the internal node
+        let deserialized_internal = deserialized_internal_page.node.as_any().downcast_ref::<InternalNode>().unwrap();
+        assert_eq!(deserialized_internal.keys.len(), internal_node.keys.len());
+        assert_eq!(deserialized_internal.child_ids.len(), internal_node.child_ids.len());
+
+        // Clean up the test file
+        std::fs::remove_file(path).unwrap_or(());
     }
 }

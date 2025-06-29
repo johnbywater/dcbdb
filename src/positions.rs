@@ -316,6 +316,74 @@ impl PositionIndex {
             Some((promote_key, new_page_id))
         }
     }
+
+    /// Inserts a key and value into the position index
+    ///
+    /// # Arguments
+    /// * `key` - The key to insert
+    /// * `value` - The value to insert
+    ///
+    /// # Returns
+    /// * `std::io::Result<()>` - Ok if the insertion was successful, Err otherwise
+    pub fn insert(&mut self, key: Position, value: PositionIndexRecord) -> std::io::Result<()> {
+        // Get the root page ID from the header page
+        let header_node = self.index_pages.header_node();
+        let root_page_id = header_node.root_page_id;
+
+        // Get the root page
+        let page = self.index_pages.get_page(root_page_id)?;
+
+        // Check that the root page is a leaf node
+        if page.node.node_type_byte() != LEAF_NODE_TYPE {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Root page is not a leaf node",
+            ));
+        }
+
+        // Call append_leaf_key_and_value with the root page ID
+        self.append_leaf_key_and_value(root_page_id, key, value);
+
+        Ok(())
+    }
+
+    /// Looks up a key in the position index
+    ///
+    /// # Arguments
+    /// * `key` - The key to look up
+    ///
+    /// # Returns
+    /// * `std::io::Result<Option<PositionIndexRecord>>` - Ok(Some(record)) if the key was found, Ok(None) if not found, Err if an error occurred
+    pub fn lookup(&mut self, key: Position) -> std::io::Result<Option<PositionIndexRecord>> {
+        // Get the root page ID from the header page
+        let header_node = self.index_pages.header_page.node.as_any().downcast_ref::<HeaderNode>().unwrap();
+        let root_page_id = header_node.root_page_id;
+
+        // Get the root page
+        let page = self.index_pages.get_page(root_page_id)?;
+
+        // Check that the root page is a leaf node
+        if page.node.node_type_byte() != LEAF_NODE_TYPE {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Root page is not a leaf node",
+            ));
+        }
+
+        // Downcast the node to a LeafNode
+        let leaf_node = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+
+        // Search for the key in the leaf node's keys
+        for i in 0..leaf_node.keys.len() {
+            if leaf_node.keys[i] == key {
+                // Return the corresponding value
+                return Ok(Some(leaf_node.values[i].clone()));
+            }
+        }
+
+        // Key not found
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
@@ -1114,5 +1182,53 @@ mod tests {
         assert_eq!(internal2.child_ids[5], PageID(500));
 
         // No need to clean up the test file, it will be removed when temp_dir goes out of scope
+    }
+
+    #[test]
+    fn test_simple_insert_lookup() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+
+        // Append the filename to the directory path
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Create a new PositionIndex instance with a large page size to avoid splitting
+        let mut position_index = PositionIndex::new(&test_path, 4096).unwrap();
+
+
+        // Insert a few records
+        let mut inserted: Vec<(Position, PositionIndexRecord)> = Vec::new();
+        for i in 0..5 {
+            let position = (i + 1).into();
+            let record = PositionIndexRecord {
+                segment: i,
+                offset: i * 10,
+                type_hash: hash_type(&format!("test-{}", i)),
+            };
+
+            position_index.insert(position, record.clone()).unwrap();
+            inserted.push((position, record));
+        }
+
+        // Check lookup before flush
+        for (position, record) in &inserted {
+            let result = position_index.lookup(*position).unwrap();
+            assert!(result.is_some());
+            assert_eq!(&result.unwrap(), record);
+        }
+
+        // Flush changes to disk
+        position_index.index_pages.flush().unwrap();
+
+        // Create another instance of PositionIndex
+        let mut position_index2 = PositionIndex::new(&test_path, 4096).unwrap();
+
+
+        // Check lookup after flush
+        for (position, record) in &inserted {
+            let result = position_index2.lookup(*position).unwrap();
+            assert!(result.is_some());
+            assert_eq!(&result.unwrap(), record);
+        }
     }
 }

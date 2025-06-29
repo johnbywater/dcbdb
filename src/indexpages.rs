@@ -241,7 +241,7 @@ impl IndexPages {
     ///
     /// # Returns
     /// * `&HeaderNode` - A reference to the HeaderNode
-    fn header_node(&self) -> &HeaderNode {
+    pub fn header_node(&self) -> &HeaderNode {
         self.header_page.node.as_any().downcast_ref::<HeaderNode>()
             .expect("Failed to downcast node to HeaderNode")
     }

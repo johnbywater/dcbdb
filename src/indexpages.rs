@@ -446,21 +446,7 @@ impl IndexPages {
             ));
         }
 
-        // Remove the page from the cache
-        let page = self.cache.pop(&page_id).unwrap();
-
-        // Mark the page as dirty
-        self.mark_dirty(page_id);
-
-        // Put the page back in the cache
-        self.cache.put(page_id, page);
-
-        // Get a mutable reference to the page from the cache
-        // This is safe because we just put the page back in the cache
-        // and we have a mutable reference to self
-        let cache_ptr = &mut self.cache as *mut LruCache<PageID, IndexPage>;
-        let cache_ref = unsafe { &mut *cache_ptr };
-        let page_ref = cache_ref.get_mut(&page_id).unwrap();
+        let page_ref = self.cache.get_mut(&page_id).unwrap();
 
         Ok(page_ref)
     }

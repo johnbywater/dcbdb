@@ -147,17 +147,21 @@ mod tests {
     use super::*;
     use std::path::Path;
     use crate::indexpages::IndexPage;
+    use tempfile::TempDir;
 
     #[test]
     fn test_position_index_construction() {
-        // Create a temporary file path for testing
-        let path = Path::new("test_position_index.db");
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+
+        // Append the filename to the directory path
+        let test_path = temp_dir.path().join("index.dat");
 
         // Create a new PositionIndex instance using the constructor
-        let mut position_index = PositionIndex::new(path, 4096).unwrap();
+        let mut position_index = PositionIndex::new(&test_path, 4096).unwrap();
 
         // Verify that the PositionIndex was created successfully
-        assert!(path.exists());
+        assert!(test_path.exists());
 
         // Get the root page ID from the header page
         let header_node = position_index.index_pages.header_page.node.as_any().downcast_ref::<HeaderNode>().unwrap();
@@ -178,7 +182,7 @@ mod tests {
         assert_eq!(leaf_node.next_leaf_id, None);
 
         // Create a second instance of PositionIndex
-        let mut position_index2 = PositionIndex::new(path, 4096).unwrap();
+        let mut position_index2 = PositionIndex::new(&test_path, 4096).unwrap();
 
         // Get the root page from the second instance
         let root_page2 = position_index2.index_pages.get_page(root_page_id).unwrap();
@@ -194,8 +198,7 @@ mod tests {
         assert!(leaf_node2.values.is_empty());
         assert_eq!(leaf_node2.next_leaf_id, None);
 
-        // Clean up the test file
-        std::fs::remove_file(path).unwrap_or(());
+        // No need to clean up the test file, it will be removed when temp_dir goes out of scope
     }
 
     #[test]
@@ -276,11 +279,14 @@ mod tests {
 
     #[test]
     fn test_deserializer_registration() {
-        // Create a temporary file path for testing
-        let path = Path::new("test_deserializer_registration.db");
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+
+        // Append the filename to the directory path
+        let test_path = temp_dir.path().join("index.dat");
 
         // Create a new PositionIndex instance
-        let position_index = PositionIndex::new(path, 4096).unwrap();
+        let position_index = PositionIndex::new(&test_path, 4096).unwrap();
 
         // Create a LeafNode and an InternalNode
         let leaf_node = LeafNode {
@@ -332,17 +338,19 @@ mod tests {
         assert_eq!(deserialized_internal.keys.len(), internal_node.keys.len());
         assert_eq!(deserialized_internal.child_ids.len(), internal_node.child_ids.len());
 
-        // Clean up the test file
-        std::fs::remove_file(path).unwrap_or(());
+        // No need to clean up the test file, it will be removed when temp_dir goes out of scope
     }
 
     #[test]
     fn test_leaf_node_add_modify() {
-        // Create a temporary file path for testing
-        let path = Path::new("test_leaf_node_add_modify.db");
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+
+        // Append the filename to the directory path
+        let test_path = temp_dir.path().join("index.dat");
 
         // Create a new PositionIndex instance
-        let mut position_index = PositionIndex::new(path, 4096).unwrap();
+        let mut position_index = PositionIndex::new(&test_path, 4096).unwrap();
 
         // Construct a PageID
         let page_id = PageID(10);
@@ -396,7 +404,7 @@ mod tests {
         position_index.index_pages.flush().unwrap();
 
         // Create another instance of PositionIndex
-        let mut position_index2 = PositionIndex::new(path, 4096).unwrap();
+        let mut position_index2 = PositionIndex::new(&test_path, 4096).unwrap();
 
         // Get the page and verify it's a LeafNode with the correct keys and values
         let retrieved_page2 = position_index2.index_pages.get_page(page_id).unwrap();
@@ -433,7 +441,7 @@ mod tests {
         position_index2.index_pages.flush().unwrap();
 
         // Create a third instance of PositionIndex
-        let mut position_index3 = PositionIndex::new(path, 4096).unwrap();
+        let mut position_index3 = PositionIndex::new(&test_path, 4096).unwrap();
 
         // Get the page and check keys and values
         let retrieved_page3 = position_index3.index_pages.get_page(page_id).unwrap();
@@ -456,7 +464,6 @@ mod tests {
         assert_eq!(leaf_node3.values[3].segment, 4);
         assert_eq!(leaf_node3.values[3].offset, 400);
 
-        // Clean up the test file
-        std::fs::remove_file(path).unwrap_or(());
+        // No need to clean up the test file, it will be removed when temp_dir goes out of scope
     }
 }

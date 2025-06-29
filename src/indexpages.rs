@@ -441,16 +441,12 @@ impl IndexPages {
             ));
         }
 
-        // Check if the page is in the cache
-        if !self.cache.contains(&page_id) {
-            return Err(std::io::Error::new(
+        let page_ref = self.cache.get_mut(&page_id).ok_or_else(|| {
+            std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                format!("Page not found in cache: {:?}", page_id)
-            ));
-        }
-
-        let page_ref = self.cache.get_mut(&page_id).unwrap();
-
+                format!("Page not found in cache: {:?}", page_id),
+            )
+        })?;
         Ok(page_ref)
     }
 

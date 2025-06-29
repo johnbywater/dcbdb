@@ -353,6 +353,21 @@ impl IndexPages {
         self.mark_dirty(self.header_page_id);
     }
 
+    /// Allocates a new page ID
+    ///
+    /// # Returns
+    /// * `PageID` - The allocated page ID
+    pub fn alloc_page_id(&mut self) -> PageID {
+        // Get the current next_page_id
+        let current_next_page_id = self.header_node().next_page_id;
+
+        // Increment the next_page_id
+        self.set_next_page_id(PageID(current_next_page_id.0 + 1));
+
+        // Return the original next_page_id
+        current_next_page_id
+    }
+
     /// Flushes all dirty pages to disk
     ///
     /// # Returns
@@ -1058,6 +1073,41 @@ mod tests {
         // Verify that the deserialized page 2 has the correct page_id
         assert_eq!(deserialized_page2.page_id, page_id2,
                    "Deserialized page 2 page_id should match page_id2");
+    }
+
+    #[test]
+    fn test_alloc_page_id() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Create a new IndexPages
+        let mut index_pages = IndexPages::new(test_path, PAGE_SIZE)
+            .expect("Failed to create IndexPages");
+
+        // Check the initial next_page_id
+        assert_eq!(index_pages.header_node().next_page_id, PageID(2),
+                   "Initial next_page_id should be PageID(2)");
+
+        // Call alloc_page_id multiple times and verify the returned values
+        let page_id1 = index_pages.alloc_page_id();
+        assert_eq!(page_id1, PageID(2), "First allocated page_id should be PageID(2)");
+        assert_eq!(index_pages.header_node().next_page_id, PageID(3),
+                   "next_page_id should be incremented to PageID(3)");
+
+        let page_id2 = index_pages.alloc_page_id();
+        assert_eq!(page_id2, PageID(3), "Second allocated page_id should be PageID(3)");
+        assert_eq!(index_pages.header_node().next_page_id, PageID(4),
+                   "next_page_id should be incremented to PageID(4)");
+
+        let page_id3 = index_pages.alloc_page_id();
+        assert_eq!(page_id3, PageID(4), "Third allocated page_id should be PageID(4)");
+        assert_eq!(index_pages.header_node().next_page_id, PageID(5),
+                   "next_page_id should be incremented to PageID(5)");
+
+        // Verify that the allocated page IDs are monotonically increasing
+        assert!(page_id1.0 < page_id2.0, "page_id1 should be less than page_id2");
+        assert!(page_id2.0 < page_id3.0, "page_id2 should be less than page_id3");
     }
 
     #[test]

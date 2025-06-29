@@ -140,6 +140,71 @@ impl PositionIndex {
 
         Ok(Self { index_pages })
     }
+
+    /// Splits a leaf node by moving the last key and value to a new leaf node
+    ///
+    /// # Arguments
+    /// * `page_id` - The PageID of the page to split
+    ///
+    /// # Returns
+    /// * `(Position, PageID)` - The first key of the new leaf node and the new page ID
+    pub fn split_leaf(&mut self, page_id: PageID) -> (Position, PageID) {
+        // Extract the last key and value from the leaf node
+        let (last_key, last_value) = {
+            // Get a mutable reference to the page
+            let page = self.index_pages.get_page_mut(page_id).unwrap();
+
+            // Downcast the node to a LeafNode
+            let leaf_node = page.node.as_any_mut().downcast_mut::<LeafNode>().unwrap();
+
+            // Assert that next_leaf_id is None
+            assert!(leaf_node.next_leaf_id.is_none(), "next_leaf should be None");
+
+            // Get the last key and value
+            let key = leaf_node.keys.pop().unwrap();
+            let value = leaf_node.values.pop().unwrap();
+
+            (key, value)
+        };
+
+        // Allocate a new page ID
+        let new_page_id = self.index_pages.alloc_page_id();
+
+        // Create a new LeafNode with the last key and value
+        let new_leaf_node = LeafNode {
+            keys: vec![last_key],
+            values: vec![last_value],
+            next_leaf_id: None,
+        };
+
+        // Create a new IndexPage with the new LeafNode
+        let new_page = IndexPage {
+            page_id: new_page_id,
+            node: Box::new(new_leaf_node),
+            serialized: Vec::new(),
+        };
+
+        // Set the next_leaf_id of the original leaf node to the new page ID
+        {
+            // Get a mutable reference to the page again
+            let page = self.index_pages.get_page_mut(page_id).unwrap();
+
+            // Downcast the node to a LeafNode
+            let leaf_node = page.node.as_any_mut().downcast_mut::<LeafNode>().unwrap();
+
+            // Set the next_leaf_id
+            leaf_node.next_leaf_id = Some(new_page_id);
+        }
+
+        // Mark the original page as dirty
+        self.index_pages.mark_dirty(page_id);
+
+        // Add the new page to the collection
+        self.index_pages.add_page(new_page);
+
+        // Return the first key of the new leaf node and the new page ID
+        (last_key, new_page_id)
+    }
 }
 
 #[cfg(test)]
@@ -570,6 +635,97 @@ mod tests {
         assert_eq!(internal_node3.child_ids[2], PageID(300));
         assert_eq!(internal_node3.child_ids[3], PageID(400));
         assert_eq!(internal_node3.child_ids[4], PageID(500));
+
+        // No need to clean up the test file, it will be removed when temp_dir goes out of scope
+    }
+
+    #[test]
+    fn test_split_leaf() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+
+        // Append the filename to the directory path
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Create a new PositionIndex instance
+        let mut position_index = PositionIndex::new(&test_path, 4096).unwrap();
+
+        // Construct a PageID
+        let page_id = PageID(30);
+
+        // Create a LeafNode with 11 keys and 11 values
+        let mut keys = Vec::new();
+        let mut values = Vec::new();
+        for i in 0..11 {
+            keys.push(i * 1000);
+            values.push(PositionIndexRecord {
+                segment: i as i32,
+                offset: i as i32 * 100,
+                type_hash: hash_type(&format!("Type{}", i)),
+            });
+        }
+
+        let leaf_node = LeafNode {
+            keys,
+            values,
+            next_leaf_id: None,
+        };
+
+        // Create an IndexPage with the LeafNode
+        let leaf_page = IndexPage {
+            page_id,
+            node: Box::new(leaf_node),
+            serialized: Vec::new(),
+        };
+
+        // Add the page to the index
+        position_index.index_pages.add_page(leaf_page);
+
+        // Call split_leaf with the page_id
+        let (first_key, new_page_id) = position_index.split_leaf(page_id);
+
+        // Verify the first key of the new leaf node
+        assert_eq!(first_key, 10000);
+
+        // Get the original page and verify it has 10 keys and values
+        let original_page = position_index.index_pages.get_page(page_id).unwrap();
+        let original_leaf = original_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+        assert_eq!(original_leaf.keys.len(), 10);
+        assert_eq!(original_leaf.values.len(), 10);
+        assert_eq!(original_leaf.next_leaf_id, Some(new_page_id));
+
+        // Get the new page and verify it has 1 key and value
+        let new_page = position_index.index_pages.get_page(new_page_id).unwrap();
+        let new_leaf = new_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+        assert_eq!(new_leaf.keys.len(), 1);
+        assert_eq!(new_leaf.values.len(), 1);
+        assert_eq!(new_leaf.keys[0], 10000);
+        assert_eq!(new_leaf.values[0].segment, 10);
+        assert_eq!(new_leaf.values[0].offset, 1000);
+        assert_eq!(new_leaf.next_leaf_id, None);
+
+        // Flush changes to disk
+        position_index.index_pages.flush().unwrap();
+
+        // Create another instance of PositionIndex
+        let mut position_index2 = PositionIndex::new(&test_path, 4096).unwrap();
+
+        // Get the original page and verify it has 10 keys and values
+        let original_page2 = position_index2.index_pages.get_page(page_id).unwrap();
+        let original_leaf2 = original_page2.node.as_any().downcast_ref::<LeafNode>().unwrap();
+        assert_eq!(original_leaf2.keys.len(), 10);
+        assert_eq!(original_leaf2.values.len(), 10);
+        assert_eq!(original_leaf2.next_leaf_id, Some(new_page_id));
+
+        // Get the new page and verify it has 1 key and value
+        let new_page2 = position_index2.index_pages.get_page(new_page_id).unwrap();
+        let new_leaf2 = new_page2.node.as_any().downcast_ref::<LeafNode>().unwrap();
+        assert_eq!(new_leaf2.keys.len(), 1);
+        assert_eq!(new_leaf2.values.len(), 1);
+        assert_eq!(new_leaf2.keys[0], 10000);
+        assert_eq!(new_leaf2.values[0].segment, 10);
+        assert_eq!(new_leaf2.values[0].offset, 1000);
+        assert_eq!(new_leaf2.next_leaf_id, None);
 
         // No need to clean up the test file, it will be removed when temp_dir goes out of scope
     }

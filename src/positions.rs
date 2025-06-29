@@ -480,22 +480,17 @@ impl PositionIndex {
                     // Internal node, find the child to follow
                     let internal_node = page.node.as_any().downcast_ref::<InternalNode>().unwrap();
 
-                    // Find the index of the first key greater than the search key
-                    let mut index = internal_node.keys.len();
-                    for i in 0..internal_node.keys.len() {
-                        if key < internal_node.keys[i] {
-                            index = i;
-                            break;
-                        }
-                    }
+                    // Find the index of the first key greater than the search key using binary search
+                    let index = match internal_node.keys.binary_search_by(|probe| probe.cmp(&key)) {
+                        // If key is found, use the child at that index + 1
+                        Ok(idx) => idx + 1,
+                        // If key is not found, Err(idx) gives the index where it would be inserted
+                        // This is the index of the first key greater than the search key
+                        Err(idx) => idx,
+                    };
 
-                    // If all keys are less than or equal to the search key, use the last child
-                    if index == internal_node.keys.len() {
-                        current_page_id = internal_node.child_ids[index];
-                    } else {
-                        // Otherwise, use the child at the found index
-                        current_page_id = internal_node.child_ids[index];
-                    }
+                    // Use the child at the found index
+                    current_page_id = internal_node.child_ids[index];
                 } else {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,

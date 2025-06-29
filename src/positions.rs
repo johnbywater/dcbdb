@@ -333,16 +333,117 @@ impl PositionIndex {
         // Get the root page
         let page = self.index_pages.get_page(root_page_id)?;
 
-        // Check that the root page is a leaf node
-        if page.node.node_type_byte() != LEAF_NODE_TYPE {
+        // Check if the root page is a leaf node
+        if page.node.node_type_byte() == LEAF_NODE_TYPE {
+            // Call append_leaf_key_and_value with the root page ID
+            let split_result = self.append_leaf_key_and_value(root_page_id, key, value);
+
+            // If the leaf node was split, create a new internal node as the root
+            if let Some((promoted_key, new_page_id)) = split_result {
+                // Create a new internal node with the promoted key and two child IDs
+                let internal_node = InternalNode {
+                    keys: vec![promoted_key],
+                    child_ids: vec![root_page_id, new_page_id],
+                };
+
+                // Allocate a new page ID for the new root
+                let new_root_page_id = self.index_pages.alloc_page_id();
+
+                // Create a new page with the internal node
+                let new_root_page = IndexPage {
+                    page_id: new_root_page_id,
+                    node: Box::new(internal_node),
+                    serialized: Vec::new(),
+                };
+
+                // Add the new page to the collection
+                self.index_pages.add_page(new_root_page);
+
+                // Set the new page as the root page
+                self.index_pages.set_root_page_id(new_root_page_id);
+            }
+        } else if page.node.node_type_byte() == INTERNAL_NODE_TYPE {
+            // If the root is an internal node, we need to find the leaf node to insert into
+            let mut current_page_id = root_page_id;
+
+            // Traverse the tree until we find a leaf node
+            loop {
+                let page = self.index_pages.get_page(current_page_id)?;
+
+                if page.node.node_type_byte() == LEAF_NODE_TYPE {
+                    // Found a leaf node, insert the key and value
+                    let split_result = self.append_leaf_key_and_value(current_page_id, key, value);
+
+                    // If the leaf node was split, we need to insert the promoted key into the parent
+                    if let Some((promoted_key, new_page_id)) = split_result {
+                        // TODO: Handle the case where the leaf node was split
+                        // This requires keeping track of the path from the root to the leaf
+                        // For now, we'll just handle the simple case where the root is an internal node
+                        // and we're inserting directly into a leaf node
+
+                        // Insert the promoted key and new page ID into the root internal node
+                        let split_result = self.append_internal_key_and_value(root_page_id, promoted_key, new_page_id);
+
+                        // If the internal node was split, create a new root
+                        if let Some((promoted_key, new_page_id)) = split_result {
+                            // Create a new internal node with the promoted key and two child IDs
+                            let internal_node = InternalNode {
+                                keys: vec![promoted_key],
+                                child_ids: vec![root_page_id, new_page_id],
+                            };
+
+                            // Allocate a new page ID for the new root
+                            let new_root_page_id = self.index_pages.alloc_page_id();
+
+                            // Create a new page with the internal node
+                            let new_root_page = IndexPage {
+                                page_id: new_root_page_id,
+                                node: Box::new(internal_node),
+                                serialized: Vec::new(),
+                            };
+
+                            // Add the new page to the collection
+                            self.index_pages.add_page(new_root_page);
+
+                            // Set the new page as the root page
+                            self.index_pages.set_root_page_id(new_root_page_id);
+                        }
+                    }
+
+                    break;
+                } else if page.node.node_type_byte() == INTERNAL_NODE_TYPE {
+                    // Internal node, find the child to follow
+                    let internal_node = page.node.as_any().downcast_ref::<InternalNode>().unwrap();
+
+                    // Find the index of the first key greater than or equal to the search key
+                    let mut index = internal_node.keys.len();
+                    for i in 0..internal_node.keys.len() {
+                        if key <= internal_node.keys[i] {
+                            index = i;
+                            break;
+                        }
+                    }
+
+                    // If all keys are less than the search key, use the last child
+                    if index == internal_node.keys.len() {
+                        current_page_id = internal_node.child_ids[index];
+                    } else {
+                        // Otherwise, use the child at the found index
+                        current_page_id = internal_node.child_ids[index];
+                    }
+                } else {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Invalid node type",
+                    ));
+                }
+            }
+        } else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "Root page is not a leaf node",
+                "Invalid node type",
             ));
         }
-
-        // Call append_leaf_key_and_value with the root page ID
-        self.append_leaf_key_and_value(root_page_id, key, value);
 
         Ok(())
     }
@@ -362,27 +463,77 @@ impl PositionIndex {
         // Get the root page
         let page = self.index_pages.get_page(root_page_id)?;
 
-        // Check that the root page is a leaf node
-        if page.node.node_type_byte() != LEAF_NODE_TYPE {
+        // Check if the root page is a leaf node
+        if page.node.node_type_byte() == LEAF_NODE_TYPE {
+            // Downcast the node to a LeafNode
+            let leaf_node = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+
+            // Search for the key in the leaf node's keys
+            for i in 0..leaf_node.keys.len() {
+                if leaf_node.keys[i] == key {
+                    // Return the corresponding value
+                    return Ok(Some(leaf_node.values[i].clone()));
+                }
+            }
+
+            // Key not found
+            Ok(None)
+        } else if page.node.node_type_byte() == INTERNAL_NODE_TYPE {
+            // If the root is an internal node, we need to traverse the tree to find the leaf node
+            let mut current_page_id = root_page_id;
+
+            // Traverse the tree until we find a leaf node
+            loop {
+                let page = self.index_pages.get_page(current_page_id)?;
+
+                if page.node.node_type_byte() == LEAF_NODE_TYPE {
+                    // Found a leaf node, search for the key
+                    let leaf_node = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+
+                    // Search for the key in the leaf node's keys
+                    for i in 0..leaf_node.keys.len() {
+                        if leaf_node.keys[i] == key {
+                            // Return the corresponding value
+                            return Ok(Some(leaf_node.values[i].clone()));
+                        }
+                    }
+
+                    // Key not found in this leaf node
+                    // If there's a next leaf node, we could check it, but for now we'll just return None
+                    return Ok(None);
+                } else if page.node.node_type_byte() == INTERNAL_NODE_TYPE {
+                    // Internal node, find the child to follow
+                    let internal_node = page.node.as_any().downcast_ref::<InternalNode>().unwrap();
+
+                    // Find the index of the first key greater than the search key
+                    let mut index = internal_node.keys.len();
+                    for i in 0..internal_node.keys.len() {
+                        if key < internal_node.keys[i] {
+                            index = i;
+                            break;
+                        }
+                    }
+
+                    // If all keys are less than or equal to the search key, use the last child
+                    if index == internal_node.keys.len() {
+                        current_page_id = internal_node.child_ids[index];
+                    } else {
+                        // Otherwise, use the child at the found index
+                        current_page_id = internal_node.child_ids[index];
+                    }
+                } else {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Invalid node type",
+                    ));
+                }
+            }
+        } else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "Root page is not a leaf node",
+                "Invalid node type",
             ));
         }
-
-        // Downcast the node to a LeafNode
-        let leaf_node = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
-
-        // Search for the key in the leaf node's keys
-        for i in 0..leaf_node.keys.len() {
-            if leaf_node.keys[i] == key {
-                // Return the corresponding value
-                return Ok(Some(leaf_node.values[i].clone()));
-            }
-        }
-
-        // Key not found
-        Ok(None)
     }
 }
 
@@ -1231,7 +1382,7 @@ mod tests {
             assert_eq!(&result.unwrap(), record);
         }
     }    
-    
+
     #[test]
     fn test_insert_lookup_split_leaf_node() {
         // Create a temporary directory
@@ -1248,6 +1399,55 @@ mod tests {
         // Insert a few records
         let mut inserted: Vec<(Position, PositionIndexRecord)> = Vec::new();
         for i in 0..20 {
+            let position = (i + 1).into();
+            let record = PositionIndexRecord {
+                segment: i,
+                offset: i * 10,
+                type_hash: hash_type(&format!("test-{}", i)),
+            };
+
+            position_index.insert(position, record.clone()).unwrap();
+            inserted.push((position, record));
+        }
+
+        // Check lookup before flush
+        for (position, record) in &inserted {
+            let result = position_index.lookup(*position).unwrap();
+            assert!(result.is_some());
+            assert_eq!(&result.unwrap(), record);
+        }
+
+        // Flush changes to disk
+        position_index.index_pages.flush().unwrap();
+
+        // Create another instance of PositionIndex
+        let mut position_index2 = PositionIndex::new(&test_path, page_size).unwrap();
+
+
+        // Check lookup after flush
+        for (position, record) in &inserted {
+            let result = position_index2.lookup(*position).unwrap();
+            assert!(result.is_some());
+            assert_eq!(&result.unwrap(), record);
+        }
+    }
+    
+    #[test]
+    fn test_insert_lookup_split_internal_node() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+
+        // Append the filename to the directory path
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Create a new PositionIndex instance with a large page size to avoid splitting
+        let page_size = 250;
+        let mut position_index = PositionIndex::new(&test_path, page_size).unwrap();
+
+
+        // Insert a few records
+        let mut inserted: Vec<(Position, PositionIndexRecord)> = Vec::new();
+        for i in 0..700 {
             let position = (i + 1).into();
             let record = PositionIndexRecord {
                 segment: i,

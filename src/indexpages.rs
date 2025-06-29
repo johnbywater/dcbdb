@@ -512,6 +512,9 @@ impl IndexPages {
         // Clear the dirty HashMap
         self.clear_dirty();
 
+        // Reduce the cache to the cache_capacity
+        self.reduce_cache();
+        
         Ok(())
     }
 }

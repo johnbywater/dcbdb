@@ -335,4 +335,128 @@ mod tests {
         // Clean up the test file
         std::fs::remove_file(path).unwrap_or(());
     }
+
+    #[test]
+    fn test_leaf_node_add_modify() {
+        // Create a temporary file path for testing
+        let path = Path::new("test_leaf_node_add_modify.db");
+
+        // Create a new PositionIndex instance
+        let mut position_index = PositionIndex::new(path, 4096).unwrap();
+
+        // Construct a PageID
+        let page_id = PageID(10);
+
+        // Create a LeafNode with initial keys and values
+        let leaf_node = LeafNode {
+            keys: vec![1000, 2000],
+            values: vec![
+                PositionIndexRecord { segment: 1, offset: 100, type_hash: hash_type("User") },
+                PositionIndexRecord { segment: 2, offset: 200, type_hash: hash_type("Product") },
+            ],
+            next_leaf_id: None,
+        };
+
+        // Create an IndexPage with the LeafNode
+        let leaf_page = IndexPage {
+            page_id,
+            node: Box::new(leaf_node),
+            serialized: Vec::new(),
+        };
+
+        // Add the page to the index
+        position_index.index_pages.add_page(leaf_page);
+
+        // Get the page and check keys and values
+        let retrieved_page = position_index.index_pages.get_page(page_id).unwrap();
+        assert_eq!(retrieved_page.node.node_type_byte(), LEAF_NODE_TYPE);
+
+        // Downcast to LeafNode and check contents
+        let leaf_node = retrieved_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+        assert_eq!(leaf_node.keys.len(), 2);
+        assert_eq!(leaf_node.values.len(), 2);
+        assert_eq!(leaf_node.keys[0], 1000);
+        assert_eq!(leaf_node.keys[1], 2000);
+        assert_eq!(leaf_node.values[0].segment, 1);
+        assert_eq!(leaf_node.values[0].offset, 100);
+        assert_eq!(leaf_node.values[1].segment, 2);
+        assert_eq!(leaf_node.values[1].offset, 200);
+
+        // Get a mutable reference to the page and append a key and value
+        let mut_page = position_index.index_pages.get_page_mut(page_id).unwrap();
+        let leaf_node_mut = mut_page.node.as_any_mut().downcast_mut::<LeafNode>().unwrap();
+        leaf_node_mut.keys.push(3000);
+        leaf_node_mut.values.push(PositionIndexRecord { 
+            segment: 3, 
+            offset: 300, 
+            type_hash: hash_type("Order") 
+        });
+
+        // Flush changes to disk
+        position_index.index_pages.flush().unwrap();
+
+        // Create another instance of PositionIndex
+        let mut position_index2 = PositionIndex::new(path, 4096).unwrap();
+
+        // Get the page and verify it's a LeafNode with the correct keys and values
+        let retrieved_page2 = position_index2.index_pages.get_page(page_id).unwrap();
+        assert_eq!(retrieved_page2.node.node_type_byte(), LEAF_NODE_TYPE);
+
+        // Downcast to LeafNode and check contents
+        let leaf_node2 = retrieved_page2.node.as_any().downcast_ref::<LeafNode>().unwrap();
+        assert_eq!(leaf_node2.keys.len(), 3);
+        assert_eq!(leaf_node2.values.len(), 3);
+        assert_eq!(leaf_node2.keys[0], 1000);
+        assert_eq!(leaf_node2.keys[1], 2000);
+        assert_eq!(leaf_node2.keys[2], 3000);
+        assert_eq!(leaf_node2.values[0].segment, 1);
+        assert_eq!(leaf_node2.values[0].offset, 100);
+        assert_eq!(leaf_node2.values[1].segment, 2);
+        assert_eq!(leaf_node2.values[1].offset, 200);
+        assert_eq!(leaf_node2.values[2].segment, 3);
+        assert_eq!(leaf_node2.values[2].offset, 300);
+
+        // Get a mutable reference to the page and add another key and value
+        let mut_page2 = position_index2.index_pages.get_page_mut(page_id).unwrap();
+        let leaf_node_mut2 = mut_page2.node.as_any_mut().downcast_mut::<LeafNode>().unwrap();
+        leaf_node_mut2.keys.push(4000);
+        leaf_node_mut2.values.push(PositionIndexRecord { 
+            segment: 4, 
+            offset: 400, 
+            type_hash: hash_type("Category") 
+        });
+
+        // Mark the page as dirty
+        position_index2.index_pages.mark_dirty(page_id);
+
+        // Flush changes to disk
+        position_index2.index_pages.flush().unwrap();
+
+        // Create a third instance of PositionIndex
+        let mut position_index3 = PositionIndex::new(path, 4096).unwrap();
+
+        // Get the page and check keys and values
+        let retrieved_page3 = position_index3.index_pages.get_page(page_id).unwrap();
+        assert_eq!(retrieved_page3.node.node_type_byte(), LEAF_NODE_TYPE);
+
+        // Downcast to LeafNode and check contents
+        let leaf_node3 = retrieved_page3.node.as_any().downcast_ref::<LeafNode>().unwrap();
+        assert_eq!(leaf_node3.keys.len(), 4);
+        assert_eq!(leaf_node3.values.len(), 4);
+        assert_eq!(leaf_node3.keys[0], 1000);
+        assert_eq!(leaf_node3.keys[1], 2000);
+        assert_eq!(leaf_node3.keys[2], 3000);
+        assert_eq!(leaf_node3.keys[3], 4000);
+        assert_eq!(leaf_node3.values[0].segment, 1);
+        assert_eq!(leaf_node3.values[0].offset, 100);
+        assert_eq!(leaf_node3.values[1].segment, 2);
+        assert_eq!(leaf_node3.values[1].offset, 200);
+        assert_eq!(leaf_node3.values[2].segment, 3);
+        assert_eq!(leaf_node3.values[2].offset, 300);
+        assert_eq!(leaf_node3.values[3].segment, 4);
+        assert_eq!(leaf_node3.values[3].offset, 400);
+
+        // Clean up the test file
+        std::fs::remove_file(path).unwrap_or(());
+    }
 }

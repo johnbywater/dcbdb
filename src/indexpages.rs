@@ -215,6 +215,28 @@ pub struct IndexPages {
 }
 
 impl IndexPages {
+    /// Checks if a page needs splitting by comparing its serialized size to the page size
+    ///
+    /// # Arguments
+    /// * `page` - A mutable reference to the IndexPage to check
+    ///
+    /// # Returns
+    /// * `bool` - True if the page needs splitting, false otherwise
+    pub fn needs_spliting(&self, page: &mut IndexPage) -> Result<bool, encode::Error> {
+        // Serialize the page
+        let serialized = page.serialize_page()?;
+
+        // Check if the serialized data is larger than the page size
+        let needs_split = serialized.len() > self.paged_file.page_size;
+
+        // If the page doesn't need splitting, update its serialized field
+        if !needs_split {
+            page.serialized = serialized;
+        }
+
+        Ok(needs_split)
+    }
+
     /// Gets a reference to the HeaderNode from the header page
     ///
     /// # Returns
@@ -499,7 +521,7 @@ impl IndexPages {
 
         // Reduce the cache to the cache_capacity
         self.reduce_cache();
-        
+
         Ok(())
     }
 }
@@ -508,6 +530,7 @@ impl IndexPages {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+    use std::iter;
 
     #[test]
     fn test_index_pages_creation() {
@@ -1410,6 +1433,84 @@ mod tests {
                    "HeaderNode should have the correct root_page_id");
         assert_eq!(node.next_page_id, PageID(6),
                    "HeaderNode should have the second modified next_page_id");
+    }
+
+    #[test]
+    fn test_needs_spliting() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Create a new IndexPages with a small page size (100 bytes)
+        let small_page_size = 100;
+        let index_pages = IndexPages::new(test_path, small_page_size)
+            .expect("Failed to create IndexPages");
+
+        // Create a small HeaderNode
+        let small_header_node = HeaderNode {
+            root_page_id: PageID(1),
+            next_page_id: PageID(2),
+        };
+
+        // Create an IndexPage with the small HeaderNode
+        let mut small_page = IndexPage {
+            page_id: PageID(10),
+            node: Box::new(small_header_node),
+            serialized: Vec::new(),
+        };
+
+        // Call needs_spliting and verify it returns false (no splitting needed)
+        let needs_split = index_pages.needs_spliting(&mut small_page).expect("Failed to check if page needs splitting");
+        assert!(!needs_split, "Small page should not need splitting");
+
+        // Verify that the serialized field of the IndexPage is updated
+        assert!(!small_page.serialized.is_empty(), "Serialized field should be updated for small page");
+
+        // Create a large node by creating a custom node with a lot of data
+        // We'll use a custom struct that implements Node and contains a large amount of data
+        #[derive(Debug, Clone, Serialize, Deserialize)]
+        struct LargeNode {
+            data: Vec<u8>,
+        }
+
+        impl Node for LargeNode {
+            fn to_msgpack(&self) -> Result<Vec<u8>, encode::Error> {
+                encode::to_vec(self)
+            }
+
+            fn node_type_byte(&self) -> u8 {
+                // Use a different node type to avoid conflicts
+                99
+            }
+
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+
+            fn as_any_mut(&mut self) -> &mut dyn Any {
+                self
+            }
+        }
+
+        // Create a large node with data larger than the page size
+        let large_node = LargeNode {
+            // Create a vector with data larger than the page size
+            data: iter::repeat(0u8).take(small_page_size * 2).collect(),
+        };
+
+        // Create an IndexPage with the large node
+        let mut large_page = IndexPage {
+            page_id: PageID(20),
+            node: Box::new(large_node),
+            serialized: Vec::new(),
+        };
+
+        // Call needs_spliting and verify it returns true (splitting needed)
+        let needs_split = index_pages.needs_spliting(&mut large_page).expect("Failed to check if page needs splitting");
+        assert!(needs_split, "Large page should need splitting");
+
+        // Verify that the serialized field of the IndexPage is not updated
+        assert!(large_page.serialized.is_empty(), "Serialized field should not be updated for large page");
     }
 
     #[test]

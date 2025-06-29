@@ -142,7 +142,6 @@ impl PositionIndex {
     }
 
     /// Adds a key and value to a leaf node, splitting it if necessary
-    /// If the key already exists, the value is updated
     ///
     /// # Arguments
     /// * `page_id` - The PageID of the page to add the key and value to
@@ -167,18 +166,9 @@ impl PositionIndex {
                 let last_index = leaf_node.keys.len() - 1;
                 let last_key = leaf_node.keys[last_index];
 
-                if key == last_key {
-                    // Update the existing value if the key is the same as the last key
-                    leaf_node.values[last_index] = value;
+                // Only push the new key and value if it's greater than the last key
+                if key <= last_key {
                     return None;
-                } else if key < last_key {
-                    // This should not happen in an append-only store, but handle it for robustness
-                    // Check if the key already exists
-                    if let Some(index) = leaf_node.keys.iter().position(|&k| k == key) {
-                        // Update the existing value
-                        leaf_node.values[index] = value;
-                        return None;
-                    }
                 }
                 // If key > last_key, we'll append it below
             }
@@ -1494,7 +1484,7 @@ mod tests {
         // Lookup the key and verify only one record exists and it's the latest one
         let result = position_index.lookup(position).unwrap();
         assert!(result.is_some());
-        assert_eq!(&result.unwrap(), &record2);
+        assert_eq!(&result.unwrap(), &record1);
 
         // Get the root page ID
         let header_node = position_index.index_pages.header_node();

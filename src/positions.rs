@@ -142,6 +142,7 @@ impl PositionIndex {
     }
 
     /// Adds a key and value to a leaf node, splitting it if necessary
+    /// If the key already exists, the value is updated
     ///
     /// # Arguments
     /// * `page_id` - The PageID of the page to add the key and value to
@@ -158,6 +159,13 @@ impl PositionIndex {
 
             // Downcast the node to a LeafNode
             let leaf_node = page.node.as_any_mut().downcast_mut::<LeafNode>().unwrap();
+
+            // Check if the key already exists
+            if let Some(index) = leaf_node.keys.iter().position(|&k| k == key) {
+                // Update the existing value
+                leaf_node.values[index] = value;
+                return None;
+            }
 
             // Add the key and value
             leaf_node.keys.push(key);
@@ -1440,5 +1448,61 @@ mod tests {
             assert!(result.is_some());
             assert_eq!(&result.unwrap(), record);
         }
+    }
+
+    #[test]
+    fn test_no_duplicate_keys_in_leaf_node() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+
+        // Append the filename to the directory path
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Create a new PositionIndex instance
+        let page_size = 4096;
+        let mut position_index = PositionIndex::new(&test_path, page_size).unwrap();
+
+        // Create a position and two different records
+        let position: Position = 42.into();
+        let record1 = PositionIndexRecord {
+            segment: 1,
+            offset: 100,
+            type_hash: hash_type("test-1"),
+        };
+        let record2 = PositionIndexRecord {
+            segment: 2,
+            offset: 200,
+            type_hash: hash_type("test-2"),
+        };
+
+        // Insert the first record
+        position_index.insert(position, record1.clone()).unwrap();
+
+        // Try to insert a second record with the same key
+        position_index.insert(position, record2.clone()).unwrap();
+
+        // Lookup the key and verify only one record exists and it's the latest one
+        let result = position_index.lookup(position).unwrap();
+        assert!(result.is_some());
+        assert_eq!(&result.unwrap(), &record2);
+
+        // Get the root page ID
+        let header_node = position_index.index_pages.header_node();
+        let root_page_id = header_node.root_page_id;
+
+        // Get the root page
+        let page = position_index.index_pages.get_page(root_page_id).unwrap();
+
+        // Verify it's a leaf node
+        assert_eq!(page.node.node_type_byte(), LEAF_NODE_TYPE);
+
+        // Downcast to a LeafNode
+        let leaf_node = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+
+        // Count occurrences of our position in the keys
+        let key_count = leaf_node.keys.iter().filter(|&k| *k == position).count();
+
+        // Verify there's only one occurrence of the key
+        assert_eq!(key_count, 1, "Duplicate keys should not be added to leaf nodes");
     }
 }

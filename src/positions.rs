@@ -90,50 +90,7 @@ pub struct PositionIndex {
 impl PositionIndex {
     /// Creates a new PositionIndex with the given path and page size
     pub fn new<P: AsRef<Path>>(path: P, page_size: usize) -> std::io::Result<Self> {
-        let mut index_pages = IndexPages::new(path, page_size)?;
-
-        // Register deserializers for LeafNode and InternalNode
-        index_pages.deserializer.register(LEAF_NODE_TYPE, |data| {
-            let leaf_node: LeafNode = decode::from_slice(data)?;
-            Ok(Box::new(leaf_node) as Box<dyn Node>)
-        });
-
-        index_pages.deserializer.register(INTERNAL_NODE_TYPE, |data| {
-            let internal_node: InternalNode = decode::from_slice(data)?;
-            Ok(Box::new(internal_node) as Box<dyn Node>)
-        });
-
-        // Get the root page ID from the header page
-        let header_node = index_pages.header_page.node.as_any().downcast_ref::<HeaderNode>().unwrap();
-        let root_page_id = header_node.root_page_id;
-
-        // Try to get the root page
-        let root_page_result = index_pages.get_page(root_page_id);
-
-        // If the root page doesn't exist, create it
-        if root_page_result.is_err() {
-            // Create an empty LeafNode
-            let leaf_node = LeafNode {
-                keys: Vec::new(),
-                values: Vec::new(),
-                next_leaf_id: None,
-            };
-
-            // Create an IndexPage with the root page ID and the empty LeafNode
-            let root_page = IndexPage {
-                page_id: root_page_id,
-                node: Box::new(leaf_node),
-                serialized: Vec::new(),
-            };
-
-            // Add the page to the cache and mark it as dirty
-            index_pages.add_page(root_page);
-
-            // Flush changes to disk
-            index_pages.flush()?;
-        }
-
-        Ok(Self { index_pages })
+        Self::new_with_cache_capacity(path, page_size, None)
     }
 
     /// Creates a new PositionIndex with the given path, page size, and cache capacity

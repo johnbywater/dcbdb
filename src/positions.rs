@@ -5,7 +5,7 @@ use std::path::Path;
 use std::any::Any;
 use crate::pagedfile::PageID;
 use crate::wal::Position;
-use crate::indexpages::{IndexPages, Node};
+use crate::indexpages::{IndexPages, Node, IndexPage, HeaderNode, HEADER_NODE_TYPE};
 use rmp_serde::{encode, decode};
 
 const TYPE_HASH_LEN: usize = 8;
@@ -103,6 +103,36 @@ impl PositionIndex {
             Ok(Box::new(internal_node) as Box<dyn Node>)
         });
 
+        // Get the root page ID from the header page
+        let header_node = index_pages.header_page.node.as_any().downcast_ref::<HeaderNode>().unwrap();
+        let root_page_id = header_node.root_page_id;
+
+        // Try to get the root page
+        let root_page_result = index_pages.get_page(root_page_id);
+
+        // If the root page doesn't exist, create it
+        if root_page_result.is_err() {
+            // Create an empty LeafNode
+            let leaf_node = LeafNode {
+                keys: Vec::new(),
+                values: Vec::new(),
+                next_leaf_id: None,
+            };
+
+            // Create an IndexPage with the root page ID and the empty LeafNode
+            let root_page = IndexPage {
+                page_id: root_page_id,
+                node: Box::new(leaf_node),
+                serialized: Vec::new(),
+            };
+
+            // Add the page to the cache and mark it as dirty
+            index_pages.add_page(root_page);
+
+            // Flush changes to disk
+            index_pages.flush()?;
+        }
+
         Ok(Self { index_pages })
     }
 
@@ -121,6 +151,36 @@ impl PositionIndex {
             Ok(Box::new(internal_node) as Box<dyn Node>)
         });
 
+        // Get the root page ID from the header page
+        let header_node = index_pages.header_page.node.as_any().downcast_ref::<HeaderNode>().unwrap();
+        let root_page_id = header_node.root_page_id;
+
+        // Try to get the root page
+        let root_page_result = index_pages.get_page(root_page_id);
+
+        // If the root page doesn't exist, create it
+        if root_page_result.is_err() {
+            // Create an empty LeafNode
+            let leaf_node = LeafNode {
+                keys: Vec::new(),
+                values: Vec::new(),
+                next_leaf_id: None,
+            };
+
+            // Create an IndexPage with the root page ID and the empty LeafNode
+            let root_page = IndexPage {
+                page_id: root_page_id,
+                node: Box::new(leaf_node),
+                serialized: Vec::new(),
+            };
+
+            // Add the page to the cache and mark it as dirty
+            index_pages.add_page(root_page);
+
+            // Flush changes to disk
+            index_pages.flush()?;
+        }
+
         Ok(Self { index_pages })
     }
 }
@@ -137,10 +197,45 @@ mod tests {
         let path = Path::new("test_position_index.db");
 
         // Create a new PositionIndex instance using the constructor
-        let position_index = PositionIndex::new(path, 4096).unwrap();
+        let mut position_index = PositionIndex::new(path, 4096).unwrap();
 
         // Verify that the PositionIndex was created successfully
         assert!(path.exists());
+
+        // Get the root page ID from the header page
+        let header_node = position_index.index_pages.header_page.node.as_any().downcast_ref::<HeaderNode>().unwrap();
+        let root_page_id = header_node.root_page_id;
+
+        // Get the root page
+        let root_page = position_index.index_pages.get_page(root_page_id).unwrap();
+
+        // Verify that the root page contains a LeafNode
+        assert_eq!(root_page.node.node_type_byte(), LEAF_NODE_TYPE);
+
+        // Downcast the node to a LeafNode
+        let leaf_node = root_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+
+        // Verify that the LeafNode is empty
+        assert!(leaf_node.keys.is_empty());
+        assert!(leaf_node.values.is_empty());
+        assert_eq!(leaf_node.next_leaf_id, None);
+
+        // Create a second instance of PositionIndex
+        let mut position_index2 = PositionIndex::new(path, 4096).unwrap();
+
+        // Get the root page from the second instance
+        let root_page2 = position_index2.index_pages.get_page(root_page_id).unwrap();
+
+        // Verify that the root page contains a LeafNode
+        assert_eq!(root_page2.node.node_type_byte(), LEAF_NODE_TYPE);
+
+        // Downcast the node to a LeafNode
+        let leaf_node2 = root_page2.node.as_any().downcast_ref::<LeafNode>().unwrap();
+
+        // Verify that the LeafNode is empty
+        assert!(leaf_node2.keys.is_empty());
+        assert!(leaf_node2.values.is_empty());
+        assert_eq!(leaf_node2.next_leaf_id, None);
 
         // Clean up the test file
         std::fs::remove_file(path).unwrap_or(());

@@ -199,8 +199,14 @@ pub struct InternalNode {
 }
 
 impl InternalNode {
+    fn calc_serialized_size(&self) -> usize {
+        let keys_len = self.keys.len();
+        let total_size = 2 + (keys_len * 16) + (self.child_ids.len() * 8);
+        total_size
+    }
+
     /// Serializes the InternalNode to a byte array according to the specified format:
-    /// - 4 bytes for the length of the keys
+    /// - 2 bytes for the length of the keys
     /// - 16 bytes for each Position key
     /// - 8 bytes for each PageID value in child_ids
     ///
@@ -214,7 +220,7 @@ impl InternalNode {
         let mut result = Vec::with_capacity(total_size);
 
         // Serialize the length of the keys (4 bytes)
-        result.extend_from_slice(&(self.keys.len() as u32).to_le_bytes());
+        result.extend_from_slice(&(self.keys.len() as u16).to_le_bytes());
 
         // Serialize each Position key (16 bytes each)
         for key in &self.keys {
@@ -236,12 +242,6 @@ impl InternalNode {
         Ok(result)
     }
 
-    fn calc_serialized_size(&self) -> usize {
-        let keys_len = self.keys.len();
-        let total_size = 4 + (keys_len * 16) + (self.child_ids.len() * 8);
-        total_size
-    }
-
     /// Creates an InternalNode from a byte slice according to the specified format
     ///
     /// # Arguments
@@ -251,19 +251,19 @@ impl InternalNode {
     /// * `Result<InternalNode, decode::Error>` - The deserialized InternalNode or an error
     pub fn from_slice(slice: &[u8]) -> Result<Self, decode::Error> {
         // Check if the slice has at least 4 bytes for the keys_len
-        if slice.len() < 4 {
+        if slice.len() < 2 {
             return Err(decode::Error::InvalidMarkerRead(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("Expected at least 4 bytes, got {}", slice.len()),
+                format!("Expected at least 2 bytes, got {}", slice.len()),
             )));
         }
 
         // Extract the length of the keys (first 4 bytes)
-        let keys_len = u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]) as usize;
+        let keys_len = u16::from_le_bytes([slice[0], slice[1]]) as usize;
 
         // Calculate the expected size of the slice
         // 4 bytes for keys_len + 16 bytes per key + 8 bytes per child_id (keys_len + 1 child_ids)
-        let expected_size = 4 + (keys_len * 16) + ((keys_len + 1) * 8);
+        let expected_size = 2 + (keys_len * 16) + ((keys_len + 1) * 8);
         if slice.len() < expected_size {
             return Err(decode::Error::InvalidMarkerRead(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -274,7 +274,7 @@ impl InternalNode {
         // Extract the Position keys (16 bytes each, but only first 8 bytes are used)
         let mut keys = Vec::with_capacity(keys_len);
         for i in 0..keys_len {
-            let start = 4 + (i * 16);
+            let start = 2 + (i * 16);
             let key = i64::from_le_bytes([
                 slice[start], slice[start + 1], slice[start + 2], slice[start + 3],
                 slice[start + 4], slice[start + 5], slice[start + 6], slice[start + 7],
@@ -286,7 +286,7 @@ impl InternalNode {
         // Extract the PageID values (8 bytes each, but only first 4 bytes are used)
         let mut child_ids = Vec::with_capacity(keys_len + 1);
         for i in 0..(keys_len + 1) {
-            let start = 4 + (keys_len * 16) + (i * 8);
+            let start = 2 + (keys_len * 16) + (i * 8);
             let page_id = u32::from_le_bytes([
                 slice[start], slice[start + 1], slice[start + 2], slice[start + 3],
             ]);

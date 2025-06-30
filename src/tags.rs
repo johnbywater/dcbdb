@@ -628,10 +628,36 @@ impl TagIndex {
         let new_page_id = self.index_pages.alloc_page_id();
 
         // When splitting, we need to decide which keys go to the new node
-        // For simplicity, we'll put the new key in a new node
+        // Move half of the keys and values to the new node
+
+        // Get a mutable reference to the page
+        let page = self.index_pages.get_page_mut(page_id).unwrap();
+        let leaf_node = page.node.as_any_mut().downcast_mut::<LeafNode>().unwrap();
+
+        // Find the correct insertion point for the new key
+        let insert_index = match leaf_node.keys.binary_search(&key) {
+            Ok(index) => index, // This shouldn't happen as we already checked for duplicates
+            Err(index) => index,
+        };
+
+        // Insert the new key and value at the correct position
+        leaf_node.keys.insert(insert_index, key);
+        leaf_node.values.insert(insert_index, value);
+
+        // Calculate the midpoint
+        let mid = leaf_node.keys.len() / 2;
+
+        // Move the second half of the keys and values to the new node
+        let new_keys = leaf_node.keys.split_off(mid);
+        let new_values = leaf_node.values.split_off(mid);
+
+        // Store the first key of the new leaf node
+        let first_key = new_keys[0];
+
+        // Create a new LeafNode with the second half of the keys and values
         let new_leaf_node = LeafNode {
-            keys: vec![key],
-            values: vec![value],
+            keys: new_keys,
+            values: new_values,
         };
 
         // Create a new IndexPage with the new LeafNode
@@ -647,7 +673,7 @@ impl TagIndex {
         self.index_pages.add_page(new_page);
 
         // Return the first key of the new leaf node and the new page ID
-        Some((key, new_page_id))
+        Some((first_key, new_page_id))
     }
 }
 
@@ -1312,22 +1338,57 @@ mod tests {
         assert!(split_result.is_some());
         let (first_key, new_page_id) = split_result.unwrap();
 
-        // Verify the first key of the new leaf node
-        assert_eq!(first_key, new_key);
+        // Check the original page
+        {
+            let original_page = tag_index.index_pages.get_page(page_id).unwrap();
+            let original_leaf = original_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
 
-        // Get the original page and verify it has 10 keys and values
-        let original_page = tag_index.index_pages.get_page(page_id).unwrap();
-        let original_leaf = original_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
-        assert_eq!(original_leaf.keys.len(), 10);
-        assert_eq!(original_leaf.values.len(), 10);
+            // Verify it has 5 keys and values (half of the original 10 + 1 new)
+            assert_eq!(original_leaf.keys.len(), 5);
+            assert_eq!(original_leaf.values.len(), 5);
 
-        // Get the new page and verify it has 1 key and value
-        let new_page = tag_index.index_pages.get_page(new_page_id).unwrap();
-        let new_leaf = new_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
-        assert_eq!(new_leaf.keys.len(), 1);
-        assert_eq!(new_leaf.values.len(), 1);
-        assert_eq!(new_leaf.keys[0], new_key);
-        assert_eq!(new_leaf.values[0], new_value);
+            // Check if the new key is in the original node
+            let new_key_in_original = original_leaf.keys.contains(&new_key);
+            if new_key_in_original {
+                let index = original_leaf.keys.iter().position(|k| *k == new_key).unwrap();
+                assert_eq!(original_leaf.values[index], new_value);
+            }
+        }
+
+        // Check the new page
+        {
+            let new_page = tag_index.index_pages.get_page(new_page_id).unwrap();
+            let new_leaf = new_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+
+            // Verify it has 6 keys and values (the other half of the original 10 + 1 new)
+            assert_eq!(new_leaf.keys.len(), 6);
+            assert_eq!(new_leaf.values.len(), 6);
+
+            // Verify the first key of the new leaf node matches what was returned
+            assert_eq!(first_key, new_leaf.keys[0]);
+
+            // Check if the new key is in the new node
+            let new_key_in_new = new_leaf.keys.contains(&new_key);
+            if new_key_in_new {
+                let index = new_leaf.keys.iter().position(|k| *k == new_key).unwrap();
+                assert_eq!(new_leaf.values[index], new_value);
+            }
+        }
+
+        // Verify that the new key is in one of the nodes
+        let new_key_in_original = {
+            let original_page = tag_index.index_pages.get_page(page_id).unwrap();
+            let original_leaf = original_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+            original_leaf.keys.contains(&new_key)
+        };
+
+        let new_key_in_new = {
+            let new_page = tag_index.index_pages.get_page(new_page_id).unwrap();
+            let new_leaf = new_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+            new_leaf.keys.contains(&new_key)
+        };
+
+        assert!(new_key_in_original || new_key_in_new, "New key not found in either node");
 
         // No need to clean up the test file, it will be removed when temp_dir goes out of scope
     }

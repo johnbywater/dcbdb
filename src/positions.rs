@@ -853,6 +853,18 @@ mod tests {
 
         // Verify the node type byte
         assert_eq!(leaf_node.node_type_byte(), LEAF_NODE_TYPE);
+
+        // Calculate the serialized page size
+        let page_size = leaf_node.calc_serialized_page_size();
+
+        // Calculate the expected size: 
+        // 4 bytes for next_leaf_id + 2 bytes for keys length + 
+        // (3 keys * 8 bytes) + (3 values * 16 bytes) + 9 bytes for page overhead
+        let expected_size = 4 + 2 + (3 * 8) + (3 * 16) + 9;
+
+        // Verify that the page size is correct
+        assert_eq!(page_size, expected_size, 
+                   "Page size should be {} bytes", expected_size);
     }
 
     #[test]
@@ -892,6 +904,18 @@ mod tests {
 
         // Verify the node type byte
         assert_eq!(internal_node.node_type_byte(), INTERNAL_NODE_TYPE);
+
+        // Calculate the serialized page size
+        let page_size = internal_node.calc_serialized_page_size();
+
+        // Calculate the expected size: 
+        // 2 bytes for keys length + 
+        // (3 keys * 8 bytes) + (4 child_ids * 4 bytes) + 9 bytes for page overhead
+        let expected_size = 2 + (3 * 8) + (4 * 4) + 9;
+
+        // Verify that the page size is correct
+        assert_eq!(page_size, expected_size, 
+                   "Page size should be {} bytes", expected_size);
     }
 
     #[test]

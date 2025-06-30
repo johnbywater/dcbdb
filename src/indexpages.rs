@@ -41,6 +41,15 @@ pub trait Node: Any {
     /// # Returns
     /// * `usize` - The size of the serialized node in bytes
     fn calc_serialized_size(&self) -> usize;
+
+    /// Calculates the size of the serialized page including the node type byte, CRC, and data length
+    ///
+    /// # Returns
+    /// * `usize` - The size of the serialized page in bytes
+    fn calc_serialized_page_size(&self) -> usize {
+        // 1 byte for node type + 4 bytes for CRC + 4 bytes for data length + serialized size
+        self.calc_serialized_size() + 9
+    }
 }
 
 /// A structure that represents a header node in the index
@@ -826,6 +835,13 @@ mod tests {
                    "root_page_id should match after serialization/deserialization");
         assert_eq!(deserialized.next_page_id, header_node.next_page_id, 
                    "next_page_id should match after serialization/deserialization");
+
+        // Calculate the serialized page size
+        let page_size = header_node.calc_serialized_page_size();
+
+        // Verify that the page size is correct (8 bytes for the node + 9 bytes for the page overhead)
+        assert_eq!(page_size, 17, 
+                   "Page size should be 17 bytes (8 bytes for the node + 9 bytes for the page overhead)");
     }
 
     #[test]

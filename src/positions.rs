@@ -54,8 +54,8 @@ impl LeafNode {
     /// - 16 bytes for each PositionIndexRecord value (4 bytes for segment, 4 bytes for offset, 8 bytes for type_hash)
     ///
     /// # Returns
-    /// * `Result<Vec<u8>, encode::Error>` - The serialized data or an error
-    pub fn serialize(&self) -> Result<Vec<u8>, encode::Error> {
+    /// * `Vec<u8>` - The serialized data
+    pub fn serialize(&self) -> Vec<u8> {
         // Calculate the total size of the serialized data
         let total_size = self.calc_serialized_size();
 
@@ -93,7 +93,7 @@ impl LeafNode {
             result.extend_from_slice(&type_hash_bytes);
         }
 
-        Ok(result)
+        result
     }
 
     /// Creates a LeafNode from a byte slice according to the specified format
@@ -190,7 +190,7 @@ impl Node for LeafNode {
         self
     }
 
-    fn serialize(&self) -> Result<Vec<u8>, encode::Error> {
+    fn serialize(&self) -> Vec<u8> {
         self.serialize()
     }
 
@@ -219,8 +219,8 @@ impl InternalNode {
     /// - 8 bytes for each PageID value in child_ids
     ///
     /// # Returns
-    /// * `Result<Vec<u8>, encode::Error>` - The serialized data or an error
-    pub fn serialize(&self) -> Result<Vec<u8>, encode::Error> {
+    /// * `Vec<u8>` - The serialized data
+    pub fn serialize(&self) -> Vec<u8> {
         // Calculate the total size of the serialized data
         let total_size = self.calc_serialized_size();
 
@@ -242,7 +242,7 @@ impl InternalNode {
             result.extend_from_slice(&child_id.0.to_le_bytes());
         }
 
-        Ok(result)
+        result
     }
 
     /// Creates an InternalNode from a byte slice according to the specified format
@@ -319,7 +319,7 @@ impl Node for InternalNode {
         self
     }
 
-    fn serialize(&self) -> Result<Vec<u8>, encode::Error> {
+    fn serialize(&self) -> Vec<u8> {
         self.serialize()
     }
 
@@ -836,7 +836,7 @@ mod tests {
         };
 
         // Serialize the node
-        let serialized = leaf_node.serialize().expect("Failed to serialize LeafNode");
+        let serialized = leaf_node.serialize();
 
         // Deserialize the node
         let deserialized: LeafNode = LeafNode::from_slice(&serialized).unwrap();
@@ -873,7 +873,7 @@ mod tests {
         };
 
         // Serialize the node
-        let serialized = internal_node.serialize().expect("Failed to serialize InternalNode");
+        let serialized = internal_node.serialize();
 
         // Deserialize the node
         let deserialized: InternalNode = InternalNode::from_slice(&serialized).unwrap();

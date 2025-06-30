@@ -33,8 +33,8 @@ pub trait Node: Any {
     /// Serializes the node to a byte array
     ///
     /// # Returns
-    /// * `Result<Vec<u8>, rmp_serde::encode::Error>` - The serialized data or an error
-    fn serialize(&self) -> Result<Vec<u8>, encode::Error>;
+    /// * `Vec<u8>` - The serialized data
+    fn serialize(&self) -> Vec<u8>;
 
     /// Calculates the size of the serialized node
     ///
@@ -63,12 +63,12 @@ impl HeaderNode {
     /// First 4 bytes for root_page_id and next 4 bytes for next_page_id
     ///
     /// # Returns
-    /// * `Result<Vec<u8>, encode::Error>` - The serialized data or an error
-    pub fn serialize(&self) -> Result<Vec<u8>, encode::Error> {
+    /// * `Vec<u8>` - The serialized data
+    pub fn serialize(&self) -> Vec<u8> {
         let mut result = Vec::with_capacity(8);
         result.extend_from_slice(&self.root_page_id.0.to_le_bytes());
         result.extend_from_slice(&self.next_page_id.0.to_le_bytes());
-        Ok(result)
+        result
     }
 
     /// Calculates the size of the serialized HeaderNode
@@ -122,7 +122,7 @@ impl Node for HeaderNode {
         self
     }
 
-    fn serialize(&self) -> Result<Vec<u8>, encode::Error> {
+    fn serialize(&self) -> Vec<u8> {
         self.serialize()
     }
 
@@ -813,7 +813,7 @@ mod tests {
         };
 
         // Serialize the HeaderNode to msgpack
-        let serialized = header_node.serialize().expect("Failed to serialize HeaderNode");
+        let serialized = header_node.serialize();
 
         // Deserialize the msgpack data back to a HeaderNode
         let deserialized: HeaderNode = HeaderNode::from_slice(&serialized)
@@ -1580,8 +1580,8 @@ mod tests {
                 self
             }
 
-            fn serialize(&self) -> Result<Vec<u8>, encode::Error> {
-                Ok(self.data.clone())
+            fn serialize(&self) -> Vec<u8> {
+                self.data.clone()
             }
 
             fn calc_serialized_size(&self) -> usize {

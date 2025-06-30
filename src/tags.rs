@@ -28,15 +28,14 @@ pub const LEAF_NODE_TYPE: u8 = 3;
 pub struct LeafNode {
     pub keys: Vec<[u8; TAG_HASH_LEN]>,
     pub values: Vec<Vec<Position>>,
-    pub next_leaf_id: Option<PageID>,
 }
 
 impl LeafNode {
     fn calc_serialized_size(&self) -> usize {
         // This is a simplified implementation for now
-        // 4 bytes for next_leaf_id + 2 bytes for keys_len + keys * (8 bytes per key) + values size
+        // 2 bytes for keys_len + keys * (8 bytes per key) + values size
         let keys_len = self.keys.len();
-        let mut total_size = 4 + 2 + (keys_len * TAG_HASH_LEN);
+        let mut total_size = 2 + (keys_len * TAG_HASH_LEN);
 
         // Add size for values (simplified for now)
         for value in &self.values {
@@ -51,13 +50,6 @@ impl LeafNode {
         // This is a simplified implementation for now
         let total_size = self.calc_serialized_size();
         let mut result = Vec::with_capacity(total_size);
-
-        // Serialize the next_leaf_id (4 bytes)
-        let next_leaf_id = match self.next_leaf_id {
-            Some(id) => id.0,
-            None => 0, // Use 0 to represent None
-        };
-        result.extend_from_slice(&next_leaf_id.to_le_bytes());
 
         // Serialize the length of the keys (2 bytes)
         result.extend_from_slice(&(self.keys.len() as u16).to_le_bytes());
@@ -83,23 +75,19 @@ impl LeafNode {
 
     pub fn from_slice(slice: &[u8]) -> Result<Self, std::io::Error> {
         // This is a simplified implementation for now
-        // Check if the slice has at least 6 bytes (4 for next_leaf_id, 2 for keys_len)
-        if slice.len() < 6 {
+        // Check if the slice has at least 2 bytes for keys_len
+        if slice.len() < 2 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("Expected at least 6 bytes, got {}", slice.len()),
+                format!("Expected at least 2 bytes, got {}", slice.len()),
             ));
         }
 
-        // Extract the next_leaf_id (first 4 bytes)
-        let next_leaf_id = u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]);
-        let next_leaf_id = if next_leaf_id == 0 { None } else { Some(PageID(next_leaf_id)) };
-
-        // Extract the length of the keys (next 2 bytes)
-        let keys_len = u16::from_le_bytes([slice[4], slice[5]]) as usize;
+        // Extract the length of the keys (first 2 bytes)
+        let keys_len = u16::from_le_bytes([slice[0], slice[1]]) as usize;
 
         // Calculate the minimum expected size for the keys
-        let min_expected_size = 6 + (keys_len * TAG_HASH_LEN);
+        let min_expected_size = 2 + (keys_len * TAG_HASH_LEN);
         if slice.len() < min_expected_size {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -110,7 +98,7 @@ impl LeafNode {
         // Extract the keys (8 bytes each)
         let mut keys = Vec::with_capacity(keys_len);
         for i in 0..keys_len {
-            let start = 6 + (i * TAG_HASH_LEN);
+            let start = 2 + (i * TAG_HASH_LEN);
             let mut key = [0u8; TAG_HASH_LEN];
             key.copy_from_slice(&slice[start..start + TAG_HASH_LEN]);
             keys.push(key);
@@ -118,7 +106,7 @@ impl LeafNode {
 
         // Extract the values (simplified for now)
         let mut values = Vec::with_capacity(keys_len);
-        let mut offset = 6 + (keys_len * TAG_HASH_LEN);
+        let mut offset = 2 + (keys_len * TAG_HASH_LEN);
 
         for _ in 0..keys_len {
             if offset + 2 > slice.len() {
@@ -157,7 +145,6 @@ impl LeafNode {
         Ok(LeafNode {
             keys,
             values,
-            next_leaf_id,
         })
     }
 }
@@ -328,7 +315,6 @@ impl TagIndex {
             let leaf_node = LeafNode {
                 keys: Vec::new(),
                 values: Vec::new(),
-                next_leaf_id: None,
             };
 
             // Create an IndexPage with the root page ID and the empty LeafNode
@@ -384,7 +370,6 @@ mod tests {
         // Verify that the LeafNode is empty
         assert!(leaf_node.keys.is_empty());
         assert!(leaf_node.values.is_empty());
-        assert_eq!(leaf_node.next_leaf_id, None);
 
         // Create a second instance of TagIndex
         let mut tag_index2 = TagIndex::new(&test_path, 4096).unwrap();
@@ -401,7 +386,6 @@ mod tests {
         // Verify that the LeafNode is empty
         assert!(leaf_node2.keys.is_empty());
         assert!(leaf_node2.values.is_empty());
-        assert_eq!(leaf_node2.next_leaf_id, None);
 
         // No need to clean up the test file, it will be removed when temp_dir goes out of scope
     }
@@ -434,7 +418,6 @@ mod tests {
                 vec![2000, 2001],       // Positions for tag2
                 vec![3000],             // Positions for tag3
             ],
-            next_leaf_id: Some(PageID(42)),
         };
 
         // Serialize the node
@@ -446,7 +429,6 @@ mod tests {
         // Verify that the deserialized node matches the original
         assert_eq!(deserialized.keys.len(), leaf_node.keys.len());
         assert_eq!(deserialized.values.len(), leaf_node.values.len());
-        assert_eq!(deserialized.next_leaf_id, leaf_node.next_leaf_id);
 
         for i in 0..leaf_node.keys.len() {
             assert_eq!(deserialized.keys[i], leaf_node.keys[i]);
@@ -460,13 +442,13 @@ mod tests {
         let page_size = leaf_node.calc_serialized_page_size();
 
         // Calculate the expected size: 
-        // 4 bytes for next_leaf_id + 2 bytes for keys length + 
+        // 2 bytes for keys length + 
         // (3 keys * 8 bytes) + 
         // (2 bytes for value1 length + 3 positions * 8 bytes) +
         // (2 bytes for value2 length + 2 positions * 8 bytes) +
         // (2 bytes for value3 length + 1 position * 8 bytes) +
         // 9 bytes for page overhead
-        let expected_size = 4 + 2 + (3 * TAG_HASH_LEN) + 
+        let expected_size = 2 + (3 * TAG_HASH_LEN) + 
                            (2 + 3 * 8) + (2 + 2 * 8) + (2 + 1 * 8) + 9;
 
         // Verify that the page size is correct

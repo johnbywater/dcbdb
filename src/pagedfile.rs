@@ -12,6 +12,7 @@ pub const PAGE_SIZE: usize = 4096;
 // Page ID type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
 pub struct PageID(pub u32);
+pub const PAGE_ID_SIZE: usize = 4; 
 
 impl fmt::Display for PageID {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

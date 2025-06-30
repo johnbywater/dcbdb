@@ -639,8 +639,7 @@ mod tests {
                    "node_type_byte should match after deserialization");
 
         // Serialize the node data from the deserialized page
-        let reserialized_data = deserialized_page.node.to_msgpack()
-            .expect("Failed to serialize node data from deserialized page");
+        let reserialized_data = deserialized_page.node.serialize();
 
         // Deserialize the original node data for comparison
         let original_node_data = &serialized_data[9..];
@@ -831,7 +830,7 @@ mod tests {
             next_page_id: PageID(8),
         };
 
-        // Create an IndexPage with the HeaderNode and empty serialized data
+        // Create an IndexPage with the HeaderNode
         let index_page = IndexPage {
             page_id: PageID(9),
             node: Box::new(header_node),
@@ -845,7 +844,7 @@ mod tests {
         let serialized_data = index_page.node.serialize_page();
 
         // Get the raw node data for comparison
-        let node_data = index_page.node.to_msgpack().expect("Failed to re-serialize HeaderNode");
+        let node_data = index_page.node.serialize();
 
         // Verify that the serialized data contains the node data
         assert!(serialized_data.len() > node_data.len(), 
@@ -951,8 +950,7 @@ mod tests {
                    "node_type_byte should match after deserialization");
 
         // Serialize the node data from the deserialized page
-        let reserialized_data = deserialized_page.node.to_msgpack()
-            .expect("Failed to serialize node data from deserialized page");
+        let reserialized_data = deserialized_page.node.serialize();
 
         // Deserialize the original node data for comparison
         let original_node_data = &serialized_data[9..];

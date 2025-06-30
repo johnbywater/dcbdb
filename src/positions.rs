@@ -3,7 +3,7 @@ use uuid::{uuid, Uuid};
 use std::format;
 use std::path::Path;
 use std::any::Any;
-use crate::pagedfile::PageID;
+use crate::pagedfile::{PageID, PAGE_ID_SIZE};
 use crate::wal::{Position, POSITION_SIZE};
 use crate::indexpages::{IndexPages, Node, IndexPage, HeaderNode};
 use rmp_serde::{encode, decode};
@@ -403,7 +403,7 @@ impl PositionIndex {
             // if the leaf node is empty or if the key is greater than the last key
             let page = self.index_pages.get_page(page_id).unwrap();
             let leaf_node = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
-            
+
             if !leaf_node.keys.is_empty() {
                 let last_index = leaf_node.keys.len() - 1;
                 let last_key = leaf_node.keys[last_index];
@@ -413,7 +413,7 @@ impl PositionIndex {
             }
         }
         let max_page_size = self.get_max_page_size();
-        
+
         // Check if there is space for this key and value in the leaf node
         let needs_splitting: bool = {
             let page = self.index_pages.get_page(page_id).unwrap();
@@ -473,10 +473,6 @@ impl PositionIndex {
         Some((key, new_page_id))
     }
 
-    fn get_max_page_size(&mut self) -> usize {
-        self.index_pages.paged_file.page_size
-    }
-
     /// Adds a key and value to an internal node, splitting it if necessary
     ///
     /// # Arguments
@@ -487,8 +483,17 @@ impl PositionIndex {
     /// # Returns
     /// * `Option<(Position, PageID)>` - If the internal node was split, returns the promoted key and the new page ID
     pub fn append_internal_key_and_value(&mut self, page_id: PageID, key: Position, child_id: PageID) -> Option<(Position, PageID)> {
+        let max_page_size = self.get_max_page_size();
+
+        // Check if there is space for this key and value in the leaf node
+        let needs_splitting: bool = {
+            let page = self.index_pages.get_page(page_id).unwrap();
+            let page_size = page.node.calc_serialized_page_size();
+            page_size + PAGE_ID_SIZE + POSITION_SIZE > max_page_size
+        };
+
         // Add the key and child_id to the internal node
-        {
+        if !needs_splitting {
             // Get a mutable reference to the page
             let page = self.index_pages.get_page_mut(page_id).unwrap();
 
@@ -498,67 +503,50 @@ impl PositionIndex {
             // Add the key and child_id
             internal_node.keys.push(key);
             internal_node.child_ids.push(child_id);
+            self.index_pages.mark_dirty(page_id);
+            return None;
         }
 
-        // Check if the page needs splitting by serializing it and checking if it's too large
-        let needs_splitting = {
-            let page = self.index_pages.get_page_mut(page_id).unwrap();
-            let serialized = page.node.serialize_page();
-            serialized.len() > self.index_pages.paged_file.page_size
+        // Get a mutable reference to the page
+        let page = self.index_pages.get_page_mut(page_id).unwrap();
+
+        // Downcast the node to an InternalNode
+        let internal_node = page.node.as_any_mut().downcast_mut::<InternalNode>().unwrap();
+
+
+        // Get the last key
+        let promote_key = internal_node.keys.pop().unwrap();
+
+        // Get the last two child_ids
+        let last_child_id = internal_node.child_ids.pop().unwrap();
+
+        // Allocate a new page ID
+        let new_page_id = self.index_pages.alloc_page_id();
+
+        // Create a new InternalNode with the new key and last two child_ids
+        let new_internal_node = InternalNode {
+            keys: vec![key],
+            child_ids: vec![last_child_id, child_id],
         };
 
-        if !needs_splitting {
-            // If the internal node doesn't need splitting, just mark the page as dirty
-            self.index_pages.mark_dirty(page_id);
-            None
-        } else {
-            // If the internal node needs splitting, split it according to the specified logic
-            // Extract the promote_key, last key, and last two child_ids from the internal node
-            let (promote_key, last_key, last_two_child_ids) = {
-                // Get a mutable reference to the page
-                let page = self.index_pages.get_page_mut(page_id).unwrap();
+        // Create a new IndexPage with the new InternalNode
+        let new_page = IndexPage {
+            page_id: new_page_id,
+            node: Box::new(new_internal_node),
+        };
 
-                // Downcast the node to an InternalNode
-                let internal_node = page.node.as_any_mut().downcast_mut::<InternalNode>().unwrap();
+        // Mark the original page as dirty
+        self.index_pages.mark_dirty(page_id);
 
+        // Add the new page to the collection
+        self.index_pages.add_page(new_page);
 
-                // Get the last key
-                let last_key = internal_node.keys.pop().unwrap();
+        // Return the promote_key and the new page ID
+        Some((promote_key, new_page_id))
+    }
 
-                // Get the promote_key (second-to-last key)
-                let promote_key = internal_node.keys.pop().unwrap();
-
-                // Get the last two child_ids
-                let last_child_id = internal_node.child_ids.pop().unwrap();
-                let second_last_child_id = internal_node.child_ids.pop().unwrap();
-
-                (promote_key, last_key, vec![second_last_child_id, last_child_id])
-            };
-
-            // Allocate a new page ID
-            let new_page_id = self.index_pages.alloc_page_id();
-
-            // Create a new InternalNode with the last key and last two child_ids
-            let new_internal_node = InternalNode {
-                keys: vec![last_key],
-                child_ids: last_two_child_ids,
-            };
-
-            // Create a new IndexPage with the new InternalNode
-            let new_page = IndexPage {
-                page_id: new_page_id,
-                node: Box::new(new_internal_node),
-            };
-
-            // Mark the original page as dirty
-            self.index_pages.mark_dirty(page_id);
-
-            // Add the new page to the collection
-            self.index_pages.add_page(new_page);
-
-            // Return the promote_key and the new page ID
-            Some((promote_key, new_page_id))
-        }
+    fn get_max_page_size(&mut self) -> usize {
+        self.index_pages.paged_file.page_size
     }
 
     /// Inserts a key and value into the position index
@@ -1240,7 +1228,7 @@ mod tests {
             values,
             next_leaf_id: None,
         };
-        
+
         let serialized_size = leaf_node.calc_serialized_page_size();
 
         // Create an IndexPage with the LeafNode
@@ -1722,7 +1710,7 @@ mod tests {
 
         // Insert a few records
         let mut inserted: Vec<(Position, PositionIndexRecord)> = Vec::new();
-        for i in 0..10000 {
+        for i in 0..150000 {
             let position = (i + 1).into();
             let record = PositionIndexRecord {
                 segment: i,
@@ -1733,21 +1721,21 @@ mod tests {
             position_index.insert(position, record.clone()).unwrap();
             inserted.push((position, record));
         }
-
+        
         // Check lookup before flush
         for (position, record) in &inserted {
             let result = position_index.lookup(*position).unwrap();
             assert!(result.is_some());
             assert_eq!(&result.unwrap(), record);
         }
-
+        
         // Flush changes to disk
         position_index.index_pages.flush().unwrap();
-
+        
         // Create another instance of PositionIndex
         let mut position_index2 = PositionIndex::new(&test_path, page_size).unwrap();
-
-
+        
+        
         // Check lookup after flush
         for (position, record) in &inserted {
             let result = position_index2.lookup(*position).unwrap();

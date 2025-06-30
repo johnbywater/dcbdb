@@ -405,4 +405,84 @@ mod tests {
 
         // No need to clean up the test file, it will be removed when temp_dir goes out of scope
     }
+
+    #[test]
+    fn test_leaf_node_serialization() {
+        // Create a non-trivial LeafNode instance
+        let mut key1 = [0u8; TAG_HASH_LEN];
+        let mut key2 = [0u8; TAG_HASH_LEN];
+        let mut key3 = [0u8; TAG_HASH_LEN];
+
+        // Use hash_tag to generate tag hashes
+        let tag1_hash = hash_tag("user");
+        let tag2_hash = hash_tag("product");
+        let tag3_hash = hash_tag("order");
+
+        // Copy the hash values to the fixed-size arrays
+        key1.copy_from_slice(&tag1_hash[..TAG_HASH_LEN]);
+        key2.copy_from_slice(&tag2_hash[..TAG_HASH_LEN]);
+        key3.copy_from_slice(&tag3_hash[..TAG_HASH_LEN]);
+
+        let leaf_node = LeafNode {
+            keys: vec![
+                key1,
+                key2,
+                key3,
+            ],
+            values: vec![
+                vec![1000, 1001, 1002], // Positions for tag1
+                vec![2000, 2001],       // Positions for tag2
+                vec![3000],             // Positions for tag3
+            ],
+            next_leaf_id: Some(PageID(42)),
+        };
+
+        // Serialize the node
+        let serialized = leaf_node.serialize();
+
+        // Deserialize the node
+        let deserialized: LeafNode = LeafNode::from_slice(&serialized).unwrap();
+
+        // Verify that the deserialized node matches the original
+        assert_eq!(deserialized.keys.len(), leaf_node.keys.len());
+        assert_eq!(deserialized.values.len(), leaf_node.values.len());
+        assert_eq!(deserialized.next_leaf_id, leaf_node.next_leaf_id);
+
+        for i in 0..leaf_node.keys.len() {
+            assert_eq!(deserialized.keys[i], leaf_node.keys[i]);
+            assert_eq!(deserialized.values[i], leaf_node.values[i]);
+        }
+
+        // Verify the node type byte
+        assert_eq!(leaf_node.node_type_byte(), LEAF_NODE_TYPE);
+
+        // Calculate the serialized page size
+        let page_size = leaf_node.calc_serialized_page_size();
+
+        // Calculate the expected size: 
+        // 4 bytes for next_leaf_id + 2 bytes for keys length + 
+        // (3 keys * 8 bytes) + 
+        // (2 bytes for value1 length + 3 positions * 8 bytes) +
+        // (2 bytes for value2 length + 2 positions * 8 bytes) +
+        // (2 bytes for value3 length + 1 position * 8 bytes) +
+        // 9 bytes for page overhead
+        let expected_size = 4 + 2 + (3 * TAG_HASH_LEN) + 
+                           (2 + 3 * 8) + (2 + 2 * 8) + (2 + 1 * 8) + 9;
+
+        // Verify that the page size is correct
+        assert_eq!(page_size, expected_size, 
+                   "Page size should be {} bytes", expected_size);
+
+        // Serialize the LeafNode to a page format
+        let page_data = leaf_node.serialize_page();
+
+        // Verify that the page data is not empty
+        assert!(!page_data.is_empty(), "Page data should not be empty");
+
+        // Verify that the page data has the correct length
+        assert_eq!(page_data.len(), expected_size, "Page data should be {} bytes", expected_size);
+
+        // Verify that the page data starts with the correct node type byte
+        assert_eq!(page_data[0], LEAF_NODE_TYPE, "Page data should start with the leaf node type byte");
+    }
 }

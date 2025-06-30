@@ -563,6 +563,40 @@ impl TagIndex {
         self.index_pages.paged_file.page_size
     }
 
+    /// Appends a position to a tag leaf node if it's greater than the last position
+    ///
+    /// # Arguments
+    /// * `page_id` - The PageID of the page containing the TagLeafNode
+    /// * `position` - The Position to append
+    ///
+    /// # Returns
+    /// * `bool` - true if the position was appended, false otherwise
+    pub fn append_tag_leaf_position(&mut self, page_id: PageID, position: Position) -> bool {
+        // Get a reference to the page
+        let page = self.index_pages.get_page(page_id).unwrap();
+        let tag_leaf_node = page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
+
+        // Check if the position is greater than the last position in the TagLeafNode
+        if !tag_leaf_node.positions.is_empty() {
+            let last_position = tag_leaf_node.positions[tag_leaf_node.positions.len() - 1];
+            if position <= last_position {
+                return false;
+            }
+        }
+
+        // Get a mutable reference to the page
+        let page = self.index_pages.get_page_mut(page_id).unwrap();
+        let tag_leaf_node = page.node.as_any_mut().downcast_mut::<TagLeafNode>().unwrap();
+
+        // Append the position
+        tag_leaf_node.positions.push(position);
+
+        // Mark the page as dirty
+        self.index_pages.mark_dirty(page_id);
+
+        true
+    }
+
     /// Adds a key and value to a leaf node, splitting it if necessary
     ///
     /// # Arguments
@@ -1713,5 +1747,87 @@ mod tests {
 
         // Verify that the TagLeafNode's next_leaf_id is still None
         assert_eq!(tag_leaf_node2.next_leaf_id, None);
+    }
+
+    #[test]
+    fn test_append_tag_leaf_position_without_split() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+
+        // Append the filename to the directory path
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Create a new TagIndex instance
+        let mut tag_index = TagIndex::new(&test_path, 4096).unwrap();
+
+        // Create a TagLeafNode with some positions
+        let tag_leaf_node = TagLeafNode {
+            positions: vec![1000, 2000, 3000],
+            next_leaf_id: None,
+        };
+
+        // Allocate a page ID for the TagLeafNode
+        let tag_leaf_page_id = tag_index.index_pages.alloc_page_id();
+
+        // Create an IndexPage with the TagLeafNode
+        let tag_leaf_page = IndexPage {
+            page_id: tag_leaf_page_id,
+            node: Box::new(tag_leaf_node),
+        };
+
+        // Add the page to the index
+        tag_index.index_pages.add_page(tag_leaf_page);
+
+        // Add a new Position that is greater than the last existing position
+        let new_position = 4000;
+        let result = tag_index.append_tag_leaf_position(tag_leaf_page_id, new_position);
+
+        // Verify that the Position was appended
+        assert!(result, "Position should have been appended");
+
+        // Get the page and verify it now has 4 positions
+        let page = tag_index.index_pages.get_page(tag_leaf_page_id).unwrap();
+        let tag_leaf = page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
+        assert_eq!(tag_leaf.positions.len(), 4);
+        assert_eq!(tag_leaf.positions[3], new_position);
+
+        // Try to add a Position that is less than the last existing position
+        let duplicate_position = 3000;
+        let result = tag_index.append_tag_leaf_position(tag_leaf_page_id, duplicate_position);
+
+        // Verify that the Position was not appended
+        assert!(!result, "Position should not have been appended");
+
+        // Get the page and verify it still has 4 positions
+        let page = tag_index.index_pages.get_page(tag_leaf_page_id).unwrap();
+        let tag_leaf = page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
+        assert_eq!(tag_leaf.positions.len(), 4);
+
+        // Try to add a Position that is equal to the last existing position
+        let equal_position = 4000;
+        let result = tag_index.append_tag_leaf_position(tag_leaf_page_id, equal_position);
+
+        // Verify that the Position was not appended
+        assert!(!result, "Position should not have been appended");
+
+        // Get the page and verify it still has 4 positions
+        let page = tag_index.index_pages.get_page(tag_leaf_page_id).unwrap();
+        let tag_leaf = page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
+        assert_eq!(tag_leaf.positions.len(), 4);
+
+        // Flush changes to disk
+        tag_index.index_pages.flush().unwrap();
+
+        // Create another instance of TagIndex
+        let mut tag_index2 = TagIndex::new(&test_path, 4096).unwrap();
+
+        // Get the page and verify it still has 4 positions
+        let page2 = tag_index2.index_pages.get_page(tag_leaf_page_id).unwrap();
+        let tag_leaf2 = page2.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
+        assert_eq!(tag_leaf2.positions.len(), 4);
+        assert_eq!(tag_leaf2.positions[0], 1000);
+        assert_eq!(tag_leaf2.positions[1], 2000);
+        assert_eq!(tag_leaf2.positions[2], 3000);
+        assert_eq!(tag_leaf2.positions[3], 4000);
     }
 }

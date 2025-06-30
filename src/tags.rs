@@ -657,6 +657,7 @@ mod tests {
 
     #[test]
     fn test_tag_leaf_node_serialization() {
+        // Test case 1: TagLeafNode with next_leaf_id as Some
         // Create a non-trivial TagLeafNode instance
         let tag_leaf_node = TagLeafNode {
             positions: vec![
@@ -709,5 +710,58 @@ mod tests {
 
         // Verify that the page data starts with the correct node type byte
         assert_eq!(page_data[0], TAG_LEAF_NODE_TYPE, "Page data should start with the tag leaf node type byte");
+
+        // Test case 2: TagLeafNode with next_leaf_id as None
+        // Create a TagLeafNode instance with next_leaf_id as None
+        let tag_leaf_node_none = TagLeafNode {
+            positions: vec![
+                1000, // Position is just an i64
+                2000,
+                3000,
+            ],
+            next_leaf_id: None,
+        };
+
+        // Serialize the node
+        let serialized_none = tag_leaf_node_none.serialize();
+
+        // Deserialize the node
+        let deserialized_none: TagLeafNode = TagLeafNode::from_slice(&serialized_none).unwrap();
+
+        // Verify that the deserialized node matches the original
+        assert_eq!(deserialized_none.positions.len(), tag_leaf_node_none.positions.len());
+        assert_eq!(deserialized_none.next_leaf_id, tag_leaf_node_none.next_leaf_id);
+        assert_eq!(deserialized_none.next_leaf_id, None);
+
+        for i in 0..tag_leaf_node_none.positions.len() {
+            assert_eq!(deserialized_none.positions[i], tag_leaf_node_none.positions[i]);
+        }
+
+        // Verify the node type byte
+        assert_eq!(tag_leaf_node_none.node_type_byte(), TAG_LEAF_NODE_TYPE);
+
+        // Calculate the serialized page size
+        let page_size_none = tag_leaf_node_none.calc_serialized_page_size();
+
+        // Calculate the expected size: 
+        // 4 bytes for next_leaf_id + 2 bytes for positions length + 
+        // (3 positions * 8 bytes) + 9 bytes for page overhead
+        let expected_size_none = 4 + 2 + (3 * POSITION_SIZE) + 9;
+
+        // Verify that the page size is correct
+        assert_eq!(page_size_none, expected_size_none, 
+                   "Page size should be {} bytes", expected_size_none);
+
+        // Serialize the TagLeafNode to a page format
+        let page_data_none = tag_leaf_node_none.serialize_page();
+
+        // Verify that the page data is not empty
+        assert!(!page_data_none.is_empty(), "Page data should not be empty");
+
+        // Verify that the page data has the correct length
+        assert_eq!(page_data_none.len(), expected_size_none, "Page data should be {} bytes", expected_size_none);
+
+        // Verify that the page data starts with the correct node type byte
+        assert_eq!(page_data_none[0], TAG_LEAF_NODE_TYPE, "Page data should start with the tag leaf node type byte");
     }
 }

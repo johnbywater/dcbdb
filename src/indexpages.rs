@@ -173,7 +173,6 @@ impl Node for HeaderNode {
 pub struct IndexPage {
     pub page_id: PageID,
     pub node: Box<dyn Node>,
-    pub serialized: Vec<u8>,
 }
 
 /// A type for node-specific decode functions
@@ -265,20 +264,7 @@ impl Deserializer {
         Ok(IndexPage {
             page_id,
             node,
-            serialized: Vec::new(),
         })
-    }
-}
-
-impl IndexPage {
-    /// Serializes the page data
-    ///
-    /// # Returns
-    /// * `Result<Vec<u8>, encode::Error>` - The serialized data or an error
-    pub fn serialize_page(&self) -> Result<Vec<u8>, encode::Error> {
-        // Call node.to_msgpack() only once
-        let node_data = self.node.serialize_page();
-        Ok(node_data)
     }
 }
 
@@ -368,7 +354,6 @@ impl IndexPages {
             IndexPage {
                 page_id: header_page_id,
                 node: Box::new(header_node),
-                serialized: Vec::new(),
             }
         };
 
@@ -557,11 +542,7 @@ impl IndexPages {
             };
 
             // Serialize the page
-            let serialized_data = page.serialize_page()
-                .map_err(|e| std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("Failed to serialize page: {}", e)
-                ))?;
+            let serialized_data = page.node.serialize_page();
 
             // Write the page to the paged file
             self.paged_file.write_page(*page_id, &serialized_data)
@@ -592,7 +573,6 @@ impl IndexPages {
 mod tests {
     use super::*;
     use tempfile::TempDir;
-    use std::iter;
 
     #[test]
     fn test_index_pages_creation() {
@@ -641,11 +621,10 @@ mod tests {
         let index_page = IndexPage {
             page_id: PageID(5),
             node: Box::new(header_node),
-            serialized: Vec::new(),
         };
 
         // Serialize the page data
-        let serialized_data = index_page.serialize_page().expect("Failed to serialize page data");
+        let serialized_data = index_page.node.serialize_page();
 
         // Use the deserializer to deserialize the page data
         let deserialized_page = index_pages.deserializer.deserialize_page(&serialized_data, PageID(5))
@@ -856,7 +835,6 @@ mod tests {
         let index_page = IndexPage {
             page_id: PageID(9),
             node: Box::new(header_node),
-            serialized: Vec::new(), // Empty value for serialized
         };
 
         // Verify that the IndexPage has the correct values
@@ -864,7 +842,7 @@ mod tests {
                    "page_id should be initialized to the provided value");
 
         // Serialize the node data using the new method
-        let serialized_data = index_page.serialize_page().expect("Failed to serialize node data");
+        let serialized_data = index_page.node.serialize_page();
 
         // Get the raw node data for comparison
         let node_data = index_page.node.to_msgpack().expect("Failed to re-serialize HeaderNode");
@@ -897,7 +875,6 @@ mod tests {
         let index_page = IndexPage {
             page_id,
             node: Box::new(header_node),
-            serialized: Vec::new(), // Empty value for serialized
         };
 
         // Add the IndexPage to the IndexPages
@@ -910,66 +887,6 @@ mod tests {
         // Verify that the page_id is in the cache
         assert!(index_pages.cache.contains(&page_id), 
                 "page_id should be in the cache after adding the page");
-    }
-
-    #[test]
-    fn test_serialize_page() {
-        // Create a HeaderNode instance
-        let header_node = HeaderNode {
-            root_page_id: PageID(11),
-            next_page_id: PageID(12),
-        };
-
-        // Create an IndexPage with the HeaderNode and empty serialized data
-        let index_page = IndexPage {
-            page_id: PageID(13),
-            node: Box::new(header_node),
-            serialized: Vec::new(), // Empty value for serialized
-        };
-
-        // Serialize the page data using the new method
-        let serialized_data = index_page.serialize_page().expect("Failed to serialize page data");
-
-        // Get the raw node data
-        let node_data = index_page.node.to_msgpack().expect("Failed to serialize node data");
-
-        // Verify the structure of the serialized data
-        assert!(serialized_data.len() >= 1 + 4 + 4 + node_data.len(), 
-                "Serialized data should include node type byte, CRC, length, and node data");
-
-        // Extract components from the serialized data
-        let node_type_byte = serialized_data[0];
-        let crc_bytes = &serialized_data[1..5];
-        let len_bytes = &serialized_data[5..9];
-        let data = &serialized_data[9..];
-
-        // Verify node type byte
-        assert_eq!(node_type_byte, HEADER_NODE_TYPE, 
-                   "Node type byte should be HEADER_NODE_TYPE");
-
-        // Verify data length
-        let data_len = u32::from_le_bytes([len_bytes[0], len_bytes[1], len_bytes[2], len_bytes[3]]);
-        assert_eq!(data_len as usize, node_data.len(), 
-                   "Data length should match the length of the node data");
-
-        // Verify data
-        assert_eq!(data, node_data, 
-                   "Data should match the node data");
-
-        // Verify CRC
-        let crc = u32::from_le_bytes([crc_bytes[0], crc_bytes[1], crc_bytes[2], crc_bytes[3]]);
-        assert_eq!(crc, calc_crc(&node_data), 
-                   "CRC should match the calculated CRC of the node data");
-
-        // Verify that the node data can be deserialized back to a HeaderNode
-        let deserialized: HeaderNode = decode::from_slice(&node_data)
-            .expect("Failed to deserialize node data");
-
-        // Verify that the deserialized HeaderNode matches the original
-        assert_eq!(deserialized.root_page_id, header_node.root_page_id, 
-                   "root_page_id should match after serialization/deserialization");
-        assert_eq!(deserialized.next_page_id, header_node.next_page_id, 
-                   "next_page_id should match after serialization/deserialization");
     }
 
     #[test]
@@ -988,7 +905,6 @@ mod tests {
         let index_page = IndexPage {
             page_id: PageID(16),
             node: Box::new(header_node),
-            serialized: Vec::new(),
         };
 
         // Verify that node_type_byte can be called through the trait object
@@ -1008,11 +924,10 @@ mod tests {
         let index_page = IndexPage {
             page_id: PageID(19),
             node: Box::new(header_node),
-            serialized: Vec::new(),
         };
 
         // Serialize the page data
-        let serialized_data = index_page.serialize_page().expect("Failed to serialize page data");
+        let serialized_data = index_page.node.serialize_page();
 
         // Create a Deserializer
         let mut deserializer = Deserializer::new();
@@ -1110,8 +1025,7 @@ mod tests {
                 "header_page_id should be marked as dirty");
 
         // Serialize the header_page
-        let serialized_data = index_pages.header_page.serialize_page()
-            .expect("Failed to serialize header_page");
+        let serialized_data = index_pages.header_page.node.serialize_page();
 
         // Deserialize the serialized data into another instance of IndexPage
         let deserialized_page = index_pages.deserializer.deserialize_page(&serialized_data, index_pages.header_page_id)
@@ -1163,8 +1077,7 @@ mod tests {
                 "header_page_id should be marked as dirty");
 
         // Serialize the header_page
-        let serialized_data = index_pages.header_page.serialize_page()
-            .expect("Failed to serialize header_page");
+        let serialized_data = index_pages.header_page.node.serialize_page();
 
         // Deserialize the serialized data into another instance of IndexPage
         let deserialized_page = index_pages.deserializer.deserialize_page(&serialized_data, index_pages.header_page_id)
@@ -1216,7 +1129,6 @@ mod tests {
         let index_page1 = IndexPage {
             page_id: page_id1,
             node: Box::new(header_node1),
-            serialized: Vec::new(),
         };
 
         // Create a HeaderNode instance for page 2
@@ -1229,7 +1141,6 @@ mod tests {
         let index_page2 = IndexPage {
             page_id: page_id2,
             node: Box::new(header_node2),
-            serialized: Vec::new(),
         };
 
         // Add the pages to the cache and mark them as dirty
@@ -1397,7 +1308,6 @@ mod tests {
         let index_page = IndexPage {
             page_id,
             node: Box::new(header_node),
-            serialized: Vec::new(),
         };
 
         // Add the page to the cache and mark it as dirty
@@ -1456,7 +1366,6 @@ mod tests {
         let index_page = IndexPage {
             page_id,
             node: Box::new(header_node),
-            serialized: Vec::new(),
         };
 
         // Add the page to the cache and mark it as dirty
@@ -1564,7 +1473,6 @@ mod tests {
             let index_page = IndexPage {
                 page_id,
                 node: Box::new(header_node),
-                serialized: Vec::new(),
             };
 
             // Add the page to the cache

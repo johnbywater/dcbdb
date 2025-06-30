@@ -23,13 +23,6 @@ use crate::wal::Position;
 use crate::pagedfile::PageID;
 use crate::positions::{InternalNode, LeafNode, PositionIndexRecord};
 
-// Helper function to convert a Vec<u8> to [u8; 8]
-fn vec_to_type_hash(vec: Vec<u8>) -> [u8; 8] {
-    let mut result = [0u8; 8];
-    let len = std::cmp::min(vec.len(), 8);
-    result[..len].copy_from_slice(&vec[..len]);
-    result
-}
 
 // Constants
 const PAGE_SIZE: usize = 4096;

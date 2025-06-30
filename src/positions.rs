@@ -4,7 +4,7 @@ use std::format;
 use std::path::Path;
 use std::any::Any;
 use crate::pagedfile::PageID;
-use crate::wal::Position;
+use crate::wal::{Position, POSITION_SIZE};
 use crate::indexpages::{IndexPages, Node, IndexPage, HeaderNode};
 use rmp_serde::{encode, decode};
 
@@ -23,14 +23,7 @@ pub struct PositionIndexRecord {
     pub offset: i32,
     pub type_hash: Vec<u8>,
 }
-
-// Position index record with fixed-size type_hash
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PositionIndexRecord8 {
-    pub segment: i32,
-    pub offset: i32,
-    pub type_hash: [u8; 8],
-}
+const POSITION_INDEX_RECORD_SIZE: usize = 16;
 
 // Leaf node for the B+tree
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -381,7 +374,6 @@ impl PositionIndex {
             let root_page = IndexPage {
                 page_id: root_page_id,
                 node: Box::new(leaf_node),
-                serialized: Vec::new(),
             };
 
             // Add the page to the cache and mark it as dirty
@@ -404,63 +396,52 @@ impl PositionIndex {
     /// # Returns
     /// * `Option<(Position, PageID)>` - If the leaf node was split, returns the first key of the new leaf node and the new page ID
     pub fn append_leaf_key_and_value(&mut self, page_id: PageID, key: Position, value: PositionIndexRecord) -> Option<(Position, PageID)> {
-        // Add the key and value to the leaf node
-        let max_page_size = self.get_max_page_size();
+        // Check for duplicate.
         {
+            // Optimization for append-only event store:
+            // Since positions are always added in ascending order, we only need to check
+            // if the leaf node is empty or if the key is greater than the last key
+            let page = self.index_pages.get_page(page_id).unwrap();
+            let leaf_node = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+            
+            if !leaf_node.keys.is_empty() {
+                let last_index = leaf_node.keys.len() - 1;
+                let last_key = leaf_node.keys[last_index];
+                if key <= last_key {
+                    return None;
+                }
+            }
+        }
+        let max_page_size = self.get_max_page_size();
+        
+        // Check if there is space for this key and value in the leaf node
+        let needs_splitting: bool = {
+            let page = self.index_pages.get_page(page_id).unwrap();
+            let page_size = page.node.calc_serialized_page_size();
+            page_size + POSITION_INDEX_RECORD_SIZE + POSITION_SIZE > max_page_size
+        };
+        if !needs_splitting {
+            // Add the key and value to the leaf node
             // Get a mutable reference to the page
             let page = self.index_pages.get_page_mut(page_id).unwrap();
 
             // Downcast the node to a LeafNode
             let leaf_node = page.node.as_any_mut().downcast_mut::<LeafNode>().unwrap();
-
-            // Optimization for append-only event store:
-            // Since positions are always added in ascending order, we only need to check
-            // if the leaf node is empty or if the key is greater than the last key
-            if !leaf_node.keys.is_empty() {
-                let last_index = leaf_node.keys.len() - 1;
-                let last_key = leaf_node.keys[last_index];
-
-                // Only push the new key and value if it's greater than the last key
-                if key <= last_key {
-                    return None;
-                }
-                // If key > last_key, we'll append it below
-            }
 
             // Add the key and value
             leaf_node.keys.push(key);
             leaf_node.values.push(value);
-            
-            let serialized_page_size = leaf_node.calc_serialized_page_size();
-            if serialized_page_size <= max_page_size {
-                self.index_pages.mark_dirty(page_id);
-                return None
-            }
+            self.index_pages.mark_dirty(page_id);
+            return None;
         }
-
-        // The leaf node needs splitting
-        // Extract the last key and value from the leaf node
-        let (last_key, last_value) = {
-            // Get a mutable reference to the page
-            let page = self.index_pages.get_page_mut(page_id).unwrap();
-
-            // Downcast the node to a LeafNode
-            let leaf_node = page.node.as_any_mut().downcast_mut::<LeafNode>().unwrap();
-
-            // Get the last key and value
-            let key = leaf_node.keys.pop().unwrap();
-            let value = leaf_node.values.pop().unwrap();
-
-            (key, value)
-        };
 
         // Allocate a new page ID
         let new_page_id = self.index_pages.alloc_page_id();
 
         // Create a new LeafNode with the last key and value
         let new_leaf_node = LeafNode {
-            keys: vec![last_key],
-            values: vec![last_value],
+            keys: vec![key],
+            values: vec![value],
             next_leaf_id: None,
         };
 
@@ -468,7 +449,6 @@ impl PositionIndex {
         let new_page = IndexPage {
             page_id: new_page_id,
             node: Box::new(new_leaf_node),
-            serialized: Vec::new(),
         };
 
         // Set the next_leaf_id of the original leaf node to the new page ID
@@ -490,7 +470,7 @@ impl PositionIndex {
         self.index_pages.add_page(new_page);
 
         // Return the first key of the new leaf node and the new page ID
-        Some((last_key, new_page_id))
+        Some((key, new_page_id))
     }
 
     fn get_max_page_size(&mut self) -> usize {
@@ -523,7 +503,7 @@ impl PositionIndex {
         // Check if the page needs splitting by serializing it and checking if it's too large
         let needs_splitting = {
             let page = self.index_pages.get_page_mut(page_id).unwrap();
-            let serialized = page.serialize_page().unwrap();
+            let serialized = page.node.serialize_page();
             serialized.len() > self.index_pages.paged_file.page_size
         };
 
@@ -568,7 +548,6 @@ impl PositionIndex {
             let new_page = IndexPage {
                 page_id: new_page_id,
                 node: Box::new(new_internal_node),
-                serialized: Vec::new(),
             };
 
             // Mark the original page as dirty
@@ -646,7 +625,6 @@ impl PositionIndex {
                 let new_root_page = IndexPage {
                     page_id: new_root_page_id,
                     node: Box::new(internal_node),
-                    serialized: Vec::new(),
                 };
 
                 // Add the new page to the collection
@@ -970,18 +948,16 @@ mod tests {
         let leaf_page = IndexPage {
             page_id: PageID(1),
             node: Box::new(leaf_node.clone()),
-            serialized: Vec::new(),
         };
 
         let internal_page = IndexPage {
             page_id: PageID(2),
             node: Box::new(internal_node.clone()),
-            serialized: Vec::new(),
         };
 
         // Serialize the pages
-        let leaf_serialized = leaf_page.serialize_page().unwrap();
-        let internal_serialized = internal_page.serialize_page().unwrap();
+        let leaf_serialized = leaf_page.node.serialize_page();
+        let internal_serialized = internal_page.node.serialize_page();
 
         // Deserialize the pages using the registered deserializers
         let deserialized_leaf_page = position_index.index_pages.deserializer.deserialize_page(&leaf_serialized, PageID(1)).unwrap();
@@ -1032,7 +1008,6 @@ mod tests {
         let leaf_page = IndexPage {
             page_id,
             node: Box::new(leaf_node),
-            serialized: Vec::new(),
         };
 
         // Add the page to the index
@@ -1154,7 +1129,6 @@ mod tests {
         let internal_page = IndexPage {
             page_id,
             node: Box::new(internal_node),
-            serialized: Vec::new(),
         };
 
         // Add the page to the index
@@ -1261,7 +1235,7 @@ mod tests {
             });
         }
 
-        let mut leaf_node = LeafNode {
+        let leaf_node = LeafNode {
             keys,
             values,
             next_leaf_id: None,
@@ -1270,10 +1244,9 @@ mod tests {
         let serialized_size = leaf_node.calc_serialized_page_size();
 
         // Create an IndexPage with the LeafNode
-        let mut leaf_page = IndexPage {
+        let leaf_page = IndexPage {
             page_id,
             node: Box::new(leaf_node),
-            serialized: Vec::new(),
         };
 
         // Create a new PositionIndex instance with a page size that is the serialized length
@@ -1357,7 +1330,6 @@ mod tests {
         let leaf_page = IndexPage {
             page_id,
             node: Box::new(leaf_node),
-            serialized: Vec::new(),
         };
 
         // Add the page to the index
@@ -1426,20 +1398,19 @@ mod tests {
         }
         child_ids.push(PageID(500)); // One more child_id than keys
 
-        let mut internal_node = InternalNode {
+        let internal_node = InternalNode {
             keys,
             child_ids,
         };
 
         // Create an IndexPage with the InternalNode
-        let mut internal_page = IndexPage {
+        let internal_page = IndexPage {
             page_id,
             node: Box::new(internal_node),
-            serialized: Vec::new(),
         };
 
         // Serialize the page to get its length
-        let serialized = internal_page.serialize_page().unwrap();
+        let serialized = internal_page.node.serialize_page();
         let page_size = serialized.len();
 
         // Create a new PositionIndex instance with a page size that is exactly the serialized length
@@ -1551,7 +1522,6 @@ mod tests {
         let internal_page = IndexPage {
             page_id,
             node: Box::new(internal_node),
-            serialized: Vec::new(),
         };
 
         // Add the page to the index

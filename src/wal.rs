@@ -29,6 +29,7 @@ const RECORD_COMMIT: u32 = 3;
 
 /// Position type for event positions
 pub type Position = i64;
+pub const POSITION_SIZE: usize = 8;
 
 /// Error types for WAL operations
 #[derive(Debug, Error)]

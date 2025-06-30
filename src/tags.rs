@@ -557,13 +557,94 @@ impl TagIndex {
 
         Ok(Self { index_pages })
     }
+
+    /// Returns the maximum page size
+    fn get_max_page_size(&mut self) -> usize {
+        self.index_pages.paged_file.page_size
+    }
+
+    /// Adds a key and value to a leaf node, splitting it if necessary
+    ///
+    /// # Arguments
+    /// * `page_id` - The PageID of the page to add the key and value to
+    /// * `key` - The key to add
+    /// * `value` - The value to add
+    ///
+    /// # Returns
+    /// * `Option<([u8; TAG_HASH_LEN], PageID)>` - If the leaf node was split, returns the first key of the new leaf node and the new page ID
+    pub fn append_leaf_key_and_value(&mut self, page_id: PageID, key: [u8; TAG_HASH_LEN], value: Vec<Position>) -> Option<([u8; TAG_HASH_LEN], PageID)> {
+        // Check for duplicate.
+        {
+            // Optimization for append-only event store:
+            // Since tags are always added in ascending order, we only need to check
+            // if the leaf node is empty or if the key is greater than the last key
+            let page = self.index_pages.get_page(page_id).unwrap();
+            let leaf_node = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+
+            if !leaf_node.keys.is_empty() {
+                let last_index = leaf_node.keys.len() - 1;
+                let last_key = leaf_node.keys[last_index];
+                if key <= last_key {
+                    return None;
+                }
+            }
+        }
+        let max_page_size = self.get_max_page_size();
+
+        // Check if there is space for this key and value in the leaf node
+        let needs_splitting: bool = {
+            let page = self.index_pages.get_page(page_id).unwrap();
+            let page_size = page.node.calc_serialized_page_size();
+            // Calculate the additional size needed for the new key and value
+            let additional_size = TAG_HASH_LEN + 2 + (value.len() * POSITION_SIZE);
+            page_size + additional_size > max_page_size
+        };
+        if !needs_splitting {
+            // Add the key and value to the leaf node
+            // Get a mutable reference to the page
+            let page = self.index_pages.get_page_mut(page_id).unwrap();
+
+            // Downcast the node to a LeafNode
+            let leaf_node = page.node.as_any_mut().downcast_mut::<LeafNode>().unwrap();
+
+            // Add the key and value
+            leaf_node.keys.push(key);
+            leaf_node.values.push(value);
+            self.index_pages.mark_dirty(page_id);
+            return None;
+        }
+
+        // Allocate a new page ID
+        let new_page_id = self.index_pages.alloc_page_id();
+
+        // Create a new LeafNode with the new key and value
+        let new_leaf_node = LeafNode {
+            keys: vec![key],
+            values: vec![value],
+        };
+
+        // Create a new IndexPage with the new LeafNode
+        let new_page = IndexPage {
+            page_id: new_page_id,
+            node: Box::new(new_leaf_node),
+        };
+
+        // Mark the original page as dirty
+        self.index_pages.mark_dirty(page_id);
+
+        // Add the new page to the collection
+        self.index_pages.add_page(new_page);
+
+        // Return the first key of the new leaf node and the new page ID
+        Some((key, new_page_id))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::indexpages::{HeaderNode, IndexPage};
     use tempfile::TempDir;
+    use crate::indexpages::{HeaderNode, IndexPage};
 
     #[test]
     fn test_tag_index_construction() {
@@ -1051,6 +1132,89 @@ mod tests {
         let deserialized_tag_internal = deserialized_tag_internal_page.node.as_any().downcast_ref::<TagInternalNode>().unwrap();
         assert_eq!(deserialized_tag_internal.keys.len(), tag_internal_node.keys.len());
         assert_eq!(deserialized_tag_internal.child_ids.len(), tag_internal_node.child_ids.len());
+
+        // No need to clean up the test file, it will be removed when temp_dir goes out of scope
+    }
+
+    #[test]
+    fn test_append_leaf_key_and_value_without_split() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+
+        // Append the filename to the directory path
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Create a new TagIndex instance with a large page size to avoid splitting
+        let mut tag_index = TagIndex::new(&test_path, 4096).unwrap();
+
+        // Construct a PageID
+        let page_id = PageID(30);
+
+        // Create a LeafNode with 10 keys and 10 values
+        let mut keys = Vec::new();
+        let mut values = Vec::new();
+        for i in 0..10 {
+            // Create a tag hash for each key
+            let tag_hash = hash_tag(&format!("Tag{}", i));
+            let mut key = [0u8; TAG_HASH_LEN];
+            key.copy_from_slice(&tag_hash[..TAG_HASH_LEN]);
+            keys.push(key);
+
+            // Create a vector of positions for each value
+            let mut positions = Vec::new();
+            for j in 0..3 {
+                positions.push((i * 1000 + j) as i64);
+            }
+            values.push(positions);
+        }
+
+        let leaf_node = LeafNode {
+            keys,
+            values,
+        };
+
+        // Create an IndexPage with the LeafNode
+        let leaf_page = IndexPage {
+            page_id,
+            node: Box::new(leaf_node),
+        };
+
+        // Add the page to the index
+        tag_index.index_pages.add_page(leaf_page);
+
+        // Add a new key and value that will not cause the leaf to split
+        let new_tag_hash = hash_tag("NewTag");
+        let mut new_key = [0u8; TAG_HASH_LEN];
+        new_key.copy_from_slice(&new_tag_hash[..TAG_HASH_LEN]);
+        let new_value = vec![9999, 9998, 9997];
+
+        // Call append_leaf_key_and_value with the page_id, key, and value
+        let split_result = tag_index.append_leaf_key_and_value(page_id, new_key, new_value.clone());
+
+        // Verify that the leaf was not split
+        assert!(split_result.is_none());
+
+        // Get the page and verify it has 11 keys and values
+        let page = tag_index.index_pages.get_page(page_id).unwrap();
+        let leaf = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+        assert_eq!(leaf.keys.len(), 11);
+        assert_eq!(leaf.values.len(), 11);
+        assert_eq!(leaf.keys[10], new_key);
+        assert_eq!(leaf.values[10], new_value);
+
+        // Flush changes to disk
+        tag_index.index_pages.flush().unwrap();
+
+        // Create another instance of TagIndex
+        let mut tag_index2 = TagIndex::new(&test_path, 4096).unwrap();
+
+        // Get the page and verify it has 11 keys and values
+        let page2 = tag_index2.index_pages.get_page(page_id).unwrap();
+        let leaf2 = page2.node.as_any().downcast_ref::<LeafNode>().unwrap();
+        assert_eq!(leaf2.keys.len(), 11);
+        assert_eq!(leaf2.values.len(), 11);
+        assert_eq!(leaf2.keys[10], new_key);
+        assert_eq!(leaf2.values[10], new_value);
 
         // No need to clean up the test file, it will be removed when temp_dir goes out of scope
     }

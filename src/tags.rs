@@ -623,9 +623,63 @@ impl TagIndex {
         }
 
         // If we reach here, we need to split the node
-        // This part would be implemented for the split case, but for now we'll just return None
-        // since the test only checks the non-split case
-        None
+        // Allocate a new page ID
+        let new_page_id = self.index_pages.alloc_page_id();
+
+        // Get a mutable reference to the page
+        let page = self.index_pages.get_page_mut(page_id).unwrap();
+        let internal_node = page.node.as_any_mut().downcast_mut::<InternalNode>().unwrap();
+
+        // Find the correct insertion point for the new key
+        let insert_index = match internal_node.keys.binary_search(&key) {
+            Ok(index) => index, // This shouldn't happen as we already checked for duplicates
+            Err(index) => index,
+        };
+
+        // Store the new key for later comparison
+        let new_key = key;
+
+        // Insert the new key and child_id at the correct positions
+        internal_node.keys.insert(insert_index, new_key);
+        internal_node.child_ids.insert(insert_index + 1, child_id);
+
+        // Calculate the midpoint
+        let mid = internal_node.keys.len() / 2;
+
+        // Get the middle key that will be promoted
+        let promoted_key = internal_node.keys[mid];
+
+        // Move the keys after the middle key to the new node
+        let new_keys = internal_node.keys.split_off(mid + 1);
+
+        // Remove the middle key from the original node (it's being promoted)
+        internal_node.keys.pop();
+
+        // Move the child_ids after the middle key to the new node
+        // For internal nodes, we need to keep one more child_id than keys
+        let new_child_ids = internal_node.child_ids.split_off(mid + 1);
+
+
+        // Create a new InternalNode with the second half of the keys and child_ids
+        let new_internal_node = InternalNode {
+            keys: new_keys,
+            child_ids: new_child_ids,
+        };
+
+        // Create a new IndexPage with the new InternalNode
+        let new_page = IndexPage {
+            page_id: new_page_id,
+            node: Box::new(new_internal_node),
+        };
+
+        // Mark the original page as dirty
+        self.index_pages.mark_dirty(page_id);
+
+        // Add the new page to the collection
+        self.index_pages.add_page(new_page);
+
+        // Return the promoted key and the new page ID
+        Some((promoted_key, new_page_id))
     }
 
     /// Appends a position to a tag leaf node if it's greater than the last position
@@ -2137,6 +2191,133 @@ mod tests {
         // Verify the new key and child_id were inserted correctly
         assert_eq!(internal2.keys[new_key_index2], new_key);
         assert_eq!(internal2.child_ids[new_key_index2 + 1], new_child_id);
+
+        // No need to clean up the test file, it will be removed when temp_dir goes out of scope
+    }
+
+    #[test]
+    fn test_insert_internal_key_and_value_with_split() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+
+        // Append the filename to the directory path
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Construct a PageID
+        let page_id = PageID(40);
+
+        // Create an InternalNode with 5 keys and 6 child PageID values
+        let mut keys = Vec::new();
+        let mut child_ids = Vec::new();
+
+        // Create 5 tag hashes for keys
+        for i in 0..5 {
+            // Create a tag hash for each key
+            let tag_hash = hash_tag(&format!("Tag{}", i));
+            let mut key = [0u8; TAG_HASH_LEN];
+            key.copy_from_slice(&tag_hash[..TAG_HASH_LEN]);
+            keys.push(key);
+        }
+
+        // Create 6 PageIDs for child_ids (one more than keys)
+        for i in 0..6 {
+            child_ids.push(PageID(100 + i as u32));
+        }
+
+        // Sort the keys to ensure they are in order
+        keys.sort();
+
+        let internal_node = InternalNode {
+            keys,
+            child_ids,
+        };
+
+        // Calculate the serialized size of the InternalNode
+        let serialized_size = internal_node.calc_serialized_page_size();
+
+        // Create an IndexPage with the InternalNode
+        let internal_page = IndexPage {
+            page_id,
+            node: Box::new(internal_node),
+        };
+
+        // Create a new TagIndex instance with a page size that is the serialized length
+        // This will ensure that the page needs splitting when we add another key
+        let mut tag_index = TagIndex::new(&test_path, serialized_size).unwrap();
+
+        // Add the page to the index
+        tag_index.index_pages.add_page(internal_page);
+
+        // Add a new key and child_id that will cause the internal node to split
+        let new_tag_hash = hash_tag("NewTag");
+        let mut new_key = [0u8; TAG_HASH_LEN];
+        new_key.copy_from_slice(&new_tag_hash[..TAG_HASH_LEN]);
+        let new_child_id = PageID(200);
+
+        // Call insert_internal_key_and_value with the page_id, key, and child_id
+        let split_result = tag_index.insert_internal_key_and_value(page_id, new_key, new_child_id);
+
+        // Verify that the internal node was split
+        assert!(split_result.is_some());
+        let (promoted_key, new_page_id) = split_result.unwrap();
+
+        // Check the original page
+        {
+            let original_page = tag_index.index_pages.get_page(page_id).unwrap();
+            let original_internal = original_page.node.as_any().downcast_ref::<InternalNode>().unwrap();
+
+            // Verify it has the correct number of keys and child_ids
+            // For internal nodes, we should have one more child_id than keys
+            assert_eq!(original_internal.child_ids.len(), original_internal.keys.len() + 1);
+
+            // Check if the new key is in the original node
+            let new_key_in_original = original_internal.keys.contains(&new_key);
+            if new_key_in_original {
+                let index = original_internal.keys.iter().position(|k| *k == new_key).unwrap();
+                assert_eq!(original_internal.child_ids[index + 1], new_child_id);
+            }
+
+            // Verify that the promoted key is not in the original node
+            assert!(!original_internal.keys.contains(&promoted_key));
+        }
+
+        // Check the new page
+        {
+            let new_page = tag_index.index_pages.get_page(new_page_id).unwrap();
+            let new_internal = new_page.node.as_any().downcast_ref::<InternalNode>().unwrap();
+
+            // Verify it has the correct number of keys and child_ids
+            // For internal nodes, we should have one more child_id than keys
+            assert_eq!(new_internal.child_ids.len(), new_internal.keys.len() + 1);
+
+            // Check if the new key is in the new node
+            let new_key_in_new = new_internal.keys.contains(&new_key);
+            if new_key_in_new {
+                let index = new_internal.keys.iter().position(|k| *k == new_key).unwrap();
+                assert_eq!(new_internal.child_ids[index + 1], new_child_id);
+            }
+
+            // Verify that the promoted key is not in the new node
+            assert!(!new_internal.keys.contains(&promoted_key));
+        }
+
+        // Verify that either the new key is in one of the nodes, or the new key is the same as the promoted key
+        let new_key_in_original = {
+            let original_page = tag_index.index_pages.get_page(page_id).unwrap();
+            let original_internal = original_page.node.as_any().downcast_ref::<InternalNode>().unwrap();
+            original_internal.keys.contains(&new_key)
+        };
+
+        let new_key_in_new = {
+            let new_page = tag_index.index_pages.get_page(new_page_id).unwrap();
+            let new_internal = new_page.node.as_any().downcast_ref::<InternalNode>().unwrap();
+            new_internal.keys.contains(&new_key)
+        };
+
+        let new_key_is_promoted = new_key == promoted_key;
+
+        assert!(new_key_in_original || new_key_in_new || new_key_is_promoted, 
+                "New key not found in either node and is not the promoted key");
 
         // No need to clean up the test file, it will be removed when temp_dir goes out of scope
     }

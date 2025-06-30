@@ -1,4 +1,3 @@
-use serde::{Deserialize, Serialize};
 use uuid::{uuid, Uuid};
 use std::format;
 use std::path::Path;
@@ -6,7 +5,6 @@ use std::any::Any;
 use crate::pagedfile::{PageID, PAGE_ID_SIZE};
 use crate::wal::{Position, POSITION_SIZE};
 use crate::indexpages::{IndexPages, Node, IndexPage, HeaderNode};
-use rmp_serde::{encode, decode};
 
 const TYPE_HASH_LEN: usize = 8;
 
@@ -17,7 +15,7 @@ pub const INTERNAL_NODE_TYPE: u8 = 2;
 pub const LEAF_NODE_TYPE: u8 = 3;
 
 // Position index record
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PositionIndexRecord {
     pub segment: i32,
     pub offset: i32,
@@ -26,7 +24,7 @@ pub struct PositionIndexRecord {
 const POSITION_INDEX_RECORD_SIZE: usize = 16;
 
 // Leaf node for the B+tree
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct LeafNode {
     pub keys: Vec<Position>,
     pub values: Vec<PositionIndexRecord>,
@@ -96,13 +94,13 @@ impl LeafNode {
     ///
     /// # Returns
     /// * `Result<LeafNode, decode::Error>` - The deserialized LeafNode or an error
-    pub fn from_slice(slice: &[u8]) -> Result<Self, decode::Error> {
+    pub fn from_slice(slice: &[u8]) -> Result<Self, std::io::Error> {
         // Check if the slice has at least 8 bytes (4 for next_leaf_id, 4 for keys_len)
         if slice.len() < 8 {
-            return Err(decode::Error::InvalidMarkerRead(std::io::Error::new(
+            return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("Expected at least 8 bytes, got {}", slice.len()),
-            )));
+            ));
         }
 
         // Extract the next_leaf_id (first 4 bytes)
@@ -115,10 +113,10 @@ impl LeafNode {
         // Calculate the expected size of the slice
         let expected_size = 6 + (keys_len * 8) + (keys_len * 16);
         if slice.len() < expected_size {
-            return Err(decode::Error::InvalidMarkerRead(std::io::Error::new(
+            return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("Expected {} bytes, got {}", expected_size, slice.len()),
-            )));
+            ));
         }
 
         // Extract the Position keys (8 bytes each)
@@ -167,10 +165,6 @@ impl LeafNode {
 }
 
 impl Node for LeafNode {
-    fn to_msgpack(&self) -> Result<Vec<u8>, encode::Error> {
-        encode::to_vec(self)
-    }
-
     fn node_type_byte(&self) -> u8 {
         LEAF_NODE_TYPE
     }
@@ -193,7 +187,7 @@ impl Node for LeafNode {
 }
 
 // Internal node for the B+tree
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct InternalNode {
     pub keys: Vec<Position>,
     pub child_ids: Vec<PageID>,
@@ -245,13 +239,13 @@ impl InternalNode {
     ///
     /// # Returns
     /// * `Result<InternalNode, decode::Error>` - The deserialized InternalNode or an error
-    pub fn from_slice(slice: &[u8]) -> Result<Self, decode::Error> {
+    pub fn from_slice(slice: &[u8]) -> Result<Self, std::io::Error> {
         // Check if the slice has at least 4 bytes for the keys_len
         if slice.len() < 2 {
-            return Err(decode::Error::InvalidMarkerRead(std::io::Error::new(
+            return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("Expected at least 2 bytes, got {}", slice.len()),
-            )));
+            ));
         }
 
         // Extract the length of the keys (first 4 bytes)
@@ -261,10 +255,10 @@ impl InternalNode {
         // 2 bytes for keys_len + 8 bytes per key + 4 bytes per child_id (keys_len + 1 child_ids)
         let expected_size = 2 + (keys_len * 8) + ((keys_len + 1) * 4);
         if slice.len() < expected_size {
-            return Err(decode::Error::InvalidMarkerRead(std::io::Error::new(
+            return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("Expected {} bytes, got {}", expected_size, slice.len()),
-            )));
+            ));
         }
 
         // Extract the Position keys (8 bytes each)
@@ -296,10 +290,6 @@ impl InternalNode {
 }
 
 impl Node for InternalNode {
-    fn to_msgpack(&self) -> Result<Vec<u8>, encode::Error> {
-        encode::to_vec(self)
-    }
-
     fn node_type_byte(&self) -> u8 {
         INTERNAL_NODE_TYPE
     }
@@ -1721,21 +1711,21 @@ mod tests {
             position_index.insert(position, record.clone()).unwrap();
             inserted.push((position, record));
         }
-        
+
         // Check lookup before flush
         for (position, record) in &inserted {
             let result = position_index.lookup(*position).unwrap();
             assert!(result.is_some());
             assert_eq!(&result.unwrap(), record);
         }
-        
+
         // Flush changes to disk
         position_index.index_pages.flush().unwrap();
-        
+
         // Create another instance of PositionIndex
         let mut position_index2 = PositionIndex::new(&test_path, page_size).unwrap();
-        
-        
+
+
         // Check lookup after flush
         for (position, record) in &inserted {
             let result = position_index2.lookup(*position).unwrap();

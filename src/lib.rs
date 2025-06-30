@@ -14,7 +14,6 @@ pub mod segments;
 
 // Export the Positions module
 pub mod positions;
-pub mod positions_old;
 
 // Export the Paged Index File module
 pub mod pagedfile;

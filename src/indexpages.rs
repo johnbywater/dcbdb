@@ -1,8 +1,6 @@
 use std::path::Path;
 use std::collections::HashMap;
 use crate::pagedfile::{PagedFile, PAGE_SIZE, PageID, PagedFileError};
-use serde::{Serialize, Deserialize};
-use rmp_serde::{encode, decode};
 use lru::LruCache;
 use crate::wal::calc_crc;
 use std::any::Any;
@@ -10,14 +8,7 @@ use std::any::Any;
 /// Constant for the header node type
 pub const HEADER_NODE_TYPE: u8 = 1;
 
-/// A trait for nodes that can be serialized to msgpack format
 pub trait Node: Any {
-    /// Serializes the node to msgpack format
-    ///
-    /// # Returns
-    /// * `Result<Vec<u8>, rmp_serde::encode::Error>` - The serialized data or an error
-    fn to_msgpack(&self) -> Result<Vec<u8>, encode::Error>;
-
     /// Returns a byte that identifies the type of node
     ///
     /// # Returns
@@ -82,21 +73,13 @@ pub trait Node: Any {
 }
 
 /// A structure that represents a header node in the index
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HeaderNode {
     pub root_page_id: PageID,
     pub next_page_id: PageID,
 }
 
 impl HeaderNode {
-    /// Serializes the HeaderNode to msgpack format
-    ///
-    /// # Returns
-    /// * `Result<Vec<u8>, rmp_serde::encode::Error>` - The serialized data or an error
-    pub fn to_msgpack(&self) -> Result<Vec<u8>, encode::Error> {
-        encode::to_vec(self)
-    }
-
     /// Serializes the HeaderNode to a byte array with 8 bytes
     /// First 4 bytes for root_page_id and next 4 bytes for next_page_id
     ///
@@ -125,12 +108,12 @@ impl HeaderNode {
     ///
     /// # Returns
     /// * `Result<HeaderNode, decode::Error>` - The deserialized HeaderNode or an error
-    pub fn from_slice(slice: &[u8]) -> Result<Self, decode::Error> {
+    pub fn from_slice(slice: &[u8]) -> Result<Self, std::io::Error> {
         if slice.len() != 8 {
-            return Err(decode::Error::InvalidMarkerRead(std::io::Error::new(
+            return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("Expected 8 bytes, got {}", slice.len()),
-            )));
+            ));
         }
 
         let root_page_id = u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]);
@@ -144,10 +127,6 @@ impl HeaderNode {
 }
 
 impl Node for HeaderNode {
-    fn to_msgpack(&self) -> Result<Vec<u8>, encode::Error> {
-        encode::to_vec(self)
-    }
-
     fn node_type_byte(&self) -> u8 {
         HEADER_NODE_TYPE
     }
@@ -176,7 +155,7 @@ pub struct IndexPage {
 }
 
 /// A type for node-specific decode functions
-pub type DecodeFn = fn(&[u8]) -> Result<Box<dyn Node>, decode::Error>;
+pub type DecodeFn = fn(&[u8]) -> Result<Box<dyn Node>, std::io::Error>;
 
 /// A structure that can deserialize index pages
 pub struct Deserializer {
@@ -209,22 +188,22 @@ impl Deserializer {
     ///
     /// # Returns
     /// * `Result<IndexPage, decode::Error>` - The deserialized page or an error
-    pub fn deserialize_page(&self, data: &[u8], page_id: PageID) -> Result<IndexPage, decode::Error> {
+    pub fn deserialize_page(&self, data: &[u8], page_id: PageID) -> Result<IndexPage, std::io::Error> {
         // Extract the node type byte
         if data.is_empty() {
-            return Err(decode::Error::InvalidMarkerRead(std::io::Error::new(
+            return Err(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
                 "Empty data",
-            )));
+            ));
         }
         let node_type_byte = data[0];
 
         // Extract the CRC and blob length
         if data.len() < 9 {
-            return Err(decode::Error::InvalidMarkerRead(std::io::Error::new(
+            return Err(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
                 "Data too short for header",
-            )));
+            ));
         }
         let crc_bytes = &data[1..5];
         let len_bytes = &data[5..9];
@@ -233,28 +212,28 @@ impl Deserializer {
 
         // Extract the blob
         if data.len() < 9 + blob_len {
-            return Err(decode::Error::InvalidMarkerRead(std::io::Error::new(
+            return Err(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
                 "Data too short for blob",
-            )));
+            ));
         }
         let blob = &data[9..9 + blob_len];
 
         // Verify the CRC
         let calculated_crc = calc_crc(blob);
         if calculated_crc != crc {
-            return Err(decode::Error::InvalidMarkerRead(std::io::Error::new(
+            return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "CRC mismatch",
-            )));
+            ));
         }
 
         // Get the decode function for the node type
         let decode_fn = self.decoders.get(&node_type_byte).ok_or_else(|| {
-            decode::Error::InvalidMarkerRead(std::io::Error::new(
+            std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("No decoder registered for node type byte: {}", node_type_byte),
-            ))
+            )
         })?;
 
         // Deserialize the node
@@ -756,30 +735,6 @@ mod tests {
     }
 
     #[test]
-    fn test_header_node_msgpack() {
-        // Create a HeaderNode instance
-        let header_node = HeaderNode {
-            root_page_id: PageID(5),
-            next_page_id: PageID(6),
-        };
-
-        // Serialize the HeaderNode to msgpack
-        let serialized = header_node.to_msgpack().expect("Failed to serialize HeaderNode");
-
-        // Deserialize the msgpack data back to a HeaderNode
-        let deserialized: HeaderNode = decode::from_slice(&serialized)
-            .expect("Failed to deserialize HeaderNode");
-
-        // Verify that the deserialized HeaderNode matches the original
-        assert_eq!(deserialized, header_node, 
-                   "Deserialized HeaderNode should match the original");
-        assert_eq!(deserialized.root_page_id, header_node.root_page_id, 
-                   "root_page_id should match after serialization/deserialization");
-        assert_eq!(deserialized.next_page_id, header_node.next_page_id, 
-                   "next_page_id should match after serialization/deserialization");
-    }
-
-    #[test]
     fn test_header_serialize_deserialize() {
         // Create a HeaderNode instance
         let header_node = HeaderNode {
@@ -787,10 +742,10 @@ mod tests {
             next_page_id: PageID(6),
         };
 
-        // Serialize the HeaderNode to msgpack
+        // Serialize the HeaderNode
         let serialized = header_node.serialize();
 
-        // Deserialize the msgpack data back to a HeaderNode
+        // Deserialize the node data back to a HeaderNode
         let deserialized: HeaderNode = HeaderNode::from_slice(&serialized)
             .expect("Failed to deserialize HeaderNode");
 
@@ -1038,9 +993,8 @@ mod tests {
                    "Deserialized node_type_byte should be HEADER_NODE_TYPE");
 
         // Get the header_node from the deserialized page
-        let node_data = deserialized_page.node.to_msgpack()
-            .expect("Failed to serialize node data");
-        let deserialized_header_node: HeaderNode = decode::from_slice(&node_data)
+        let node_data = deserialized_page.node.serialize();
+        let deserialized_header_node: HeaderNode = HeaderNode::from_slice(&node_data)
             .expect("Failed to deserialize node data");
 
         // Check that the root_page_id in the deserialized header_node matches the new value
@@ -1090,9 +1044,8 @@ mod tests {
                    "Deserialized node_type_byte should be HEADER_NODE_TYPE");
 
         // Get the header_node from the deserialized page
-        let node_data = deserialized_page.node.to_msgpack()
-            .expect("Failed to serialize node data");
-        let deserialized_header_node: HeaderNode = decode::from_slice(&node_data)
+        let node_data = deserialized_page.node.serialize();
+        let deserialized_header_node: HeaderNode = HeaderNode::from_slice(&node_data)
             .expect("Failed to deserialize node data");
 
         // Check that the next_page_id in the deserialized header_node matches the new value

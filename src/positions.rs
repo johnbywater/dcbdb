@@ -24,12 +24,148 @@ pub struct PositionIndexRecord {
     pub type_hash: Vec<u8>,
 }
 
+// Position index record with fixed-size type_hash
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PositionIndexRecord8 {
+    pub segment: i32,
+    pub offset: i32,
+    pub type_hash: [u8; 8],
+}
+
 // Leaf node for the B+tree
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LeafNode {
     pub keys: Vec<Position>,
     pub values: Vec<PositionIndexRecord>,
     pub next_leaf_id: Option<PageID>,
+}
+
+impl LeafNode {
+    /// Serializes the LeafNode to a byte array according to the specified format:
+    /// - 4 bytes for the next_leaf_node PageID
+    /// - 4 bytes for the length of the keys
+    /// - 8 bytes for each Position key
+    /// - 16 bytes for each PositionIndexRecord value (4 bytes for segment, 4 bytes for offset, 8 bytes for type_hash)
+    ///
+    /// # Returns
+    /// * `Result<Vec<u8>, encode::Error>` - The serialized data or an error
+    pub fn serialize(&self) -> Result<Vec<u8>, encode::Error> {
+        // Calculate the total size of the serialized data
+        let keys_len = self.keys.len();
+        let total_size = 4 + 4 + (keys_len * 8) + (keys_len * 16);
+
+        // Create a buffer with the calculated capacity
+        let mut result = Vec::with_capacity(total_size);
+
+        // Serialize the next_leaf_id (4 bytes)
+        let next_leaf_id = match self.next_leaf_id {
+            Some(id) => id.0,
+            None => 0, // Use 0 to represent None
+        };
+        result.extend_from_slice(&next_leaf_id.to_le_bytes());
+
+        // Serialize the length of the keys (4 bytes)
+        result.extend_from_slice(&(keys_len as u32).to_le_bytes());
+
+        // Serialize each Position key (8 bytes each)
+        for key in &self.keys {
+            result.extend_from_slice(&key.to_le_bytes());
+        }
+
+        // Serialize each PositionIndexRecord value (16 bytes each)
+        for value in &self.values {
+            // Segment (4 bytes)
+            result.extend_from_slice(&value.segment.to_le_bytes());
+
+            // Offset (4 bytes)
+            result.extend_from_slice(&value.offset.to_le_bytes());
+
+            // Type hash (8 bytes)
+            // Ensure the type_hash is exactly 8 bytes
+            let mut type_hash_bytes = [0u8; 8];
+            let len = std::cmp::min(value.type_hash.len(), 8);
+            type_hash_bytes[..len].copy_from_slice(&value.type_hash[..len]);
+            result.extend_from_slice(&type_hash_bytes);
+        }
+
+        Ok(result)
+    }
+
+    /// Creates a LeafNode from a byte slice according to the specified format
+    ///
+    /// # Arguments
+    /// * `slice` - The byte slice to deserialize from
+    ///
+    /// # Returns
+    /// * `Result<LeafNode, decode::Error>` - The deserialized LeafNode or an error
+    pub fn from_slice(slice: &[u8]) -> Result<Self, decode::Error> {
+        // Check if the slice has at least 8 bytes (4 for next_leaf_id, 4 for keys_len)
+        if slice.len() < 8 {
+            return Err(decode::Error::InvalidMarkerRead(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Expected at least 8 bytes, got {}", slice.len()),
+            )));
+        }
+
+        // Extract the next_leaf_id (first 4 bytes)
+        let next_leaf_id = u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]);
+        let next_leaf_id = if next_leaf_id == 0 { None } else { Some(PageID(next_leaf_id)) };
+
+        // Extract the length of the keys (next 4 bytes)
+        let keys_len = u32::from_le_bytes([slice[4], slice[5], slice[6], slice[7]]) as usize;
+
+        // Calculate the expected size of the slice
+        let expected_size = 8 + (keys_len * 8) + (keys_len * 16);
+        if slice.len() < expected_size {
+            return Err(decode::Error::InvalidMarkerRead(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Expected {} bytes, got {}", expected_size, slice.len()),
+            )));
+        }
+
+        // Extract the Position keys (8 bytes each)
+        let mut keys = Vec::with_capacity(keys_len);
+        for i in 0..keys_len {
+            let start = 8 + (i * 8);
+            let key = i64::from_le_bytes([
+                slice[start], slice[start + 1], slice[start + 2], slice[start + 3],
+                slice[start + 4], slice[start + 5], slice[start + 6], slice[start + 7],
+            ]);
+            keys.push(key);
+        }
+
+        // Extract the PositionIndexRecord values (16 bytes each)
+        let mut values = Vec::with_capacity(keys_len);
+        for i in 0..keys_len {
+            let start = 8 + (keys_len * 8) + (i * 16);
+
+            // Extract segment (4 bytes)
+            let segment = i32::from_le_bytes([
+                slice[start], slice[start + 1], slice[start + 2], slice[start + 3],
+            ]);
+
+            // Extract offset (4 bytes)
+            let offset = i32::from_le_bytes([
+                slice[start + 4], slice[start + 5], slice[start + 6], slice[start + 7],
+            ]);
+
+            // Extract type_hash (8 bytes)
+            let mut type_hash = Vec::with_capacity(8);
+            type_hash.extend_from_slice(&slice[start + 8..start + 16]);
+
+            values.push(PositionIndexRecord {
+                segment,
+                offset,
+                type_hash,
+            });
+        }
+
+        Ok(LeafNode {
+            keys,
+            values,
+            next_leaf_id,
+        })
+    }
 }
 
 impl Node for LeafNode {
@@ -55,6 +191,104 @@ impl Node for LeafNode {
 pub struct InternalNode {
     pub keys: Vec<Position>,
     pub child_ids: Vec<PageID>,
+}
+
+impl InternalNode {
+    /// Serializes the InternalNode to a byte array according to the specified format:
+    /// - 4 bytes for the length of the keys
+    /// - 16 bytes for each Position key
+    /// - 8 bytes for each PageID value in child_ids
+    ///
+    /// # Returns
+    /// * `Result<Vec<u8>, encode::Error>` - The serialized data or an error
+    pub fn serialize(&self) -> Result<Vec<u8>, encode::Error> {
+        // Calculate the total size of the serialized data
+        let keys_len = self.keys.len();
+        let total_size = 4 + (keys_len * 16) + (self.child_ids.len() * 8);
+
+        // Create a buffer with the calculated capacity
+        let mut result = Vec::with_capacity(total_size);
+
+        // Serialize the length of the keys (4 bytes)
+        result.extend_from_slice(&(keys_len as u32).to_le_bytes());
+
+        // Serialize each Position key (16 bytes each)
+        for key in &self.keys {
+            // Position is an i64 (8 bytes), but we're allocating 16 bytes as per the spec
+            // First 8 bytes are the actual position value
+            result.extend_from_slice(&key.to_le_bytes());
+            // Next 8 bytes are padding (zeros)
+            result.extend_from_slice(&[0u8; 8]);
+        }
+
+        // Serialize each PageID value (8 bytes each)
+        for child_id in &self.child_ids {
+            result.extend_from_slice(&child_id.0.to_le_bytes());
+            // PageID is a u32 (4 bytes), but we're allocating 8 bytes as per the spec
+            // Next 4 bytes are padding (zeros)
+            result.extend_from_slice(&[0u8; 4]);
+        }
+
+        Ok(result)
+    }
+
+    /// Creates an InternalNode from a byte slice according to the specified format
+    ///
+    /// # Arguments
+    /// * `slice` - The byte slice to deserialize from
+    ///
+    /// # Returns
+    /// * `Result<InternalNode, decode::Error>` - The deserialized InternalNode or an error
+    pub fn from_slice(slice: &[u8]) -> Result<Self, decode::Error> {
+        // Check if the slice has at least 4 bytes for the keys_len
+        if slice.len() < 4 {
+            return Err(decode::Error::InvalidMarkerRead(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Expected at least 4 bytes, got {}", slice.len()),
+            )));
+        }
+
+        // Extract the length of the keys (first 4 bytes)
+        let keys_len = u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]) as usize;
+
+        // Calculate the expected size of the slice
+        // 4 bytes for keys_len + 16 bytes per key + 8 bytes per child_id (keys_len + 1 child_ids)
+        let expected_size = 4 + (keys_len * 16) + ((keys_len + 1) * 8);
+        if slice.len() < expected_size {
+            return Err(decode::Error::InvalidMarkerRead(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Expected {} bytes, got {}", expected_size, slice.len()),
+            )));
+        }
+
+        // Extract the Position keys (16 bytes each, but only first 8 bytes are used)
+        let mut keys = Vec::with_capacity(keys_len);
+        for i in 0..keys_len {
+            let start = 4 + (i * 16);
+            let key = i64::from_le_bytes([
+                slice[start], slice[start + 1], slice[start + 2], slice[start + 3],
+                slice[start + 4], slice[start + 5], slice[start + 6], slice[start + 7],
+            ]);
+            keys.push(key);
+            // Skip the next 8 bytes (padding)
+        }
+
+        // Extract the PageID values (8 bytes each, but only first 4 bytes are used)
+        let mut child_ids = Vec::with_capacity(keys_len + 1);
+        for i in 0..(keys_len + 1) {
+            let start = 4 + (keys_len * 16) + (i * 8);
+            let page_id = u32::from_le_bytes([
+                slice[start], slice[start + 1], slice[start + 2], slice[start + 3],
+            ]);
+            child_ids.push(PageID(page_id));
+            // Skip the next 4 bytes (padding)
+        }
+
+        Ok(InternalNode {
+            keys,
+            child_ids,
+        })
+    }
 }
 
 impl Node for InternalNode {
@@ -583,10 +817,10 @@ mod tests {
         };
 
         // Serialize the node
-        let serialized = leaf_node.to_msgpack().unwrap();
+        let serialized = leaf_node.serialize().expect("Failed to serialize LeafNode");
 
         // Deserialize the node
-        let deserialized: LeafNode = decode::from_slice(&serialized).unwrap();
+        let deserialized: LeafNode = LeafNode::from_slice(&serialized).unwrap();
 
         // Verify that the deserialized node matches the original
         assert_eq!(deserialized.keys.len(), leaf_node.keys.len());
@@ -620,10 +854,10 @@ mod tests {
         };
 
         // Serialize the node
-        let serialized = internal_node.to_msgpack().unwrap();
+        let serialized = internal_node.serialize().expect("Failed to serialize InternalNode");
 
         // Deserialize the node
-        let deserialized: InternalNode = decode::from_slice(&serialized).unwrap();
+        let deserialized: InternalNode = InternalNode::from_slice(&serialized).unwrap();
 
         // Verify that the deserialized node matches the original
         assert_eq!(deserialized.keys.len(), internal_node.keys.len());
@@ -1437,11 +1671,11 @@ mod tests {
 
         // Flush changes to disk
         position_index.index_pages.flush().unwrap();
-        
+
         // Create another instance of PositionIndex
         let mut position_index2 = PositionIndex::new(&test_path, page_size).unwrap();
-        
-        
+
+
         // Check lookup after flush
         for (position, record) in &inserted {
             let result = position_index2.lookup(*position).unwrap();

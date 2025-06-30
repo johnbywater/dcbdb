@@ -46,6 +46,43 @@ impl HeaderNode {
     pub fn to_msgpack(&self) -> Result<Vec<u8>, encode::Error> {
         encode::to_vec(self)
     }
+
+    /// Serializes the HeaderNode to a byte array with 8 bytes
+    /// First 4 bytes for root_page_id and next 4 bytes for next_page_id
+    ///
+    /// # Returns
+    /// * `Result<Vec<u8>, encode::Error>` - The serialized data or an error
+    pub fn serialize(&self) -> Result<Vec<u8>, encode::Error> {
+        let mut result = Vec::with_capacity(8);
+        result.extend_from_slice(&self.root_page_id.0.to_le_bytes());
+        result.extend_from_slice(&self.next_page_id.0.to_le_bytes());
+        Ok(result)
+    }
+
+    /// Creates a HeaderNode from a byte slice
+    /// Expects a slice with 8 bytes, first 4 bytes for root_page_id and next 4 bytes for next_page_id
+    ///
+    /// # Arguments
+    /// * `slice` - The byte slice to deserialize from
+    ///
+    /// # Returns
+    /// * `Result<HeaderNode, decode::Error>` - The deserialized HeaderNode or an error
+    pub fn from_slice(slice: &[u8]) -> Result<Self, decode::Error> {
+        if slice.len() != 8 {
+            return Err(decode::Error::InvalidMarkerRead(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Expected 8 bytes, got {}", slice.len()),
+            )));
+        }
+
+        let root_page_id = u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]);
+        let next_page_id = u32::from_le_bytes([slice[4], slice[5], slice[6], slice[7]]);
+
+        Ok(HeaderNode {
+            root_page_id: PageID(root_page_id),
+            next_page_id: PageID(next_page_id),
+        })
+    }
 }
 
 impl Node for HeaderNode {
@@ -728,6 +765,30 @@ mod tests {
 
         // Deserialize the msgpack data back to a HeaderNode
         let deserialized: HeaderNode = decode::from_slice(&serialized)
+            .expect("Failed to deserialize HeaderNode");
+
+        // Verify that the deserialized HeaderNode matches the original
+        assert_eq!(deserialized, header_node, 
+                   "Deserialized HeaderNode should match the original");
+        assert_eq!(deserialized.root_page_id, header_node.root_page_id, 
+                   "root_page_id should match after serialization/deserialization");
+        assert_eq!(deserialized.next_page_id, header_node.next_page_id, 
+                   "next_page_id should match after serialization/deserialization");
+    }
+
+    #[test]
+    fn test_header_serialize_deserialize() {
+        // Create a HeaderNode instance
+        let header_node = HeaderNode {
+            root_page_id: PageID(5),
+            next_page_id: PageID(6),
+        };
+
+        // Serialize the HeaderNode to msgpack
+        let serialized = header_node.serialize().expect("Failed to serialize HeaderNode");
+
+        // Deserialize the msgpack data back to a HeaderNode
+        let deserialized: HeaderNode = HeaderNode::from_slice(&serialized)
             .expect("Failed to deserialize HeaderNode");
 
         // Verify that the deserialized HeaderNode matches the original

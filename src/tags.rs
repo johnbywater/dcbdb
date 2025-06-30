@@ -583,17 +583,70 @@ impl TagIndex {
         match search_result {
             // Key already exists, append the new position to the existing list
             Ok(index) => {
-                // Get a mutable reference to the page
-                let page = self.index_pages.get_page_mut(page_id).unwrap();
-                let leaf_node = page.node.as_any_mut().downcast_mut::<LeafNode>().unwrap();
+                // Check if adding these positions would exceed 100
+                let current_positions_count = {
+                    let page = self.index_pages.get_page(page_id).unwrap();
+                    let leaf_node = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+                    leaf_node.values[index].len()
+                };
 
-                // Append the new position to the existing list
-                // We can assume that a new Position for an existing tag is greater than previously added Positions
-                for pos in value {
-                    leaf_node.values[index].push(pos);
+                let will_exceed_100 = current_positions_count + value.len() > 100;
+
+                if will_exceed_100 && current_positions_count <= 100 {
+                    // We need to create a TagLeafNode
+
+                    // First, get all the current positions
+                    let all_positions = {
+                        let page = self.index_pages.get_page(page_id).unwrap();
+                        let leaf_node = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+                        let mut positions = leaf_node.values[index].clone();
+
+                        // Add the new positions
+                        positions.extend(value);
+                        positions
+                    };
+
+                    // Create a TagLeafNode with all positions
+                    let tag_leaf_node = TagLeafNode {
+                        positions: all_positions,
+                        next_leaf_id: None,
+                    };
+
+                    // Allocate a new page ID for the TagLeafNode
+                    let tag_leaf_page_id = self.index_pages.alloc_page_id();
+
+                    // Create a new IndexPage with the TagLeafNode
+                    let tag_leaf_page = IndexPage {
+                        page_id: tag_leaf_page_id,
+                        node: Box::new(tag_leaf_node),
+                    };
+
+                    // Add the page to the collection
+                    self.index_pages.add_page(tag_leaf_page);
+
+                    // Now update the LeafNode to store the PageID instead of the positions
+                    let page = self.index_pages.get_page_mut(page_id).unwrap();
+                    let leaf_node = page.node.as_any_mut().downcast_mut::<LeafNode>().unwrap();
+
+                    // Replace the list of positions with a single position that is the negative of the page ID
+                    // This is a special marker to indicate that the positions are stored in a TagLeafNode
+                    leaf_node.values[index] = vec![-(tag_leaf_page_id.0 as i64)];
+
+                    self.index_pages.mark_dirty(page_id);
+                } else {
+                    // Just append the new positions to the existing list
+                    let page = self.index_pages.get_page_mut(page_id).unwrap();
+                    let leaf_node = page.node.as_any_mut().downcast_mut::<LeafNode>().unwrap();
+
+                    // Append the new position to the existing list
+                    // We can assume that a new Position for an existing tag is greater than previously added Positions
+                    for pos in value {
+                        leaf_node.values[index].push(pos);
+                    }
+
+                    self.index_pages.mark_dirty(page_id);
                 }
 
-                self.index_pages.mark_dirty(page_id);
                 return None;
             },
             // Key doesn't exist, insert it at the correct position
@@ -1542,5 +1595,123 @@ mod tests {
         assert_eq!(leaf2.values[tag_c_index2].len(), 2);
         assert_eq!(leaf2.values[tag_c_index2][0], 3000);
         assert_eq!(leaf2.values[tag_c_index2][1], 3001);
+    }
+
+    #[test]
+    fn test_tag_leaf_node_creation_from_overflow() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+
+        // Append the filename to the directory path
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Create a new TagIndex instance with a large page size to avoid splitting
+        let mut tag_index = TagIndex::new(&test_path, 4096).unwrap();
+
+        // Construct a PageID
+        let page_id = PageID(30);
+
+        // Create an empty LeafNode
+        let leaf_node = LeafNode {
+            keys: Vec::new(),
+            values: Vec::new(),
+        };
+
+        // Create an IndexPage with the LeafNode
+        let leaf_page = IndexPage {
+            page_id,
+            node: Box::new(leaf_node),
+        };
+
+        // Add the page to the index
+        tag_index.index_pages.add_page(leaf_page);
+
+        // Create a tag hash for testing
+        let tag_hash = hash_tag("TestTag");
+        let mut tag_key = [0u8; TAG_HASH_LEN];
+        tag_key.copy_from_slice(&tag_hash[..TAG_HASH_LEN]);
+
+        // Add the tag with 100 positions
+        let mut positions = Vec::new();
+        for i in 0..100 {
+            positions.push(i as i64);
+        }
+
+        // Add the key and value to the leaf node
+        let split_result = tag_index.append_leaf_key_and_value(page_id, tag_key, positions);
+
+        // Verify that the leaf was not split
+        assert!(split_result.is_none());
+
+        // Get the page and verify it has 1 key and value
+        let page = tag_index.index_pages.get_page(page_id).unwrap();
+        let leaf = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+        assert_eq!(leaf.keys.len(), 1);
+        assert_eq!(leaf.values.len(), 1);
+        assert_eq!(leaf.values[0].len(), 100);
+
+        // Add one more position to the tag
+        let new_position = 100;
+        let split_result = tag_index.append_leaf_key_and_value(page_id, tag_key, vec![new_position]);
+
+        // Verify that the leaf was not split
+        assert!(split_result.is_none());
+
+        // Get the page again and verify that the tag now has a PageID reference instead of positions
+        let page = tag_index.index_pages.get_page(page_id).unwrap();
+        let leaf = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+        assert_eq!(leaf.keys.len(), 1);
+        assert_eq!(leaf.values.len(), 1);
+
+        // The value should now be a single position that is the negative of the page ID
+        assert_eq!(leaf.values[0].len(), 1);
+        let tag_leaf_page_id = PageID((-leaf.values[0][0]) as u32);
+
+        // Get the TagLeafNode page
+        let tag_leaf_page = tag_index.index_pages.get_page(tag_leaf_page_id).unwrap();
+        let tag_leaf_node = tag_leaf_page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
+
+        // Verify that the TagLeafNode has 101 positions
+        assert_eq!(tag_leaf_node.positions.len(), 101);
+
+        // Verify that the positions are correct
+        for i in 0..101 {
+            assert_eq!(tag_leaf_node.positions[i], i as i64);
+        }
+
+        // Verify that the TagLeafNode's next_leaf_id is None
+        assert_eq!(tag_leaf_node.next_leaf_id, None);
+
+        // Flush changes to disk
+        tag_index.index_pages.flush().unwrap();
+
+        // Create another instance of TagIndex
+        let mut tag_index2 = TagIndex::new(&test_path, 4096).unwrap();
+
+        // Get the page and verify it still has 1 key and value
+        let page2 = tag_index2.index_pages.get_page(page_id).unwrap();
+        let leaf2 = page2.node.as_any().downcast_ref::<LeafNode>().unwrap();
+        assert_eq!(leaf2.keys.len(), 1);
+        assert_eq!(leaf2.values.len(), 1);
+
+        // The value should still be a single position that is the negative of the page ID
+        assert_eq!(leaf2.values[0].len(), 1);
+        let tag_leaf_page_id2 = PageID((-leaf2.values[0][0]) as u32);
+        assert_eq!(tag_leaf_page_id, tag_leaf_page_id2);
+
+        // Get the TagLeafNode page
+        let tag_leaf_page2 = tag_index2.index_pages.get_page(tag_leaf_page_id2).unwrap();
+        let tag_leaf_node2 = tag_leaf_page2.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
+
+        // Verify that the TagLeafNode still has 101 positions
+        assert_eq!(tag_leaf_node2.positions.len(), 101);
+
+        // Verify that the positions are still correct
+        for i in 0..101 {
+            assert_eq!(tag_leaf_node2.positions[i], i as i64);
+        }
+
+        // Verify that the TagLeafNode's next_leaf_id is still None
+        assert_eq!(tag_leaf_node2.next_leaf_id, None);
     }
 }

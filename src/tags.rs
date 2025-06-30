@@ -23,6 +23,9 @@ pub const INTERNAL_NODE_TYPE: u8 = 2;
 /// Constant for the leaf node type
 pub const LEAF_NODE_TYPE: u8 = 3;
 
+/// Constant for the tag leaf node type
+pub const TAG_LEAF_NODE_TYPE: u8 = 4;
+
 // Leaf node for the B+tree
 #[derive(Debug, Clone)]
 pub struct LeafNode {
@@ -276,6 +279,108 @@ impl Node for InternalNode {
     }
 }
 
+// Tag leaf node for the B+tree
+#[derive(Debug, Clone)]
+pub struct TagLeafNode {
+    pub positions: Vec<Position>,
+    pub next_leaf_id: Option<PageID>,
+}
+
+impl TagLeafNode {
+    fn calc_serialized_size(&self) -> usize {
+        // 4 bytes for next_leaf_id + 2 bytes for positions_len + positions * (8 bytes per position)
+        let positions_len = self.positions.len();
+        let total_size = 4 + 2 + (positions_len * POSITION_SIZE);
+        total_size
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let total_size = self.calc_serialized_size();
+        let mut result = Vec::with_capacity(total_size);
+
+        // Serialize the next_leaf_id (4 bytes)
+        let next_leaf_id = match self.next_leaf_id {
+            Some(id) => id.0,
+            None => 0, // Use 0 to represent None
+        };
+        result.extend_from_slice(&next_leaf_id.to_le_bytes());
+
+        // Serialize the length of the positions (2 bytes)
+        result.extend_from_slice(&(self.positions.len() as u16).to_le_bytes());
+
+        // Serialize each Position (8 bytes each)
+        for pos in &self.positions {
+            result.extend_from_slice(&pos.to_le_bytes());
+        }
+
+        result
+    }
+
+    pub fn from_slice(slice: &[u8]) -> Result<Self, std::io::Error> {
+        // Check if the slice has at least 6 bytes (4 for next_leaf_id, 2 for positions_len)
+        if slice.len() < 6 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Expected at least 6 bytes, got {}", slice.len()),
+            ));
+        }
+
+        // Extract the next_leaf_id (first 4 bytes)
+        let next_leaf_id = u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]);
+        let next_leaf_id = if next_leaf_id == 0 { None } else { Some(PageID(next_leaf_id)) };
+
+        // Extract the length of the positions (next 2 bytes)
+        let positions_len = u16::from_le_bytes([slice[4], slice[5]]) as usize;
+
+        // Calculate the expected size of the slice
+        let expected_size = 6 + (positions_len * POSITION_SIZE);
+        if slice.len() < expected_size {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Expected {} bytes, got {}", expected_size, slice.len()),
+            ));
+        }
+
+        // Extract the Position values (8 bytes each)
+        let mut positions = Vec::with_capacity(positions_len);
+        for i in 0..positions_len {
+            let start = 6 + (i * POSITION_SIZE);
+            let pos = i64::from_le_bytes([
+                slice[start], slice[start + 1], slice[start + 2], slice[start + 3],
+                slice[start + 4], slice[start + 5], slice[start + 6], slice[start + 7],
+            ]);
+            positions.push(pos);
+        }
+
+        Ok(TagLeafNode {
+            positions,
+            next_leaf_id,
+        })
+    }
+}
+
+impl Node for TagLeafNode {
+    fn node_type_byte(&self) -> u8 {
+        TAG_LEAF_NODE_TYPE
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        self.serialize()
+    }
+
+    fn calc_serialized_size(&self) -> usize {
+        self.calc_serialized_size()
+    }
+}
+
 /// A structure that manages tag indexing using IndexPages
 pub struct TagIndex {
     pub index_pages: IndexPages,
@@ -300,6 +405,11 @@ impl TagIndex {
         index_pages.deserializer.register(INTERNAL_NODE_TYPE, |data| {
             let internal_node: InternalNode = InternalNode::from_slice(data)?;
             Ok(Box::new(internal_node) as Box<dyn Node>)
+        });
+
+        index_pages.deserializer.register(TAG_LEAF_NODE_TYPE, |data| {
+            let tag_leaf_node: TagLeafNode = TagLeafNode::from_slice(data)?;
+            Ok(Box::new(tag_leaf_node) as Box<dyn Node>)
         });
 
         // Get the root page ID from the header page
@@ -466,5 +576,138 @@ mod tests {
 
         // Verify that the page data starts with the correct node type byte
         assert_eq!(page_data[0], LEAF_NODE_TYPE, "Page data should start with the leaf node type byte");
+    }
+
+    #[test]
+    fn test_internal_node_serialization() {
+        // Create a non-trivial InternalNode instance
+        let mut key1 = [0u8; TAG_HASH_LEN];
+        let mut key2 = [0u8; TAG_HASH_LEN];
+        let mut key3 = [0u8; TAG_HASH_LEN];
+
+        // Use hash_tag to generate tag hashes
+        let tag1_hash = hash_tag("user");
+        let tag2_hash = hash_tag("product");
+        let tag3_hash = hash_tag("order");
+
+        // Copy the hash values to the fixed-size arrays
+        key1.copy_from_slice(&tag1_hash[..TAG_HASH_LEN]);
+        key2.copy_from_slice(&tag2_hash[..TAG_HASH_LEN]);
+        key3.copy_from_slice(&tag3_hash[..TAG_HASH_LEN]);
+
+        let internal_node = InternalNode {
+            keys: vec![
+                key1,
+                key2,
+                key3,
+            ],
+            child_ids: vec![
+                PageID(10),
+                PageID(20),
+                PageID(30),
+                PageID(40),
+            ],
+        };
+
+        // Serialize the node
+        let serialized = internal_node.serialize();
+
+        // Deserialize the node
+        let deserialized: InternalNode = InternalNode::from_slice(&serialized).unwrap();
+
+        // Verify that the deserialized node matches the original
+        assert_eq!(deserialized.keys.len(), internal_node.keys.len());
+        assert_eq!(deserialized.child_ids.len(), internal_node.child_ids.len());
+
+        for i in 0..internal_node.keys.len() {
+            assert_eq!(deserialized.keys[i], internal_node.keys[i]);
+        }
+
+        for i in 0..internal_node.child_ids.len() {
+            assert_eq!(deserialized.child_ids[i], internal_node.child_ids[i]);
+        }
+
+        // Verify the node type byte
+        assert_eq!(internal_node.node_type_byte(), INTERNAL_NODE_TYPE);
+
+        // Calculate the serialized page size
+        let page_size = internal_node.calc_serialized_page_size();
+
+        // Calculate the expected size: 
+        // 2 bytes for keys length + 
+        // (3 keys * 8 bytes) + (4 child_ids * 4 bytes) + 9 bytes for page overhead
+        let expected_size = 2 + (3 * TAG_HASH_LEN) + (4 * PAGE_ID_SIZE) + 9;
+
+        // Verify that the page size is correct
+        assert_eq!(page_size, expected_size, 
+                   "Page size should be {} bytes", expected_size);
+
+        // Serialize the InternalNode to a page format
+        let page_data = internal_node.serialize_page();
+
+        // Verify that the page data is not empty
+        assert!(!page_data.is_empty(), "Page data should not be empty");
+
+        // Verify that the page data has the correct length
+        assert_eq!(page_data.len(), expected_size, "Page data should be {} bytes", expected_size);
+
+        // Verify that the page data starts with the correct node type byte
+        assert_eq!(page_data[0], INTERNAL_NODE_TYPE, "Page data should start with the internal node type byte");
+    }
+
+    #[test]
+    fn test_tag_leaf_node_serialization() {
+        // Create a non-trivial TagLeafNode instance
+        let tag_leaf_node = TagLeafNode {
+            positions: vec![
+                1000, // Position is just an i64
+                2000,
+                3000,
+                4000,
+                5000,
+            ],
+            next_leaf_id: Some(PageID(42)),
+        };
+
+        // Serialize the node
+        let serialized = tag_leaf_node.serialize();
+
+        // Deserialize the node
+        let deserialized: TagLeafNode = TagLeafNode::from_slice(&serialized).unwrap();
+
+        // Verify that the deserialized node matches the original
+        assert_eq!(deserialized.positions.len(), tag_leaf_node.positions.len());
+        assert_eq!(deserialized.next_leaf_id, tag_leaf_node.next_leaf_id);
+
+        for i in 0..tag_leaf_node.positions.len() {
+            assert_eq!(deserialized.positions[i], tag_leaf_node.positions[i]);
+        }
+
+        // Verify the node type byte
+        assert_eq!(tag_leaf_node.node_type_byte(), TAG_LEAF_NODE_TYPE);
+
+        // Calculate the serialized page size
+        let page_size = tag_leaf_node.calc_serialized_page_size();
+
+        // Calculate the expected size: 
+        // 4 bytes for next_leaf_id + 2 bytes for positions length + 
+        // (5 positions * 8 bytes) + 9 bytes for page overhead
+        let expected_size = 4 + 2 + (5 * POSITION_SIZE) + 9;
+
+        // Verify that the page size is correct
+        assert_eq!(page_size, expected_size, 
+                   "Page size should be {} bytes", expected_size);
+
+        // Serialize the TagLeafNode to a page format
+        let page_data = tag_leaf_node.serialize_page();
+
+        // Verify that the page data is not empty
+        assert!(!page_data.is_empty(), "Page data should not be empty");
+
+        // Verify that the page data has the correct length
+        assert_eq!(page_data.len(), expected_size, "Page data should be {} bytes", expected_size);
+
+        // Verify that the page data starts with the correct node type byte
+        assert_eq!(page_data[0], TAG_LEAF_NODE_TYPE, "Page data should start with the tag leaf node type byte");
     }
 }

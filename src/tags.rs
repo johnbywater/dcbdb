@@ -942,4 +942,116 @@ mod tests {
         // Verify that the page data starts with the correct node type byte
         assert_eq!(page_data[0], TAG_INTERNAL_NODE_TYPE, "Page data should start with the tag internal node type byte");
     }
+
+    #[test]
+    fn test_deserializer_registration() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+
+        // Append the filename to the directory path
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Create a new TagIndex instance
+        let tag_index = TagIndex::new(&test_path, 4096).unwrap();
+
+        // Create instances of all four node types
+        // 1. LeafNode
+        let mut key1 = [0u8; TAG_HASH_LEN];
+        let mut key2 = [0u8; TAG_HASH_LEN];
+
+        // Use hash_tag to generate tag hashes
+        let tag1_hash = hash_tag("user");
+        let tag2_hash = hash_tag("product");
+
+        // Copy the hash values to the fixed-size arrays
+        key1.copy_from_slice(&tag1_hash[..TAG_HASH_LEN]);
+        key2.copy_from_slice(&tag2_hash[..TAG_HASH_LEN]);
+
+        let leaf_node = LeafNode {
+            keys: vec![key1, key2],
+            values: vec![
+                vec![1000, 1001], // Positions for tag1
+                vec![2000, 2001], // Positions for tag2
+            ],
+        };
+
+        // 2. InternalNode
+        let internal_node = InternalNode {
+            keys: vec![key1, key2],
+            child_ids: vec![PageID(10), PageID(20), PageID(30)],
+        };
+
+        // 3. TagLeafNode
+        let tag_leaf_node = TagLeafNode {
+            positions: vec![1000, 2000, 3000],
+            next_leaf_id: Some(PageID(42)),
+        };
+
+        // 4. TagInternalNode
+        let tag_internal_node = TagInternalNode {
+            keys: vec![1000, 2000],
+            child_ids: vec![PageID(10), PageID(20), PageID(30)],
+        };
+
+        // Create IndexPage instances with the nodes
+        let leaf_page = IndexPage {
+            page_id: PageID(1),
+            node: Box::new(leaf_node.clone()),
+        };
+
+        let internal_page = IndexPage {
+            page_id: PageID(2),
+            node: Box::new(internal_node.clone()),
+        };
+
+        let tag_leaf_page = IndexPage {
+            page_id: PageID(3),
+            node: Box::new(tag_leaf_node.clone()),
+        };
+
+        let tag_internal_page = IndexPage {
+            page_id: PageID(4),
+            node: Box::new(tag_internal_node.clone()),
+        };
+
+        // Serialize the pages
+        let leaf_serialized = leaf_page.node.serialize_page();
+        let internal_serialized = internal_page.node.serialize_page();
+        let tag_leaf_serialized = tag_leaf_page.node.serialize_page();
+        let tag_internal_serialized = tag_internal_page.node.serialize_page();
+
+        // Deserialize the pages using the registered deserializers
+        let deserialized_leaf_page = tag_index.index_pages.deserializer.deserialize_page(&leaf_serialized, PageID(1)).unwrap();
+        let deserialized_internal_page = tag_index.index_pages.deserializer.deserialize_page(&internal_serialized, PageID(2)).unwrap();
+        let deserialized_tag_leaf_page = tag_index.index_pages.deserializer.deserialize_page(&tag_leaf_serialized, PageID(3)).unwrap();
+        let deserialized_tag_internal_page = tag_index.index_pages.deserializer.deserialize_page(&tag_internal_serialized, PageID(4)).unwrap();
+
+        // Verify that the deserialized nodes have the correct type
+        assert_eq!(deserialized_leaf_page.node.node_type_byte(), LEAF_NODE_TYPE);
+        assert_eq!(deserialized_internal_page.node.node_type_byte(), INTERNAL_NODE_TYPE);
+        assert_eq!(deserialized_tag_leaf_page.node.node_type_byte(), TAG_LEAF_NODE_TYPE);
+        assert_eq!(deserialized_tag_internal_page.node.node_type_byte(), TAG_INTERNAL_NODE_TYPE);
+
+        // Downcast and verify the leaf node
+        let deserialized_leaf = deserialized_leaf_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+        assert_eq!(deserialized_leaf.keys.len(), leaf_node.keys.len());
+        assert_eq!(deserialized_leaf.values.len(), leaf_node.values.len());
+
+        // Downcast and verify the internal node
+        let deserialized_internal = deserialized_internal_page.node.as_any().downcast_ref::<InternalNode>().unwrap();
+        assert_eq!(deserialized_internal.keys.len(), internal_node.keys.len());
+        assert_eq!(deserialized_internal.child_ids.len(), internal_node.child_ids.len());
+
+        // Downcast and verify the tag leaf node
+        let deserialized_tag_leaf = deserialized_tag_leaf_page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
+        assert_eq!(deserialized_tag_leaf.positions.len(), tag_leaf_node.positions.len());
+        assert_eq!(deserialized_tag_leaf.next_leaf_id, tag_leaf_node.next_leaf_id);
+
+        // Downcast and verify the tag internal node
+        let deserialized_tag_internal = deserialized_tag_internal_page.node.as_any().downcast_ref::<TagInternalNode>().unwrap();
+        assert_eq!(deserialized_tag_internal.keys.len(), tag_internal_node.keys.len());
+        assert_eq!(deserialized_tag_internal.child_ids.len(), tag_internal_node.child_ids.len());
+
+        // No need to clean up the test file, it will be removed when temp_dir goes out of scope
+    }
 }

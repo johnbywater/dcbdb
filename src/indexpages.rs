@@ -50,6 +50,35 @@ pub trait Node: Any {
         // 1 byte for node type + 4 bytes for CRC + 4 bytes for data length + serialized size
         self.calc_serialized_size() + 9
     }
+
+    /// Serializes the node to a page format including node type byte, CRC, and data length
+    ///
+    /// # Returns
+    /// * `Vec<u8>` - The serialized page data
+    fn serialize_page(&self) -> Vec<u8> {
+        // Get the node data using serialize
+        let node_data = self.serialize();
+
+        // Get the node type byte
+        let node_type_byte = self.node_type_byte();
+
+        // Calculate CRC
+        let crc = calc_crc(&node_data);
+
+        // Get the length of the serialized data
+        let data_len = node_data.len() as u32;
+
+        // Create a buffer with enough capacity for all components
+        let mut result = Vec::with_capacity(1 + 4 + 4 + node_data.len());
+
+        // Concatenate: node type byte + CRC + length + serialized data
+        result.push(node_type_byte);
+        result.extend_from_slice(&crc.to_le_bytes());
+        result.extend_from_slice(&data_len.to_le_bytes());
+        result.extend_from_slice(&node_data);
+
+        result
+    }
 }
 
 /// A structure that represents a header node in the index
@@ -842,6 +871,18 @@ mod tests {
         // Verify that the page size is correct (8 bytes for the node + 9 bytes for the page overhead)
         assert_eq!(page_size, 17, 
                    "Page size should be 17 bytes (8 bytes for the node + 9 bytes for the page overhead)");
+
+        // Serialize the HeaderNode to a page format
+        let page_data = header_node.serialize_page();
+
+        // Verify that the page data is not empty
+        assert!(!page_data.is_empty(), "Page data should not be empty");
+
+        // Verify that the page data has the correct length (1 byte for node type + 4 bytes for CRC + 4 bytes for data length + 8 bytes for the node)
+        assert_eq!(page_data.len(), 17, "Page data should be 17 bytes");
+
+        // Verify that the page data starts with the correct node type byte
+        assert_eq!(page_data[0], HEADER_NODE_TYPE, "Page data should start with the header node type byte");
     }
 
     #[test]

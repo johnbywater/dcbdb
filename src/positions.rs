@@ -865,6 +865,18 @@ mod tests {
         // Verify that the page size is correct
         assert_eq!(page_size, expected_size, 
                    "Page size should be {} bytes", expected_size);
+
+        // Serialize the LeafNode to a page format
+        let page_data = leaf_node.serialize_page();
+
+        // Verify that the page data is not empty
+        assert!(!page_data.is_empty(), "Page data should not be empty");
+
+        // Verify that the page data has the correct length
+        assert_eq!(page_data.len(), expected_size, "Page data should be {} bytes", expected_size);
+
+        // Verify that the page data starts with the correct node type byte
+        assert_eq!(page_data[0], LEAF_NODE_TYPE, "Page data should start with the leaf node type byte");
     }
 
     #[test]
@@ -916,6 +928,18 @@ mod tests {
         // Verify that the page size is correct
         assert_eq!(page_size, expected_size, 
                    "Page size should be {} bytes", expected_size);
+
+        // Serialize the InternalNode to a page format
+        let page_data = internal_node.serialize_page();
+
+        // Verify that the page data is not empty
+        assert!(!page_data.is_empty(), "Page data should not be empty");
+
+        // Verify that the page data has the correct length
+        assert_eq!(page_data.len(), expected_size, "Page data should be {} bytes", expected_size);
+
+        // Verify that the page data starts with the correct node type byte
+        assert_eq!(page_data[0], INTERNAL_NODE_TYPE, "Page data should start with the internal node type byte");
     }
 
     #[test]

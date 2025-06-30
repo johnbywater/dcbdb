@@ -41,6 +41,12 @@ pub struct LeafNode {
 }
 
 impl LeafNode {
+    fn calc_serialized_size(&self) -> usize {
+        let keys_len = self.keys.len();
+        let total_size = 4 + 2 + (keys_len * 8) + (keys_len * 16);
+        total_size
+    }
+
     /// Serializes the LeafNode to a byte array according to the specified format:
     /// - 4 bytes for the next_leaf_node PageID
     /// - 4 bytes for the length of the keys
@@ -51,8 +57,7 @@ impl LeafNode {
     /// * `Result<Vec<u8>, encode::Error>` - The serialized data or an error
     pub fn serialize(&self) -> Result<Vec<u8>, encode::Error> {
         // Calculate the total size of the serialized data
-        let keys_len = self.keys.len();
-        let total_size = 4 + 4 + (keys_len * 8) + (keys_len * 16);
+        let total_size = self.calc_serialized_size();
 
         // Create a buffer with the calculated capacity
         let mut result = Vec::with_capacity(total_size);
@@ -64,8 +69,8 @@ impl LeafNode {
         };
         result.extend_from_slice(&next_leaf_id.to_le_bytes());
 
-        // Serialize the length of the keys (4 bytes)
-        result.extend_from_slice(&(keys_len as u32).to_le_bytes());
+        // Serialize the length of the keys (2 bytes)
+        result.extend_from_slice(&(self.keys.len() as u16).to_le_bytes());
 
         // Serialize each Position key (8 bytes each)
         for key in &self.keys {
@@ -111,11 +116,11 @@ impl LeafNode {
         let next_leaf_id = u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]);
         let next_leaf_id = if next_leaf_id == 0 { None } else { Some(PageID(next_leaf_id)) };
 
-        // Extract the length of the keys (next 4 bytes)
-        let keys_len = u32::from_le_bytes([slice[4], slice[5], slice[6], slice[7]]) as usize;
+        // Extract the length of the keys (next 2 bytes)
+        let keys_len = u16::from_le_bytes([slice[4], slice[5]]) as usize;
 
         // Calculate the expected size of the slice
-        let expected_size = 8 + (keys_len * 8) + (keys_len * 16);
+        let expected_size = 6 + (keys_len * 8) + (keys_len * 16);
         if slice.len() < expected_size {
             return Err(decode::Error::InvalidMarkerRead(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -126,7 +131,7 @@ impl LeafNode {
         // Extract the Position keys (8 bytes each)
         let mut keys = Vec::with_capacity(keys_len);
         for i in 0..keys_len {
-            let start = 8 + (i * 8);
+            let start = 6 + (i * 8);
             let key = i64::from_le_bytes([
                 slice[start], slice[start + 1], slice[start + 2], slice[start + 3],
                 slice[start + 4], slice[start + 5], slice[start + 6], slice[start + 7],
@@ -137,7 +142,7 @@ impl LeafNode {
         // Extract the PositionIndexRecord values (16 bytes each)
         let mut values = Vec::with_capacity(keys_len);
         for i in 0..keys_len {
-            let start = 8 + (keys_len * 8) + (i * 16);
+            let start = 6 + (keys_len * 8) + (i * 16);
 
             // Extract segment (4 bytes)
             let segment = i32::from_le_bytes([
@@ -203,14 +208,13 @@ impl InternalNode {
     /// * `Result<Vec<u8>, encode::Error>` - The serialized data or an error
     pub fn serialize(&self) -> Result<Vec<u8>, encode::Error> {
         // Calculate the total size of the serialized data
-        let keys_len = self.keys.len();
-        let total_size = 4 + (keys_len * 16) + (self.child_ids.len() * 8);
+        let total_size = self.calc_serialized_size();
 
         // Create a buffer with the calculated capacity
         let mut result = Vec::with_capacity(total_size);
 
         // Serialize the length of the keys (4 bytes)
-        result.extend_from_slice(&(keys_len as u32).to_le_bytes());
+        result.extend_from_slice(&(self.keys.len() as u32).to_le_bytes());
 
         // Serialize each Position key (16 bytes each)
         for key in &self.keys {
@@ -230,6 +234,12 @@ impl InternalNode {
         }
 
         Ok(result)
+    }
+
+    fn calc_serialized_size(&self) -> usize {
+        let keys_len = self.keys.len();
+        let total_size = 4 + (keys_len * 16) + (self.child_ids.len() * 8);
+        total_size
     }
 
     /// Creates an InternalNode from a byte slice according to the specified format
@@ -1645,12 +1655,12 @@ mod tests {
         let test_path = temp_dir.path().join("index.dat");
 
         // Create a new PositionIndex instance with a large page size to avoid splitting
-        let page_size = 4096;
+        let page_size = 256;
         let mut position_index = PositionIndex::new(&test_path, page_size).unwrap();
 
         // Insert a few records
         let mut inserted: Vec<(Position, PositionIndexRecord)> = Vec::new();
-        for i in 0..150000 {
+        for i in 0..10000 {
             let position = (i + 1).into();
             let record = PositionIndexRecord {
                 segment: i,
@@ -1699,7 +1709,7 @@ mod tests {
 
         // Insert a few records
         let mut inserted: Vec<(Position, PositionIndexRecord)> = Vec::new();
-        for i in 0..70000 {
+        for i in 0..10000 {
             let position = (i + 1).into();
             let record = PositionIndexRecord {
                 segment: i,

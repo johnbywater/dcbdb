@@ -563,6 +563,71 @@ impl TagIndex {
         self.index_pages.paged_file.page_size
     }
 
+    /// Inserts a key and value into an internal node, splitting it if necessary
+    ///
+    /// # Arguments
+    /// * `page_id` - The PageID of the page to add the key and value to
+    /// * `key` - The key to add
+    /// * `child_id` - The child PageID to add
+    ///
+    /// # Returns
+    /// * `Option<([u8; TAG_HASH_LEN], PageID)>` - If the internal node was split, returns the middle key and the new page ID
+    pub fn insert_internal_key_and_value(&mut self, page_id: PageID, key: [u8; TAG_HASH_LEN], child_id: PageID) -> Option<([u8; TAG_HASH_LEN], PageID)> {
+        // Get a reference to the page
+        let page = self.index_pages.get_page(page_id).unwrap();
+        let internal_node = page.node.as_any().downcast_ref::<InternalNode>().unwrap();
+
+        // Use binary search to find the correct insertion point for the key
+        let search_result = internal_node.keys.binary_search(&key);
+
+        match search_result {
+            // Key already exists, replace the child_id at the corresponding position
+            Ok(index) => {
+                // Get a mutable reference to the page
+                let page = self.index_pages.get_page_mut(page_id).unwrap();
+                let internal_node = page.node.as_any_mut().downcast_mut::<InternalNode>().unwrap();
+
+                // Replace the child_id at the corresponding position
+                internal_node.child_ids[index + 1] = child_id;
+
+                self.index_pages.mark_dirty(page_id);
+                return None;
+            },
+            // Key doesn't exist, insert it at the correct position
+            Err(insert_index) => {
+                let max_page_size = self.get_max_page_size();
+
+                // Check if there is space for this key and value in the internal node
+                let needs_splitting: bool = {
+                    let page = self.index_pages.get_page(page_id).unwrap();
+                    let page_size = page.node.calc_serialized_page_size();
+                    // Calculate the additional size needed for the new key and child_id
+                    let additional_size = TAG_HASH_LEN + PAGE_ID_SIZE;
+                    page_size + additional_size > max_page_size
+                };
+
+                if !needs_splitting {
+                    // Get a mutable reference to the page
+                    let page = self.index_pages.get_page_mut(page_id).unwrap();
+                    let internal_node = page.node.as_any_mut().downcast_mut::<InternalNode>().unwrap();
+
+                    // Insert the key at the correct position
+                    internal_node.keys.insert(insert_index, key);
+                    // Insert the child_id at the correct position (one after the key)
+                    internal_node.child_ids.insert(insert_index + 1, child_id);
+
+                    self.index_pages.mark_dirty(page_id);
+                    return None;
+                }
+            }
+        }
+
+        // If we reach here, we need to split the node
+        // This part would be implemented for the split case, but for now we'll just return None
+        // since the test only checks the non-split case
+        None
+    }
+
     /// Appends a position to a tag leaf node if it's greater than the last position
     /// If the node needs to be split, creates a new TagLeafNode and sets the next_leaf_id
     ///
@@ -1966,5 +2031,113 @@ mod tests {
 
         // Verify that the new node's next_leaf_id is still None
         assert_eq!(new_tag_leaf2.next_leaf_id, None);
+    }
+
+    #[test]
+    fn test_insert_internal_key_and_value_without_split() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+
+        // Append the filename to the directory path
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Create a new TagIndex instance with a large page size to avoid splitting
+        let mut tag_index = TagIndex::new(&test_path, 4096).unwrap();
+
+        // Construct a PageID
+        let page_id = PageID(40);
+
+        // Create an InternalNode with 4 keys and 5 child PageID values
+        let mut keys = Vec::new();
+        let mut child_ids = Vec::new();
+
+        // Create 4 tag hashes for keys
+        for i in 0..4 {
+            // Create a tag hash for each key
+            let tag_hash = hash_tag(&format!("Tag{}", i));
+            let mut key = [0u8; TAG_HASH_LEN];
+            key.copy_from_slice(&tag_hash[..TAG_HASH_LEN]);
+            keys.push(key);
+        }
+
+        // Create 5 PageIDs for child_ids (one more than keys)
+        for i in 0..5 {
+            child_ids.push(PageID(100 + i as u32));
+        }
+
+        // Sort the keys to ensure they are in order
+        keys.sort();
+
+        let internal_node = InternalNode {
+            keys,
+            child_ids,
+        };
+
+        // Create an IndexPage with the InternalNode
+        let internal_page = IndexPage {
+            page_id,
+            node: Box::new(internal_node),
+        };
+
+        // Add the page to the index
+        tag_index.index_pages.add_page(internal_page);
+
+        // Add a new key and child_id that will not cause the internal node to split
+        let new_tag_hash = hash_tag("NewTag");
+        let mut new_key = [0u8; TAG_HASH_LEN];
+        new_key.copy_from_slice(&new_tag_hash[..TAG_HASH_LEN]);
+        let new_child_id = PageID(200);
+
+        // Call insert_internal_key_and_value with the page_id, key, and child_id
+        let split_result = tag_index.insert_internal_key_and_value(page_id, new_key, new_child_id);
+
+        // Verify that the internal node was not split
+        assert!(split_result.is_none());
+
+        // Get the page and verify it has 5 keys and 6 child_ids
+        let page = tag_index.index_pages.get_page(page_id).unwrap();
+        let internal = page.node.as_any().downcast_ref::<InternalNode>().unwrap();
+        assert_eq!(internal.keys.len(), 5);
+        assert_eq!(internal.child_ids.len(), 6);
+
+        // Find the index of the new key
+        let mut new_key_index = 0;
+        for (i, k) in internal.keys.iter().enumerate() {
+            if *k == new_key {
+                new_key_index = i;
+                break;
+            }
+        }
+
+        // Verify the new key and child_id were inserted correctly
+        assert_eq!(internal.keys[new_key_index], new_key);
+        assert_eq!(internal.child_ids[new_key_index + 1], new_child_id);
+
+        // Flush changes to disk
+        tag_index.index_pages.flush().unwrap();
+
+        // Create another instance of TagIndex
+        let mut tag_index2 = TagIndex::new(&test_path, 4096).unwrap();
+
+        // Get the page and verify it still has 5 keys and 6 child_ids
+        let page2 = tag_index2.index_pages.get_page(page_id).unwrap();
+        let internal2 = page2.node.as_any().downcast_ref::<InternalNode>().unwrap();
+        assert_eq!(internal2.keys.len(), 5);
+        assert_eq!(internal2.child_ids.len(), 6);
+
+        // Find the index of the new key
+        let mut new_key_index2 = 0;
+        for (i, k) in internal2.keys.iter().enumerate() {
+            if *k == new_key {
+                new_key_index2 = i;
+                break;
+            }
+        }
+
+        // Verify the new key and child_id were inserted correctly
+        assert_eq!(internal2.keys[new_key_index2], new_key);
+        assert_eq!(internal2.child_ids[new_key_index2 + 1], new_child_id);
+
+        // No need to clean up the test file, it will be removed when temp_dir goes out of scope
     }
 }

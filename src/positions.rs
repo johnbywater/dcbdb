@@ -189,6 +189,14 @@ impl Node for LeafNode {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
+
+    fn serialize(&self) -> Result<Vec<u8>, encode::Error> {
+        self.serialize()
+    }
+
+    fn calc_serialized_size(&self) -> usize {
+        self.calc_serialized_size()
+    }
 }
 
 // Internal node for the B+tree
@@ -201,7 +209,7 @@ pub struct InternalNode {
 impl InternalNode {
     fn calc_serialized_size(&self) -> usize {
         let keys_len = self.keys.len();
-        let total_size = 2 + (keys_len * 16) + (self.child_ids.len() * 8);
+        let total_size = 2 + (keys_len * 8) + (self.child_ids.len() * 4);
         total_size
     }
 
@@ -222,21 +230,16 @@ impl InternalNode {
         // Serialize the length of the keys (4 bytes)
         result.extend_from_slice(&(self.keys.len() as u16).to_le_bytes());
 
-        // Serialize each Position key (16 bytes each)
+        // Serialize each Position key (8 bytes each)
         for key in &self.keys {
-            // Position is an i64 (8 bytes), but we're allocating 16 bytes as per the spec
-            // First 8 bytes are the actual position value
+            // Position is an i64 (8 bytes)
             result.extend_from_slice(&key.to_le_bytes());
-            // Next 8 bytes are padding (zeros)
-            result.extend_from_slice(&[0u8; 8]);
         }
 
-        // Serialize each PageID value (8 bytes each)
+        // Serialize each PageID value (4 bytes each)
         for child_id in &self.child_ids {
+            // PageID is a u32 (4 bytes)
             result.extend_from_slice(&child_id.0.to_le_bytes());
-            // PageID is a u32 (4 bytes), but we're allocating 8 bytes as per the spec
-            // Next 4 bytes are padding (zeros)
-            result.extend_from_slice(&[0u8; 4]);
         }
 
         Ok(result)
@@ -262,8 +265,8 @@ impl InternalNode {
         let keys_len = u16::from_le_bytes([slice[0], slice[1]]) as usize;
 
         // Calculate the expected size of the slice
-        // 4 bytes for keys_len + 16 bytes per key + 8 bytes per child_id (keys_len + 1 child_ids)
-        let expected_size = 2 + (keys_len * 16) + ((keys_len + 1) * 8);
+        // 2 bytes for keys_len + 8 bytes per key + 4 bytes per child_id (keys_len + 1 child_ids)
+        let expected_size = 2 + (keys_len * 8) + ((keys_len + 1) * 4);
         if slice.len() < expected_size {
             return Err(decode::Error::InvalidMarkerRead(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -271,27 +274,25 @@ impl InternalNode {
             )));
         }
 
-        // Extract the Position keys (16 bytes each, but only first 8 bytes are used)
+        // Extract the Position keys (8 bytes each)
         let mut keys = Vec::with_capacity(keys_len);
         for i in 0..keys_len {
-            let start = 2 + (i * 16);
+            let start = 2 + (i * 8);
             let key = i64::from_le_bytes([
                 slice[start], slice[start + 1], slice[start + 2], slice[start + 3],
                 slice[start + 4], slice[start + 5], slice[start + 6], slice[start + 7],
             ]);
             keys.push(key);
-            // Skip the next 8 bytes (padding)
         }
 
-        // Extract the PageID values (8 bytes each, but only first 4 bytes are used)
+        // Extract the PageID values (4 bytes each)
         let mut child_ids = Vec::with_capacity(keys_len + 1);
         for i in 0..(keys_len + 1) {
-            let start = 2 + (keys_len * 16) + (i * 8);
+            let start = 2 + (keys_len * 8) + (i * 4);
             let page_id = u32::from_le_bytes([
                 slice[start], slice[start + 1], slice[start + 2], slice[start + 3],
             ]);
             child_ids.push(PageID(page_id));
-            // Skip the next 4 bytes (padding)
         }
 
         Ok(InternalNode {
@@ -316,6 +317,14 @@ impl Node for InternalNode {
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+
+    fn serialize(&self) -> Result<Vec<u8>, encode::Error> {
+        self.serialize()
+    }
+
+    fn calc_serialized_size(&self) -> usize {
+        self.calc_serialized_size()
     }
 }
 

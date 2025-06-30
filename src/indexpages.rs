@@ -29,6 +29,18 @@ pub trait Node: Any {
 
     /// Returns self as mutable Any for downcasting
     fn as_any_mut(&mut self) -> &mut dyn Any;
+
+    /// Serializes the node to a byte array
+    ///
+    /// # Returns
+    /// * `Result<Vec<u8>, rmp_serde::encode::Error>` - The serialized data or an error
+    fn serialize(&self) -> Result<Vec<u8>, encode::Error>;
+
+    /// Calculates the size of the serialized node
+    ///
+    /// # Returns
+    /// * `usize` - The size of the serialized node in bytes
+    fn calc_serialized_size(&self) -> usize;
 }
 
 /// A structure that represents a header node in the index
@@ -57,6 +69,14 @@ impl HeaderNode {
         result.extend_from_slice(&self.root_page_id.0.to_le_bytes());
         result.extend_from_slice(&self.next_page_id.0.to_le_bytes());
         Ok(result)
+    }
+
+    /// Calculates the size of the serialized HeaderNode
+    ///
+    /// # Returns
+    /// * `usize` - The size of the serialized HeaderNode in bytes
+    pub fn calc_serialized_size(&self) -> usize {
+        8 // 4 bytes for root_page_id + 4 bytes for next_page_id
     }
 
     /// Creates a HeaderNode from a byte slice
@@ -100,6 +120,14 @@ impl Node for HeaderNode {
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+
+    fn serialize(&self) -> Result<Vec<u8>, encode::Error> {
+        self.serialize()
+    }
+
+    fn calc_serialized_size(&self) -> usize {
+        self.calc_serialized_size()
     }
 }
 
@@ -1550,6 +1578,14 @@ mod tests {
 
             fn as_any_mut(&mut self) -> &mut dyn Any {
                 self
+            }
+
+            fn serialize(&self) -> Result<Vec<u8>, encode::Error> {
+                Ok(self.data.clone())
+            }
+
+            fn calc_serialized_size(&self) -> usize {
+                self.data.len()
             }
         }
 

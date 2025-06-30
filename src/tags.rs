@@ -1251,6 +1251,88 @@ mod tests {
     }
 
     #[test]
+    fn test_append_leaf_key_and_value_with_split() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+
+        // Append the filename to the directory path
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Construct a PageID
+        let page_id = PageID(30);
+
+        // Create a LeafNode with 10 keys and 10 values
+        let mut keys = Vec::new();
+        let mut values = Vec::new();
+        for i in 0..10 {
+            // Create a tag hash for each key
+            let tag_hash = hash_tag(&format!("Tag{}", i));
+            let mut key = [0u8; TAG_HASH_LEN];
+            key.copy_from_slice(&tag_hash[..TAG_HASH_LEN]);
+            keys.push(key);
+
+            // Create a vector of positions for each value
+            let mut positions = Vec::new();
+            for j in 0..3 {
+                positions.push((i * 1000 + j) as i64);
+            }
+            values.push(positions);
+        }
+
+        let leaf_node = LeafNode {
+            keys,
+            values,
+        };
+
+        let serialized_size = leaf_node.calc_serialized_page_size();
+
+        // Create an IndexPage with the LeafNode
+        let leaf_page = IndexPage {
+            page_id,
+            node: Box::new(leaf_node),
+        };
+
+        // Create a new TagIndex instance with a page size that is the serialized length
+        // This will ensure that the page needs splitting when we add another key
+        let mut tag_index = TagIndex::new(&test_path, serialized_size).unwrap();
+
+        // Add the page to the index
+        tag_index.index_pages.add_page(leaf_page);
+
+        // Add a new key and value that will cause the leaf to split
+        let new_tag_hash = hash_tag("NewTag");
+        let mut new_key = [0u8; TAG_HASH_LEN];
+        new_key.copy_from_slice(&new_tag_hash[..TAG_HASH_LEN]);
+        let new_value = vec![9999, 9998, 9997];
+
+        // Call append_leaf_key_and_value with the page_id, key, and value
+        let split_result = tag_index.append_leaf_key_and_value(page_id, new_key, new_value.clone());
+
+        // Verify that the leaf was split
+        assert!(split_result.is_some());
+        let (first_key, new_page_id) = split_result.unwrap();
+
+        // Verify the first key of the new leaf node
+        assert_eq!(first_key, new_key);
+
+        // Get the original page and verify it has 10 keys and values
+        let original_page = tag_index.index_pages.get_page(page_id).unwrap();
+        let original_leaf = original_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+        assert_eq!(original_leaf.keys.len(), 10);
+        assert_eq!(original_leaf.values.len(), 10);
+
+        // Get the new page and verify it has 1 key and value
+        let new_page = tag_index.index_pages.get_page(new_page_id).unwrap();
+        let new_leaf = new_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+        assert_eq!(new_leaf.keys.len(), 1);
+        assert_eq!(new_leaf.values.len(), 1);
+        assert_eq!(new_leaf.keys[0], new_key);
+        assert_eq!(new_leaf.values[0], new_value);
+
+        // No need to clean up the test file, it will be removed when temp_dir goes out of scope
+    }
+
+    #[test]
     fn test_append_leaf_key_and_value_binary_search() {
         // Create a temporary directory
         let temp_dir = TempDir::new().expect("Failed to create temporary directory");

@@ -21,6 +21,9 @@ pub mod pagedfile;
 // Export the Index Pages module
 pub mod indexpages;
 
+// Export the Tags module
+pub mod tags;
+
 #[cfg(test)]
 mod tests {
     #[test]

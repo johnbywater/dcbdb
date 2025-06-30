@@ -6,7 +6,14 @@ use crate::pagedfile::{PageID, PAGE_ID_SIZE};
 use crate::wal::{Position, POSITION_SIZE};
 use crate::indexpages::{IndexPages, Node, IndexPage, HeaderNode};
 
+const NAMESPACE_URL: Uuid = uuid!("6ba7b810-9dad-11d1-80b4-00c04fd430c8");
 const TYPE_HASH_LEN: usize = 8;
+// Hash a type string to a fixed-length byte array
+pub fn hash_type(type_str: &str) -> Vec<u8> {
+    let uuid = Uuid::new_v5(&NAMESPACE_URL, format!("/type/{}", type_str).as_bytes());
+    uuid.as_bytes()[..TYPE_HASH_LEN].to_vec()
+}
+
 
 /// Constant for the internal node type
 pub const INTERNAL_NODE_TYPE: u8 = 2;
@@ -309,13 +316,6 @@ impl Node for InternalNode {
     fn calc_serialized_size(&self) -> usize {
         self.calc_serialized_size()
     }
-}
-
-// Hash a type string to a fixed-length byte array
-pub fn hash_type(type_str: &str) -> Vec<u8> {
-    let namespace = uuid!("6ba7b810-9dad-11d1-80b4-00c04fd430c8"); // NAMESPACE_URL
-    let uuid = Uuid::new_v5(&namespace, format!("/type/{}", type_str).as_bytes());
-    uuid.as_bytes()[..TYPE_HASH_LEN].to_vec()
 }
 
 /// A structure that manages position indexing using IndexPages

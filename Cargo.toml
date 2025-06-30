@@ -5,10 +5,8 @@ edition = "2021"
 
 [dependencies]
 # Add dependencies as needed for your new project
-bincode = "1.3.3"
 crc32fast = "1.3.2"
 lru = "0.15.0"
-rmp = "0.8.12"
 rmp-serde = "1.1.2"
 serde = { version = "1.0.188", features = ["derive"] }
 tempfile = "3.8.0"

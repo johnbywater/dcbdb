@@ -2296,7 +2296,7 @@ mod tests {
             assert!(split_result.is_none());
 
             positions.push(i as i64);
-            
+
         }
 
 
@@ -2933,7 +2933,7 @@ mod tests {
             tag_index.insert(&tag, position).unwrap();
             inserted_tags.push((tag, position));
         }
-
+        
         // Check lookup before flush
         for (tag, position) in &inserted_tags {
             let positions = tag_index.lookup(tag).unwrap();

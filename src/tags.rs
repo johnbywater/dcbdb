@@ -2803,6 +2803,118 @@ mod tests {
     }
 
     #[test]
+    fn test_insert_lookup_positions_split_tag_leaf_node() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+
+        // Append the filename to the directory path
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Create a TagLeafNode with many positions to calculate its size
+        let mut positions = Vec::new();
+        for i in 0..100 {
+            positions.push(i as i64);
+        }
+
+        let tag_leaf_node = TagLeafNode {
+            positions,
+            next_leaf_id: None,
+        };
+
+        // Calculate the serialized size of the TagLeafNode
+        let serialized_size = tag_leaf_node.calc_serialized_size();
+
+        // Create a new TagIndex instance with a page size that can just fit the current TagLeafNode
+        // This will ensure that adding more positions will cause a split
+        let mut tag_index = TagIndex::new(&test_path, serialized_size).unwrap();
+
+        // Insert a tag with enough positions to create a TagLeafNode
+        let tag = "test-tag";
+        let mut inserted_positions = Vec::new();
+
+        // First, insert 100 positions to create a TagLeafNode
+        for i in 0..100 {
+            let position = i as i64;
+            tag_index.insert(tag, position).unwrap();
+            inserted_positions.push(position);
+        }
+
+        // Now insert 101 more positions to trigger splitting the TagLeafNode
+        for i in 100..20001 {
+            let position = i as i64;
+            tag_index.insert(tag, position).unwrap();
+            inserted_positions.push(position);
+        }
+
+        // Get the root page ID from the header page
+        let header_node = tag_index.index_pages.header_node();
+        let root_page_id = header_node.root_page_id;
+
+        // Get the root page
+        let root_page = tag_index.index_pages.get_page(root_page_id).unwrap();
+
+        // Verify that the root page is a LeafNode
+        assert_eq!(root_page.node.node_type_byte(), LEAF_NODE_TYPE, "Root node should be a LeafNode");
+
+        // Downcast the node to a LeafNode
+        let leaf_node = root_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+
+        // Verify that the LeafNode has one key
+        assert_eq!(leaf_node.keys.len(), 1, "LeafNode should have one key");
+        assert_eq!(leaf_node.values.len(), 1, "LeafNode should have one value");
+
+        // Hash the tag to get the expected key
+        let tag_hash = hash_tag(tag);
+        let mut expected_key = [0u8; TAG_HASH_LEN];
+        expected_key.copy_from_slice(&tag_hash[..TAG_HASH_LEN]);
+
+        // Verify that the key matches the expected key
+        assert_eq!(leaf_node.keys[0], expected_key, "Key should match the hashed tag");
+
+        // Verify that the value is a PageID (a single negative value)
+        assert_eq!(leaf_node.values[0].len(), 1, "Value should have one element");
+        assert!(leaf_node.values[0][0] < 0, "Value should be a negative number (PageID)");
+
+        // Get the page ID from the LeafNode value
+        let page_id = PageID((-leaf_node.values[0][0]) as u32);
+
+        // Get the page
+        let page = tag_index.index_pages.get_page(page_id).unwrap();
+
+        // Verify that the page is a TagInternalNode
+        assert_eq!(page.node.node_type_byte(), TAG_INTERNAL_NODE_TYPE, "Page should be a TagInternalNode");
+
+        // Downcast the node to a TagInternalNode
+        let tag_internal_node = page.node.as_any().downcast_ref::<TagInternalNode>().unwrap();
+
+        // Verify that the TagInternalNode has at least one key
+        assert!(!tag_internal_node.keys.is_empty(), "TagInternalNode should have at least one key");
+
+        // Verify that the TagInternalNode has at least two child IDs
+        assert!(tag_internal_node.child_ids.len() >= 2, "TagInternalNode should have at least two child IDs");
+
+        // Use lookup() to verify all 201 positions are returned correctly
+        let positions = tag_index.lookup(tag).unwrap();
+        assert_eq!(positions.len(), 201, "lookup() should return 201 positions");
+        for i in 0..201 {
+            assert!(positions.contains(&(i as i64)), "lookup() should return position {}", i);
+        }
+
+        // Flush changes to disk
+        tag_index.index_pages.flush().unwrap();
+
+        // Create another instance of TagIndex
+        let mut tag_index2 = TagIndex::new(&test_path, serialized_size).unwrap();
+
+        // Use lookup() to verify all 201 positions are still returned correctly
+        let positions = tag_index2.lookup(tag).unwrap();
+        assert_eq!(positions.len(), 201, "lookup() should return 201 positions after reopening");
+        for i in 0..201 {
+            assert!(positions.contains(&(i as i64)), "lookup() should return position {} after reopening", i);
+        }
+    }
+
+    #[test]
     fn test_insert_lookup_positions_moved_to_tag_leaf_node() {
         // Create a temporary directory
         let temp_dir = TempDir::new().expect("Failed to create temporary directory");

@@ -5,8 +5,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::path::{Path};
 use std::sync::Mutex;
 
 use crc32fast::Hasher;
@@ -134,12 +133,16 @@ impl From<(Position, Event)> for DCBEventWithPosition {
 
 /// Transaction Write-Ahead Log
 pub struct TransactionWAL {
-    path: PathBuf,
-    file: Mutex<File>,
+    file: File,
     buffered: Mutex<Vec<Vec<u8>>>,
-    commit_offset: AtomicI64,
+    commit_offset: i64,
 }
 
+impl TransactionWAL {
+    pub(crate) fn file_size(&self) -> WalResult<u64> {
+        Ok(self.file.metadata()?.len())
+    }
+}
 impl TransactionWAL {
     const WAL_FILE_NAME: &'static str = "wal.dat";
 
@@ -156,10 +159,9 @@ impl TransactionWAL {
             .open(&wal_path)?;
 
         Ok(Self {
-            path: wal_path,
-            file: Mutex::new(file),
+            file: file,
             buffered: Mutex::new(Vec::new()),
-            commit_offset: AtomicI64::new(0),
+            commit_offset: 0,
         })
     }
 
@@ -193,7 +195,7 @@ impl TransactionWAL {
     }
 
     /// Commit a transaction
-    pub fn commit_transaction(&self, txn_id: u64) -> WalResult<()> {
+    pub fn commit_transaction(&mut self, txn_id: u64) -> WalResult<()> {
         let record = self.encode_record(RECORD_COMMIT, txn_id, &[]);
         {
             let mut buffered = self.buffered.lock().unwrap();
@@ -205,8 +207,7 @@ impl TransactionWAL {
     }
 
     /// Write, flush, and sync the buffered records
-    fn write_flush_and_sync(&self) -> WalResult<()> {
-        let mut file = self.file.lock().unwrap();
+    fn write_flush_and_sync(&mut self) -> WalResult<()> {
         let buffered = {
             let mut buffered_lock = self.buffered.lock().unwrap();
             let buffered_copy = buffered_lock.clone();
@@ -214,38 +215,39 @@ impl TransactionWAL {
             buffered_copy
         };
 
-        file.seek(SeekFrom::End(0))?;
-
-        for record in buffered {
-            file.write_all(&record)?;
+        {
+            self.file.seek(SeekFrom::End(0))?;
         }
 
-        self.flush_and_sync(&mut file)?;
-        self.commit_offset.store(file.stream_position()? as i64, Ordering::SeqCst);
+        for record in buffered {
+            self.file.write_all(&record)?;
+        }
+        
+        self.flush_and_sync()?;
+        self.commit_offset = self.file.stream_position()? as i64;
 
         Ok(())
     }
 
     /// Flush and sync the file
-    fn flush_and_sync(&self, file: &mut File) -> WalResult<()> {
-        file.flush()?;
-        file.sync_all()?;
+    fn flush_and_sync(&mut self) -> WalResult<()> {
+        self.file.flush()?;
+        self.file.sync_all()?;
         Ok(())
     }
 
     /// Read committed transactions from the WAL
-    pub fn read_committed_transactions(&self) -> WalResult<Vec<(u64, Vec<Vec<u8>>)>> {
-        let mut file = self.file.lock().unwrap();
-        file.seek(SeekFrom::Start(0))?;
+    pub fn read_committed_transactions(&mut self) -> WalResult<Vec<(u64, Vec<Vec<u8>>)>> {
+        self.file.seek(SeekFrom::Start(0))?;
 
         let mut txn_events: std::collections::HashMap<u64, Vec<Vec<u8>>> = std::collections::HashMap::new();
         let mut committed_txns: std::collections::HashSet<u64> = std::collections::HashSet::new();
         let mut last_good_offset: u64 = 0;
 
         loop {
-            match self.read_next_record(&mut file) {
+            match self.read_next_record() {
                 Ok(Some((record_type, txn_id, payload))) => {
-                    last_good_offset = file.stream_position()?;
+                    last_good_offset = self.file.stream_position()?;
 
                     match record_type {
                         RECORD_BEGIN => {
@@ -259,7 +261,7 @@ impl TransactionWAL {
                         RECORD_COMMIT => {
                             if txn_events.contains_key(&txn_id) {
                                 committed_txns.insert(txn_id);
-                                self.commit_offset.store(file.stream_position()? as i64, Ordering::SeqCst);
+                                self.commit_offset = self.file.stream_position()? as i64;
                             }
                         }
                         _ => {}
@@ -268,9 +270,9 @@ impl TransactionWAL {
                 Ok(None) => break,
                 Err(_) => {
                     // Truncate file at last good record
-                    file.set_len(last_good_offset)?;
-                    file.seek(SeekFrom::Start(last_good_offset))?;
-                    self.flush_and_sync(&mut file)?;
+                    self.file.set_len(last_good_offset)?;
+                    self.file.seek(SeekFrom::Start(last_good_offset))?;
+                    self.flush_and_sync()?;
                     break;
                 }
             }
@@ -287,10 +289,10 @@ impl TransactionWAL {
     }
 
     /// Read the next record from the file
-    fn read_next_record(&self, file: &mut File) -> WalResult<Option<(u32, u64, Vec<u8>)>> {
+    fn read_next_record(&mut self) -> WalResult<Option<(u32, u64, Vec<u8>)>> {
         // Check if there's any data left to read
-        let current_pos = file.stream_position()?;
-        let file_size = file.metadata()?.len();
+        let current_pos = self.file.stream_position()?;
+        let file_size = self.file.metadata()?.len();
 
         if current_pos >= file_size {
             return Ok(None);
@@ -302,7 +304,7 @@ impl TransactionWAL {
         }
 
         let mut header_bytes = [0u8; HEADER_SIZE];
-        match file.read_exact(&mut header_bytes) {
+        match self.file.read_exact(&mut header_bytes) {
             Ok(_) => {}
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
                 return Err(WalError::InvalidRecord("Unexpected EOF during header read".to_string()));
@@ -320,13 +322,13 @@ impl TransactionWAL {
         }
 
         // Check if there's enough data left for the payload
-        let current_pos = file.stream_position()?;
+        let current_pos = self.file.stream_position()?;
         if file_size - current_pos < header.length as u64 {
             return Err(WalError::InvalidRecord("Incomplete payload".to_string()));
         }
 
         let mut payload = vec![0u8; header.length as usize];
-        match file.read_exact(&mut payload) {
+        match self.file.read_exact(&mut payload) {
             Ok(_) => {}
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
                 return Err(WalError::InvalidRecord("Incomplete payload".to_string()));
@@ -348,17 +350,16 @@ impl TransactionWAL {
     }
 
     /// Truncate the WAL before the given checkpoint transaction ID
-    pub fn truncate_wal_before_checkpoint(&self, txn_id: u64) -> WalResult<()> {
-        let mut file = self.file.lock().unwrap();
-        file.seek(SeekFrom::Start(0))?;
+    pub fn truncate_wal_before_checkpoint(&mut self, txn_id: u64) -> WalResult<()> {
+        self.file.seek(SeekFrom::Start(0))?;
 
         let mut cut_offset: Option<u64> = None;
 
         loop {
-            match self.read_next_record(&mut file) {
+            match self.read_next_record() {
                 Ok(Some((record_type, record_txn_id, _))) => {
                     if record_type == RECORD_COMMIT && record_txn_id == txn_id {
-                        cut_offset = Some(file.stream_position()?);
+                        cut_offset = Some(self.file.stream_position()?);
                         break;
                     }
                 }
@@ -368,25 +369,25 @@ impl TransactionWAL {
         }
 
         if let Some(offset) = cut_offset {
-            self.cut_before_offset(&mut file, offset)?;
+            self.cut_before_offset(offset)?;
         }
 
         Ok(())
     }
 
     /// Cut the WAL file before the given offset
-    fn cut_before_offset(&self, file: &mut File, cut_offset: u64) -> WalResult<()> {
-        file.seek(SeekFrom::Start(cut_offset))?;
+    fn cut_before_offset(&mut self, cut_offset: u64) -> WalResult<()> {
+        self.file.seek(SeekFrom::Start(cut_offset))?;
 
         let mut keep_data = Vec::new();
-        file.read_to_end(&mut keep_data)?;
+        self.file.read_to_end(&mut keep_data)?;
 
-        file.set_len(0)?;
-        file.seek(SeekFrom::Start(0))?;
-        file.write_all(&keep_data)?;
+        self.file.set_len(0)?;
+        self.file.seek(SeekFrom::Start(0))?;
+        self.file.write_all(&keep_data)?;
 
-        self.flush_and_sync(file)?;
-        self.commit_offset.store(file.stream_position()? as i64, Ordering::SeqCst);
+        self.flush_and_sync()?;
+        self.commit_offset = self.file.stream_position()? as i64;
 
         Ok(())
     }
@@ -445,8 +446,8 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let wal = TransactionWAL::new(temp_dir.path()).unwrap();
 
-        assert_eq!(wal.path, temp_dir.path().join(TransactionWAL::WAL_FILE_NAME));
-        assert!(wal.path.exists());
+        let wal_path = temp_dir.path().join(TransactionWAL::WAL_FILE_NAME);
+        assert!(wal_path.exists());
         assert!(wal.buffered.lock().unwrap().is_empty());
     }
 
@@ -525,7 +526,7 @@ mod tests {
     #[test]
     fn test_commit_transaction() {
         let temp_dir = TempDir::new().unwrap();
-        let wal = TransactionWAL::new(temp_dir.path()).unwrap();
+        let mut wal = TransactionWAL::new(temp_dir.path()).unwrap();
 
         // First add some events
         let txn_id = 42;
@@ -536,10 +537,7 @@ mod tests {
         assert!(wal.buffered.lock().unwrap().is_empty());
 
         // Verify file contains the records
-        wal.close().unwrap();
-
-        // Reopen the file for reading
-        let file_size = std::fs::metadata(&wal.path).unwrap().len();
+        let file_size = wal.file_size().unwrap();
         assert!(file_size > 0);
     }
 
@@ -558,7 +556,7 @@ mod tests {
     #[test]
     fn test_flush_and_sync() {
         let temp_dir = TempDir::new().unwrap();
-        let wal = TransactionWAL::new(temp_dir.path()).unwrap();
+        let mut wal = TransactionWAL::new(temp_dir.path()).unwrap();
 
         let txn_id = 42;
         wal.begin_transaction(txn_id).unwrap();
@@ -574,14 +572,14 @@ mod tests {
         assert!(wal.buffered.lock().unwrap().is_empty());
 
         // File should have data
-        let file_size = std::fs::metadata(&wal.path).unwrap().len();
+        let file_size = wal.file_size().unwrap();
         assert!(file_size > 0);
     }
 
     #[test]
     fn test_complete_transaction_flow() {
         let temp_dir = TempDir::new().unwrap();
-        let wal = TransactionWAL::new(temp_dir.path()).unwrap();
+        let mut wal = TransactionWAL::new(temp_dir.path()).unwrap();
 
         // Begin transaction
         let txn_id = 42;
@@ -605,14 +603,14 @@ mod tests {
         assert!(wal.buffered.lock().unwrap().is_empty());
 
         // File should have data
-        let file_size = std::fs::metadata(&wal.path).unwrap().len();
+        let file_size = wal.file_size().unwrap();
         assert!(file_size > 0);
     }
 
     #[test]
     fn test_wal_recovery() {
         let temp_dir = TempDir::new().unwrap();
-        let wal = TransactionWAL::new(temp_dir.path()).unwrap();
+        let mut wal = TransactionWAL::new(temp_dir.path()).unwrap();
 
         // Create test events
         let event1 = Event {
@@ -656,7 +654,7 @@ mod tests {
     #[test]
     fn test_wal_truncation_on_corruption() {
         let temp_dir = TempDir::new().unwrap();
-        let wal = TransactionWAL::new(temp_dir.path()).unwrap();
+        let mut wal = TransactionWAL::new(temp_dir.path()).unwrap();
 
         // Write a good transaction
         let txn_id = 42;
@@ -674,10 +672,12 @@ mod tests {
 
         // Write a partial record manually (simulate crash)
         {
+            let wal_path = temp_dir.path().join(TransactionWAL::WAL_FILE_NAME);
+
             let mut file = std::fs::OpenOptions::new()
                 .write(true)
                 .append(true)
-                .open(&wal.path)
+                .open(wal_path)
                 .unwrap();
 
             file.write_all(b"CRASH").unwrap();
@@ -687,7 +687,8 @@ mod tests {
         let recovered = wal.read_committed_transactions().unwrap();
 
         // File should now be truncated to the valid commit
-        let file_content = std::fs::read(&wal.path).unwrap();
+        let wal_path = temp_dir.path().join(TransactionWAL::WAL_FILE_NAME);
+        let file_content = std::fs::read(wal_path).unwrap();
         assert!(!file_content.windows(5).any(|window| window == b"CRASH"));
 
         assert_eq!(recovered.len(), 1);
@@ -697,7 +698,7 @@ mod tests {
     #[test]
     fn test_truncate_wal_before_checkpoint() {
         let temp_dir = TempDir::new().unwrap();
-        let wal = TransactionWAL::new(temp_dir.path()).unwrap();
+        let mut wal = TransactionWAL::new(temp_dir.path()).unwrap();
 
         // Create test events
         let event1 = Event {
@@ -754,7 +755,7 @@ mod tests {
     #[test]
     fn test_cut_before_offset() {
         let temp_dir = TempDir::new().unwrap();
-        let wal = TransactionWAL::new(temp_dir.path()).unwrap();
+        let mut wal = TransactionWAL::new(temp_dir.path()).unwrap();
 
         // Create test events
         let event1 = Event {
@@ -779,7 +780,7 @@ mod tests {
         wal.commit_transaction(txn_id_1).unwrap();
 
         // Get the file size after first transaction
-        let file_size_after_txn1 = std::fs::metadata(&wal.path).unwrap().len();
+        let file_size_after_txn1 = wal.file_size().unwrap();
 
         // Transaction 2
         let txn_id_2 = 43;
@@ -788,16 +789,13 @@ mod tests {
         wal.commit_transaction(txn_id_2).unwrap();
 
         // Get the file size after second transaction
-        let file_size_after_txn2 = std::fs::metadata(&wal.path).unwrap().len();
+        let file_size_after_txn2 = wal.file_size().unwrap();
 
         // Directly call cut_before_offset with the file size after first transaction
-        {
-            let mut file = wal.file.lock().unwrap();
-            wal.cut_before_offset(&mut file, file_size_after_txn1).unwrap();
-        }
+        wal.cut_before_offset(file_size_after_txn1).unwrap();
 
         // Verify file size is now the difference between the two sizes
-        let new_file_size = std::fs::metadata(&wal.path).unwrap().len();
+        let new_file_size = wal.file_size().unwrap();
         assert_eq!(new_file_size, file_size_after_txn2 - file_size_after_txn1);
 
         // Read committed transactions

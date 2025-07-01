@@ -4,10 +4,11 @@
 //! an event store that supports dynamic consistency boundaries.
 
 use std::iter::Iterator;
+use thiserror::Error;
 
 /// Represents a query item for filtering events
 #[derive(Debug, Clone, Default)]
-pub struct DCBQueryItem {
+pub struct QueryItem {
     /// Event types to match
     pub types: Vec<String>,
     /// Tags that must all be present in the event
@@ -16,25 +17,25 @@ pub struct DCBQueryItem {
 
 /// A query composed of multiple query items
 #[derive(Debug, Clone, Default)]
-pub struct DCBQuery {
+pub struct Query {
     /// List of query items, where events matching any item are included in results
-    pub items: Vec<DCBQueryItem>,
+    pub items: Vec<QueryItem>,
 }
 
 /// Conditions that must be satisfied for an append operation to succeed
 #[derive(Debug, Clone, Default)]
-pub struct DCBAppendCondition {
+pub struct AppendCondition {
     /// Query that, if matching any events, will cause the append to fail
-    pub fail_if_events_match: DCBQuery,
+    pub fail_if_events_match: Query,
     /// Position after which to append; if None, append at the end
     pub after: Option<i64>,
 }
 
 /// Represents an event in the event store
 #[derive(Debug, Clone)]
-pub struct DCBEvent {
+pub struct Event {
     /// Type of the event
-    pub type_: String,
+    pub event_type: String,
     /// Binary data associated with the event
     pub data: Vec<u8>,
     /// Tags associated with the event
@@ -45,7 +46,7 @@ pub struct DCBEvent {
 #[derive(Debug, Clone)]
 pub struct DCBSequencedEvent {
     /// The event
-    pub event: DCBEvent,
+    pub event: Event,
     /// Position of the event in the sequence
     pub position: i64,
 }
@@ -57,7 +58,7 @@ pub trait DCBReadResponse: Iterator<Item = DCBSequencedEvent> {
 }
 
 /// Interface for recording and retrieving events
-pub trait DCBRecorder {
+pub trait EventStoreAPI {
     /// Reads events from the store based on the provided query and constraints
     ///
     /// Returns all events, unless 'after' is given then only those with position
@@ -67,7 +68,7 @@ pub trait DCBRecorder {
     /// in the event tags.
     fn read(
         &self,
-        query: Option<&DCBQuery>,
+        query: Option<&Query>,
         after: Option<i64>,
         limit: Option<usize>,
     ) -> Box<dyn DCBReadResponse>;
@@ -75,7 +76,7 @@ pub trait DCBRecorder {
     /// Appends given events to the event store, unless the condition fails
     ///
     /// Returns the position of the last appended event
-    fn append(&self, events: &[DCBEvent], condition: Option<&DCBAppendCondition>) -> i64;
+    fn append(&self, events: &[Event], condition: Option<&AppendCondition>) -> i64;
 }
 
 #[cfg(test)]
@@ -122,14 +123,14 @@ mod tests {
     #[test]
     fn test_dcb_read_response() {
         // Create some test events
-        let event1 = DCBEvent {
-            type_: "test_event".to_string(),
+        let event1 = Event {
+            event_type: "test_event".to_string(),
             data: vec![1, 2, 3],
             tags: vec!["tag1".to_string(), "tag2".to_string()],
         };
 
-        let event2 = DCBEvent {
-            type_: "another_event".to_string(),
+        let event2 = Event {
+            event_type: "another_event".to_string(),
             data: vec![4, 5, 6],
             tags: vec!["tag2".to_string(), "tag3".to_string()],
         };
@@ -159,3 +160,20 @@ mod tests {
         assert!(response.next().is_none());
     }
 }
+
+
+// Error types
+#[derive(Error, Debug)]
+pub enum EventStoreError {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Serialization error: {0}")]
+    Serialization(#[from] bincode::error::EncodeError),
+    #[error("Integrity error: condition failed")]
+    IntegrityError,
+    #[error("Corruption detected: {0}")]
+    Corruption(String),
+}
+
+pub type Result<T> = std::result::Result<T, EventStoreError>;
+

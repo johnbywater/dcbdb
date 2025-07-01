@@ -12,6 +12,7 @@ serde = { version = "1.0.188", features = ["derive"] }
 tempfile = "3.8.0"
 thiserror = "1.0.48"
 uuid = { version = "1.4.1", features = ["v5", "v4"] }
+bincode = "2.0.1"
 
 [dev-dependencies]
 # Add test dependencies as needed

@@ -14,7 +14,7 @@ use rmp_serde::Serializer;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::api::DCBEvent;
+use crate::api::Event;
 
 // Constants
 const MAGIC: &[u8; 4] = b"DCA5";
@@ -121,11 +121,11 @@ struct DCBEventWithPosition {
     tags: Vec<String>,
 }
 
-impl From<(Position, DCBEvent)> for DCBEventWithPosition {
-    fn from((position, event): (Position, DCBEvent)) -> Self {
+impl From<(Position, Event)> for DCBEventWithPosition {
+    fn from((position, event): (Position, Event)) -> Self {
         Self {
             position,
-            type_: event.type_,
+            type_: event.event_type,
             data: event.data,
             tags: event.tags,
         }
@@ -412,7 +412,7 @@ pub fn calc_crc(data: &[u8]) -> u32 {
 }
 
 /// Pack a DCB event with CRC
-pub fn pack_dcb_event_with_crc(position: Position, dcb_event: DCBEvent) -> Vec<u8> {
+pub fn pack_dcb_event_with_crc(position: Position, dcb_event: Event) -> Vec<u8> {
     let event_with_pos = DCBEventWithPosition::from((position, dcb_event));
     let blob = serialize_dcb_event(&event_with_pos).unwrap_or_default();
 
@@ -615,14 +615,14 @@ mod tests {
         let wal = TransactionWAL::new(temp_dir.path()).unwrap();
 
         // Create test events
-        let event1 = DCBEvent {
-            type_: "type1".to_string(),
+        let event1 = Event {
+            event_type: "type1".to_string(),
             data: br#"{"msg": "hello"}"#.to_vec(),
             tags: vec![],
         };
 
-        let event2 = DCBEvent {
-            type_: "type2".to_string(),
+        let event2 = Event {
+            event_type: "type2".to_string(),
             data: br#"{"msg": "world"}"#.to_vec(),
             tags: vec![],
         };
@@ -662,8 +662,8 @@ mod tests {
         let txn_id = 42;
         wal.begin_transaction(txn_id).unwrap();
 
-        let event = DCBEvent {
-            type_: "type1".to_string(),
+        let event = Event {
+            event_type: "type1".to_string(),
             data: br#"{"msg": "hello"}"#.to_vec(),
             tags: vec![],
         };
@@ -700,20 +700,20 @@ mod tests {
         let wal = TransactionWAL::new(temp_dir.path()).unwrap();
 
         // Create test events
-        let event1 = DCBEvent {
-            type_: "type1".to_string(),
+        let event1 = Event {
+            event_type: "type1".to_string(),
             data: br#"{"msg": "hello"}"#.to_vec(),
             tags: vec![],
         };
 
-        let event2 = DCBEvent {
-            type_: "type2".to_string(),
+        let event2 = Event {
+            event_type: "type2".to_string(),
             data: br#"{"msg": "world"}"#.to_vec(),
             tags: vec![],
         };
 
-        let event3 = DCBEvent {
-            type_: "type3".to_string(),
+        let event3 = Event {
+            event_type: "type3".to_string(),
             data: br#"{"msg": "world"}"#.to_vec(),
             tags: vec![],
         };

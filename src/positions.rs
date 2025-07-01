@@ -712,6 +712,156 @@ impl PositionIndex {
             ));
         }
     }
+
+    /// Scans the position index for all records with keys greater than the given position
+    ///
+    /// # Arguments
+    /// * `after` - Optional position to start scanning from (exclusive). If None, returns all records.
+    ///
+    /// # Returns
+    /// * `std::io::Result<Vec<(Position, PositionIndexRecord)>>` - Ok(records) if successful, Err if an error occurred
+    pub fn scan(&mut self, mut after: Option<Position>) -> std::io::Result<Vec<(Position, PositionIndexRecord)>> {
+        // Get the root page ID from the header page
+        let header_node = self.index_pages.header_page.node.as_any().downcast_ref::<HeaderNode>().unwrap();
+        let root_page_id = header_node.root_page_id;
+
+        // Initialize the result vector
+        let mut result = Vec::new();
+
+        // Find the first leaf node to start scanning from
+        let mut current_page_id = match after {
+            // If we have an 'after' position, find the leaf node containing it
+            Some(pos) => self.find_leaf_node_for_key(root_page_id, pos)?,
+            // Otherwise, start from the leftmost leaf node
+            None => self.find_leftmost_leaf_node(root_page_id)?,
+        };
+
+        // Traverse all leaf nodes
+        loop {
+            let page = self.index_pages.get_page(current_page_id)?;
+
+            if page.node.node_type_byte() != LEAF_NODE_TYPE {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Expected leaf node",
+                ));
+            }
+
+            let leaf_node = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+
+            // Find the starting index based on the 'after' parameter
+            let start_idx = match after {
+                Some(pos) => {
+                    match leaf_node.keys.binary_search(&pos) {
+                        Ok(idx) => idx + 1, // Start after the exact match
+                        Err(idx) => idx,    // Start at the insertion point
+                    }
+                },
+                None => 0, // Start from the beginning
+            };
+
+            // Add all keys and values from the starting index
+            for i in start_idx..leaf_node.keys.len() {
+                result.push((leaf_node.keys[i], leaf_node.values[i].clone()));
+            }
+
+            // Move to the next leaf node if there is one
+            match leaf_node.next_leaf_id {
+                Some(next_id) => current_page_id = next_id,
+                None => break, // No more leaf nodes
+            }
+
+            // For subsequent nodes, we don't need to check the 'after' condition
+            after = None;
+        }
+
+        Ok(result)
+    }
+
+    /// Finds the leftmost leaf node in the tree
+    ///
+    /// # Arguments
+    /// * `start_page_id` - The page ID to start the search from (usually the root)
+    ///
+    /// # Returns
+    /// * `std::io::Result<PageID>` - The page ID of the leftmost leaf node
+    fn find_leftmost_leaf_node(&mut self, start_page_id: PageID) -> std::io::Result<PageID> {
+        let mut current_page_id = start_page_id;
+
+        loop {
+            let page = self.index_pages.get_page(current_page_id)?;
+
+            if page.node.node_type_byte() == LEAF_NODE_TYPE {
+                // This is a leaf node, return its ID
+                return Ok(current_page_id);
+            } else if page.node.node_type_byte() == INTERNAL_NODE_TYPE {
+                // This is an internal node, follow the leftmost child
+                let internal_node = page.node.as_any().downcast_ref::<InternalNode>().unwrap();
+
+                if internal_node.child_ids.is_empty() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Internal node has no children",
+                    ));
+                }
+
+                // Move to the leftmost child
+                current_page_id = internal_node.child_ids[0];
+            } else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Invalid node type",
+                ));
+            }
+        }
+    }
+
+    /// Finds the leaf node that would contain the given key
+    ///
+    /// # Arguments
+    /// * `start_page_id` - The page ID to start the search from (usually the root)
+    /// * `key` - The key to search for
+    ///
+    /// # Returns
+    /// * `std::io::Result<PageID>` - The page ID of the leaf node that would contain the key
+    fn find_leaf_node_for_key(&mut self, start_page_id: PageID, key: Position) -> std::io::Result<PageID> {
+        let mut current_page_id = start_page_id;
+
+        loop {
+            let page = self.index_pages.get_page(current_page_id)?;
+
+            if page.node.node_type_byte() == LEAF_NODE_TYPE {
+                // This is a leaf node, return its ID
+                return Ok(current_page_id);
+            } else if page.node.node_type_byte() == INTERNAL_NODE_TYPE {
+                // This is an internal node, find the appropriate child
+                let internal_node = page.node.as_any().downcast_ref::<InternalNode>().unwrap();
+
+                if internal_node.child_ids.is_empty() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Internal node has no children",
+                    ));
+                }
+
+                // Find the index of the first key greater than the search key
+                let index = match internal_node.keys.binary_search_by(|probe| probe.cmp(&key)) {
+                    // If key is found, use the child at that index + 1
+                    Ok(idx) => idx + 1,
+                    // If key is not found, Err(idx) gives the index where it would be inserted
+                    Err(idx) => idx,
+                };
+
+                // Move to the appropriate child
+                current_page_id = internal_node.child_ids[index];
+            } else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Invalid node type",
+                ));
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1573,6 +1723,37 @@ mod tests {
             assert_eq!(&result.unwrap(), record);
         }
 
+        // Test scan with no 'after' parameter (should return all records)
+        let all_records = position_index.scan(None).unwrap();
+        assert_eq!(all_records.len(), 5);
+        for i in 0..5 {
+            assert_eq!(all_records[i].0, inserted[i].0);
+            assert_eq!(all_records[i].1, inserted[i].1);
+        }
+
+        // Test scan with 'after' parameter in the middle of the range
+        let after_pos: Position = 2; // After the 2nd record
+        let middle_records = position_index.scan(Some(after_pos)).unwrap();
+        assert_eq!(middle_records.len(), 3); // Should return the last 3 records
+        for i in 0..3 {
+            assert_eq!(middle_records[i].0, inserted[i + 2].0);
+            assert_eq!(middle_records[i].1, inserted[i + 2].1);
+        }
+
+        // Test scan with 'after' parameter at the beginning
+        let after_start: Position = 0; // Before the first record
+        let start_records = position_index.scan(Some(after_start)).unwrap();
+        assert_eq!(start_records.len(), 5); // Should return all records
+        for i in 0..5 {
+            assert_eq!(start_records[i].0, inserted[i].0);
+            assert_eq!(start_records[i].1, inserted[i].1);
+        }
+
+        // Test scan with 'after' parameter at the end
+        let after_end: Position = 6; // After the last record
+        let end_records = position_index.scan(Some(after_end)).unwrap();
+        assert_eq!(end_records.len(), 0); // Should return no records
+
         // Flush changes to disk
         position_index.index_pages.flush().unwrap();
 
@@ -1585,6 +1766,14 @@ mod tests {
             let result = position_index2.lookup(*position).unwrap();
             assert!(result.is_some());
             assert_eq!(&result.unwrap(), record);
+        }
+
+        // Test scan again to verify persistence
+        let all_records2 = position_index2.scan(None).unwrap();
+        assert_eq!(all_records2.len(), 5);
+        for i in 0..5 {
+            assert_eq!(all_records2[i].0, inserted[i].0);
+            assert_eq!(all_records2[i].1, inserted[i].1);
         }
     }    
 
@@ -1622,6 +1811,37 @@ mod tests {
             assert_eq!(&result.unwrap(), record);
         }
 
+        // Test scan with no 'after' parameter (should return all records)
+        let all_records = position_index.scan(None).unwrap();
+        assert_eq!(all_records.len(), 20);
+        for i in 0..20 {
+            assert_eq!(all_records[i].0, inserted[i].0);
+            assert_eq!(all_records[i].1, inserted[i].1);
+        }
+
+        // Test scan with 'after' parameter in the middle of the range
+        let after_pos: Position = 10; // After the 10th record
+        let middle_records = position_index.scan(Some(after_pos)).unwrap();
+        assert_eq!(middle_records.len(), 10); // Should return the last 10 records
+        for i in 0..10 {
+            assert_eq!(middle_records[i].0, inserted[i + 10].0);
+            assert_eq!(middle_records[i].1, inserted[i + 10].1);
+        }
+
+        // Test scan with 'after' parameter at the beginning
+        let after_start: Position = 0; // Before the first record
+        let start_records = position_index.scan(Some(after_start)).unwrap();
+        assert_eq!(start_records.len(), 20); // Should return all records
+        for i in 0..20 {
+            assert_eq!(start_records[i].0, inserted[i].0);
+            assert_eq!(start_records[i].1, inserted[i].1);
+        }
+
+        // Test scan with 'after' parameter at the end
+        let after_end: Position = 21; // After the last record
+        let end_records = position_index.scan(Some(after_end)).unwrap();
+        assert_eq!(end_records.len(), 0); // Should return no records
+
         // Flush changes to disk
         position_index.index_pages.flush().unwrap();
 
@@ -1634,6 +1854,14 @@ mod tests {
             let result = position_index2.lookup(*position).unwrap();
             assert!(result.is_some());
             assert_eq!(&result.unwrap(), record);
+        }
+
+        // Test scan again to verify persistence
+        let all_records2 = position_index2.scan(None).unwrap();
+        assert_eq!(all_records2.len(), 20);
+        for i in 0..20 {
+            assert_eq!(all_records2[i].0, inserted[i].0);
+            assert_eq!(all_records2[i].1, inserted[i].1);
         }
     }
 
@@ -1671,6 +1899,37 @@ mod tests {
             assert_eq!(&result.unwrap(), record);
         }
 
+        // Test scan with no 'after' parameter (should return all records)
+        let all_records = position_index.scan(None).unwrap();
+        assert_eq!(all_records.len(), 250);
+        for i in 0..250 {
+            assert_eq!(all_records[i].0, inserted[i].0);
+            assert_eq!(all_records[i].1, inserted[i].1);
+        }
+
+        // Test scan with 'after' parameter in the middle of the range
+        let after_pos: Position = 125; // After the 125th record
+        let middle_records = position_index.scan(Some(after_pos)).unwrap();
+        assert_eq!(middle_records.len(), 125); // Should return the last 125 records
+        for i in 0..125 {
+            assert_eq!(middle_records[i].0, inserted[i + 125].0);
+            assert_eq!(middle_records[i].1, inserted[i + 125].1);
+        }
+
+        // Test scan with 'after' parameter at the beginning
+        let after_start: Position = 0; // Before the first record
+        let start_records = position_index.scan(Some(after_start)).unwrap();
+        assert_eq!(start_records.len(), 250); // Should return all records
+        for i in 0..250 {
+            assert_eq!(start_records[i].0, inserted[i].0);
+            assert_eq!(start_records[i].1, inserted[i].1);
+        }
+
+        // Test scan with 'after' parameter at the end
+        let after_end: Position = 251; // After the last record
+        let end_records = position_index.scan(Some(after_end)).unwrap();
+        assert_eq!(end_records.len(), 0); // Should return no records
+
         // Flush changes to disk
         position_index.index_pages.flush().unwrap();
 
@@ -1683,6 +1942,14 @@ mod tests {
             let result = position_index2.lookup(*position).unwrap();
             assert!(result.is_some());
             assert_eq!(&result.unwrap(), record);
+        }
+
+        // Test scan again to verify persistence
+        let all_records2 = position_index2.scan(None).unwrap();
+        assert_eq!(all_records2.len(), 250);
+        for i in 0..250 {
+            assert_eq!(all_records2[i].0, inserted[i].0);
+            assert_eq!(all_records2[i].1, inserted[i].1);
         }
     }
 
@@ -1740,5 +2007,77 @@ mod tests {
 
         // Verify there's only one occurrence of the key
         assert_eq!(key_count, 1, "Duplicate keys should not be added to leaf nodes");
+    }
+
+    #[test]
+    fn test_scan() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+
+        // Append the filename to the directory path
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Create a new PositionIndex instance
+        let page_size = 4096;
+        let mut position_index = PositionIndex::new(&test_path, page_size).unwrap();
+
+        // Insert records with different keys
+        let mut inserted: Vec<(Position, PositionIndexRecord)> = Vec::new();
+        for i in 0..10 {
+            let position = (i * 10 + 1).into(); // 1, 11, 21, 31, ...
+            let record = PositionIndexRecord {
+                segment: i,
+                offset: i * 100,
+                type_hash: hash_type(&format!("test-{}", i)),
+            };
+
+            position_index.insert(position, record.clone()).unwrap();
+            inserted.push((position, record));
+        }
+
+        // Test scan with no 'after' parameter (should return all records)
+        let all_records = position_index.scan(None).unwrap();
+        assert_eq!(all_records.len(), 10);
+        for i in 0..10 {
+            assert_eq!(all_records[i].0, inserted[i].0);
+            assert_eq!(all_records[i].1, inserted[i].1);
+        }
+
+        // Test scan with 'after' parameter in the middle of the range
+        let after_pos: Position = 31; // After the 4th record
+        let middle_records = position_index.scan(Some(after_pos)).unwrap();
+        assert_eq!(middle_records.len(), 6); // Should return the last 6 records
+        for i in 0..6 {
+            assert_eq!(middle_records[i].0, inserted[i + 4].0);
+            assert_eq!(middle_records[i].1, inserted[i + 4].1);
+        }
+
+        // Test scan with 'after' parameter at the beginning
+        let after_start: Position = 0; // Before the first record
+        let start_records = position_index.scan(Some(after_start)).unwrap();
+        assert_eq!(start_records.len(), 10); // Should return all records
+        for i in 0..10 {
+            assert_eq!(start_records[i].0, inserted[i].0);
+            assert_eq!(start_records[i].1, inserted[i].1);
+        }
+
+        // Test scan with 'after' parameter at the end
+        let after_end: Position = 100; // After the last record
+        let end_records = position_index.scan(Some(after_end)).unwrap();
+        assert_eq!(end_records.len(), 0); // Should return no records
+
+        // Flush changes to disk
+        position_index.index_pages.flush().unwrap();
+
+        // Create another instance of PositionIndex
+        let mut position_index2 = PositionIndex::new(&test_path, page_size).unwrap();
+
+        // Test scan again to verify persistence
+        let all_records2 = position_index2.scan(None).unwrap();
+        assert_eq!(all_records2.len(), 10);
+        for i in 0..10 {
+            assert_eq!(all_records2[i].0, inserted[i].0);
+            assert_eq!(all_records2[i].1, inserted[i].1);
+        }
     }
 }

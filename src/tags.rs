@@ -2614,7 +2614,7 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_split_leaf() {
+    fn test_insert_lookup_split_leaf() {
         // Create a temporary directory
         let temp_dir = TempDir::new().expect("Failed to create temporary directory");
 
@@ -2696,6 +2696,11 @@ mod tests {
             } else if let Some(idx) = in_right {
                 assert!(right_keys_values.1[idx].contains(position), "Position {} not found for tag {}", position, tag);
             }
+
+            // Use the lookup method to verify the position can be found
+            let positions = tag_index.lookup(tag).unwrap();
+            assert!(!positions.is_empty(), "No positions found for tag {}", tag);
+            assert!(positions.contains(position), "Position {} not found for tag {} using lookup", position, tag);
         }
 
         // Flush changes to disk
@@ -2718,6 +2723,55 @@ mod tests {
 
         // Verify that the InternalNode still has two child PageIDs
         assert_eq!(internal_node2.child_ids.len(), 2);
+
+        // Check lookup after reopening
+        for (tag, position) in &inserted_tags {
+            let positions = tag_index2.lookup(tag).unwrap();
+            assert!(!positions.is_empty(), "No positions found for tag {} after reopening", tag);
+            assert!(positions.contains(position), "Position {} not found for tag {} using lookup after reopening", position, tag);
+        }
+    }
+
+    #[test]
+    fn test_insert_lookup_split_internal() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+
+        // Append the filename to the directory path
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Create a new TagIndex instance with a small page size to force splitting
+        let page_size = 256;
+        let mut tag_index = TagIndex::new(&test_path, page_size).unwrap();
+
+        // Insert enough tags to cause internal node splitting
+        let mut inserted_tags = Vec::new();
+        for i in 0..250 {
+            let tag = format!("tag-{}", i);
+            let position = (i * 100) as i64;
+            tag_index.insert(&tag, position).unwrap();
+            inserted_tags.push((tag, position));
+        }
+
+        // Check lookup before flush
+        for (tag, position) in &inserted_tags {
+            let positions = tag_index.lookup(tag).unwrap();
+            assert!(!positions.is_empty(), "No positions found for tag {}", tag);
+            assert!(positions.contains(position), "Position {} not found for tag {} using lookup", position, tag);
+        }
+
+        // Flush changes to disk
+        tag_index.index_pages.flush().unwrap();
+
+        // Create another instance of TagIndex
+        let mut tag_index2 = TagIndex::new(&test_path, page_size).unwrap();
+
+        // Check lookup after reopening
+        for (tag, position) in &inserted_tags {
+            let positions = tag_index2.lookup(tag).unwrap();
+            assert!(!positions.is_empty(), "No positions found for tag {} after reopening", tag);
+            assert!(positions.contains(position), "Position {} not found for tag {} using lookup after reopening", position, tag);
+        }
     }
 
     #[test]

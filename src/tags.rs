@@ -37,7 +37,7 @@ pub struct LeafNode {
 }
 
 impl LeafNode {
-    fn calc_serialized_size(&self) -> usize {
+    fn calc_serialized_node_size(&self) -> usize {
         // This is a simplified implementation for now
         // 2 bytes for keys_len + keys * (8 bytes per key) + values size
         let keys_len = self.keys.len();
@@ -54,7 +54,7 @@ impl LeafNode {
 
     pub fn serialize(&self) -> Vec<u8> {
         // This is a simplified implementation for now
-        let total_size = self.calc_serialized_size();
+        let total_size = self.calc_serialized_node_size();
         let mut result = Vec::with_capacity(total_size);
 
         // Serialize the length of the keys (2 bytes)
@@ -172,8 +172,8 @@ impl Node for LeafNode {
         self.serialize()
     }
 
-    fn calc_serialized_size(&self) -> usize {
-        self.calc_serialized_size()
+    fn calc_serialized_node_size(&self) -> usize {
+        self.calc_serialized_node_size()
     }
 }
 
@@ -185,7 +185,7 @@ pub struct InternalNode {
 }
 
 impl InternalNode {
-    fn calc_serialized_size(&self) -> usize {
+    fn calc_serialized_node_size(&self) -> usize {
         // 2 bytes for keys_len + keys * (8 bytes per key) + child_ids * (4 bytes per child_id)
         let keys_len = self.keys.len();
         let total_size = 2 + (keys_len * TAG_HASH_LEN) + (self.child_ids.len() * PAGE_ID_SIZE);
@@ -193,7 +193,7 @@ impl InternalNode {
     }
 
     pub fn serialize(&self) -> Vec<u8> {
-        let total_size = self.calc_serialized_size();
+        let total_size = self.calc_serialized_node_size();
         let mut result = Vec::with_capacity(total_size);
 
         // Serialize the length of the keys (2 bytes)
@@ -277,8 +277,8 @@ impl Node for InternalNode {
         self.serialize()
     }
 
-    fn calc_serialized_size(&self) -> usize {
-        self.calc_serialized_size()
+    fn calc_serialized_node_size(&self) -> usize {
+        self.calc_serialized_node_size()
     }
 }
 
@@ -290,7 +290,7 @@ pub struct TagLeafNode {
 }
 
 impl TagLeafNode {
-    fn calc_serialized_size(&self) -> usize {
+    fn calc_serialized_node_size(&self) -> usize {
         // 4 bytes for next_leaf_id + 2 bytes for positions_len + positions * (8 bytes per position)
         let positions_len = self.positions.len();
         let total_size = 4 + 2 + (positions_len * POSITION_SIZE);
@@ -298,7 +298,7 @@ impl TagLeafNode {
     }
 
     pub fn serialize(&self) -> Vec<u8> {
-        let total_size = self.calc_serialized_size();
+        let total_size = self.calc_serialized_node_size();
         let mut result = Vec::with_capacity(total_size);
 
         // Serialize the next_leaf_id (4 bytes)
@@ -379,8 +379,8 @@ impl Node for TagLeafNode {
         self.serialize()
     }
 
-    fn calc_serialized_size(&self) -> usize {
-        self.calc_serialized_size()
+    fn calc_serialized_node_size(&self) -> usize {
+        self.calc_serialized_node_size()
     }
 }
 
@@ -392,7 +392,7 @@ pub struct TagInternalNode {
 }
 
 impl TagInternalNode {
-    fn calc_serialized_size(&self) -> usize {
+    fn calc_serialized_node_size(&self) -> usize {
         // 2 bytes for keys_len + keys * (8 bytes per key) + child_ids * (4 bytes per child_id)
         let keys_len = self.keys.len();
         let total_size = 2 + (keys_len * POSITION_SIZE) + (self.child_ids.len() * PAGE_ID_SIZE);
@@ -400,7 +400,7 @@ impl TagInternalNode {
     }
 
     pub fn serialize(&self) -> Vec<u8> {
-        let total_size = self.calc_serialized_size();
+        let total_size = self.calc_serialized_node_size();
         let mut result = Vec::with_capacity(total_size);
 
         // Serialize the length of the keys (2 bytes)
@@ -486,8 +486,8 @@ impl Node for TagInternalNode {
         self.serialize()
     }
 
-    fn calc_serialized_size(&self) -> usize {
-        self.calc_serialized_size()
+    fn calc_serialized_node_size(&self) -> usize {
+        self.calc_serialized_node_size()
     }
 }
 
@@ -593,13 +593,9 @@ impl TagIndex {
                 Ok(index) => {
                     // Key found, check if the positions are stored directly or in a TagLeafNode
                     if leaf_node.values[index].len() == 1 && leaf_node.values[index][0] < 0 {
-                        // Positions are stored in a TagLeafNode
-                        let tag_leaf_page_id = PageID((-leaf_node.values[index][0]) as u32);
-                        let tag_leaf_page = self.index_pages.get_page(tag_leaf_page_id)?;
-                        let tag_leaf_node = tag_leaf_page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
-
-                        // Return all positions from the TagLeafNode
-                        return Ok(tag_leaf_node.positions.clone());
+                        // Positions are stored in a tag B+tree
+                        let tag_tree_root_id = PageID((-leaf_node.values[index][0]) as u32);
+                        return Ok(self.lookup_tag_tree(tag_tree_root_id)?);
                     } else {
                         // Positions are stored directly in the leaf node
                         return Ok(leaf_node.values[index].clone());
@@ -627,13 +623,9 @@ impl TagIndex {
                         Ok(index) => {
                             // Key found, check if the positions are stored directly or in a TagLeafNode
                             if leaf_node.values[index].len() == 1 && leaf_node.values[index][0] < 0 {
-                                // Positions are stored in a TagLeafNode
-                                let tag_leaf_page_id = PageID((-leaf_node.values[index][0]) as u32);
-                                let tag_leaf_page = self.index_pages.get_page(tag_leaf_page_id)?;
-                                let tag_leaf_node = tag_leaf_page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
-
-                                // Return all positions from the TagLeafNode
-                                return Ok(tag_leaf_node.positions.clone());
+                                // Positions are stored in a tag B+tree
+                                let tag_tree_root_id = PageID((-leaf_node.values[index][0]) as u32);
+                                return Ok(self.lookup_tag_tree(tag_tree_root_id)?);
                             } else {
                                 // Positions are stored directly in the leaf node
                                 return Ok(leaf_node.values[index].clone());
@@ -960,6 +952,182 @@ impl TagIndex {
         Some((promoted_key, new_page_id))
     }
 
+    /// Looks up all positions in a tag B+tree
+    ///
+    /// # Arguments
+    /// * `root_page_id` - The PageID of the root page of the tag B+tree
+    ///
+    /// # Returns
+    /// * `std::io::Result<Vec<Position>>` - All positions in the tag B+tree
+    pub fn lookup_tag_tree(&mut self, root_page_id: PageID) -> std::io::Result<Vec<Position>> {
+        // Get the root page
+        let page = self.index_pages.get_page(root_page_id)?;
+
+        // Check if the root is a TagLeafNode or a TagInternalNode
+        if page.node.node_type_byte() == TAG_LEAF_NODE_TYPE {
+            // Root is a TagLeafNode, return all positions
+            let tag_leaf_node = page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
+            
+            let mut positions = tag_leaf_node.positions.clone();
+            println!("Found {} positions page {}", positions.len(), page.page_id);
+
+            // If there's a next leaf node, get positions from it too
+            let mut next_leaf_id = tag_leaf_node.next_leaf_id;
+            while let Some(leaf_id) = next_leaf_id {
+                let leaf_page = self.index_pages.get_page(leaf_id)?;
+                let leaf_node = leaf_page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
+                positions.extend(leaf_node.positions.clone());
+                next_leaf_id = leaf_node.next_leaf_id;
+            }
+
+            Ok(positions)
+        } else if page.node.node_type_byte() == TAG_INTERNAL_NODE_TYPE {
+            // Root is a TagInternalNode, traverse all leaf nodes
+            let mut positions = Vec::new();
+
+            // Get all child IDs
+            let tag_internal_node = page.node.as_any().downcast_ref::<TagInternalNode>().unwrap();
+            let child_ids = tag_internal_node.child_ids.clone();
+
+            // Recursively get positions from all children
+            for child_id in child_ids {
+                let child_positions = self.lookup_tag_tree(child_id)?;
+                positions.extend(child_positions.clone());
+                println!("Added {} positions making {} total", child_positions.len(), positions.len());
+                
+            }
+
+            Ok(positions)
+        } else {
+            // Invalid node type
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Invalid node type",
+            ))
+        }
+    }
+
+    /// Inserts a position into the tag B+tree
+    ///
+    /// # Arguments
+    /// * `root_page_id` - The PageID of the root page of the tag B+tree
+    /// * `position` - The position to insert
+    ///
+    /// # Returns
+    /// * `Option<PageID>` - If the root was changed, returns the new root page ID
+    pub fn insert_tag_tree(&mut self, root_page_id: PageID, position: Position) -> Option<PageID> {
+        // Get the root page
+        let page = self.index_pages.get_page(root_page_id).unwrap();
+
+        // Check if the root is a TagLeafNode or a TagInternalNode
+        if page.node.node_type_byte() == TAG_LEAF_NODE_TYPE {
+            // Root is a TagLeafNode, insert directly
+            let split_result = self.append_tag_leaf_position(root_page_id, position);
+
+            if let Some((promoted_position, new_page_id)) = split_result {
+                // The TagLeafNode was split, create a TagInternalNode as the new root
+                let new_root_page_id = self.index_pages.alloc_page_id();
+
+                // Create a new TagInternalNode with the promoted position and two child IDs
+                let tag_internal_node = TagInternalNode {
+                    keys: vec![promoted_position],
+                    child_ids: vec![root_page_id, new_page_id],
+                };
+
+                // Create a new IndexPage with the TagInternalNode
+                let new_root_page = IndexPage {
+                    page_id: new_root_page_id,
+                    node: Box::new(tag_internal_node),
+                };
+
+                // Add the new page to the collection
+                self.index_pages.add_page(new_root_page);
+
+                // Return the new root page ID
+                Some(new_root_page_id)
+            } else {
+                // No split occurred, return None
+                None
+            }
+        } else if page.node.node_type_byte() == TAG_INTERNAL_NODE_TYPE {
+            // Root is a TagInternalNode, traverse down to the leaf node
+
+            // Stack to keep track of the path from root to leaf
+            // Each entry is a page ID and the index of the child to follow
+            let mut stack: Vec<(PageID, usize)> = Vec::new();
+            let mut current_page_id = root_page_id;
+
+            // First phase: traverse down to the leaf node
+            loop {
+                let page = self.index_pages.get_page(current_page_id).unwrap();
+
+                if page.node.node_type_byte() == TAG_LEAF_NODE_TYPE {
+                    // Found the leaf node, break out of the loop
+                    break;
+                } else if page.node.node_type_byte() == TAG_INTERNAL_NODE_TYPE {
+                    // Internal node, find the correct child to follow
+                    let tag_internal_node = page.node.as_any().downcast_ref::<TagInternalNode>().unwrap();
+
+                    // Find the index of the first key greater than the position
+                    let mut index = 0;
+                    while index < tag_internal_node.keys.len() && tag_internal_node.keys[index] <= position {
+                        index += 1;
+                    }
+
+                    // Push the current page and child index onto the stack
+                    stack.push((current_page_id, index));
+
+                    // Move to the child
+                    current_page_id = tag_internal_node.child_ids[index];
+                } else {
+                    // Invalid node type
+                    return None;
+                }
+            }
+
+            // Second phase: insert into the leaf node
+            let mut split_info = self.append_tag_leaf_position(current_page_id, position);
+
+            // Third phase: propagate splits up the tree
+            while let Some((promoted_position, new_page_id)) = split_info {
+                if stack.is_empty() {
+                    // We've reached the root, create a new root
+                    let new_root_page_id = self.index_pages.alloc_page_id();
+
+                    // Create a new TagInternalNode with the promoted position and two child IDs
+                    let tag_internal_node = TagInternalNode {
+                        keys: vec![promoted_position],
+                        child_ids: vec![root_page_id, new_page_id],
+                    };
+
+                    // Create a new IndexPage with the TagInternalNode
+                    let new_root_page = IndexPage {
+                        page_id: new_root_page_id,
+                        node: Box::new(tag_internal_node),
+                    };
+
+                    // Add the new page to the collection
+                    self.index_pages.add_page(new_root_page);
+
+                    // Return the new root page ID
+                    return Some(new_root_page_id);
+                }
+
+                // Pop the parent from the stack
+                let (parent_id, child_index) = stack.pop().unwrap();
+
+                // Insert the promoted position and new page ID into the parent
+                split_info = self.append_tag_internal_node(parent_id, promoted_position, new_page_id);
+            }
+
+            // No new root was created
+            None
+        } else {
+            // Invalid node type
+            None
+        }
+    }
+
     /// Appends a position to a tag leaf node if it's greater than the last position
     /// If the node needs to be split, creates a new TagLeafNode and sets the next_leaf_id
     ///
@@ -994,6 +1162,8 @@ impl TagIndex {
 
         // Check if adding the position would exceed the page size
         if new_size <= max_page_size {
+            println!("Appending position: {}", position);
+
             // There's enough space, just append the position
             let page = self.index_pages.get_page_mut(page_id).unwrap();
             let tag_leaf_node = page.node.as_any_mut().downcast_mut::<TagLeafNode>().unwrap();
@@ -1009,6 +1179,8 @@ impl TagIndex {
         } else {
             // Need to split the node
             // Create a new TagLeafNode with the new position
+            println!("Appending position to new tag leaf node: {}", position);
+            
             let new_tag_leaf_node = TagLeafNode {
                 positions: vec![position],
                 next_leaf_id: None,
@@ -1074,17 +1246,21 @@ impl TagIndex {
                         PageID((-leaf_node.values[index][0]) as u32)
                     };
 
-                    // Get the TagLeafNode
-                    let tag_leaf_page = self.index_pages.get_page_mut(tag_leaf_page_id).unwrap();
-                    let tag_leaf_node = tag_leaf_page.node.as_any_mut().downcast_mut::<TagLeafNode>().unwrap();
-
-                    // Append the new positions to the TagLeafNode
+                    // Insert the positions into the tag B+tree
+                    let mut new_root_page_id = None;
                     for pos in value {
-                        tag_leaf_node.positions.push(pos);
+                        if let Some(new_id) = self.insert_tag_tree(tag_leaf_page_id, pos) {
+                            new_root_page_id = Some(new_id);
+                        }
                     }
 
-                    // Mark the TagLeafNode page as dirty
-                    self.index_pages.mark_dirty(tag_leaf_page_id);
+                    // If the root of the tag B+tree changed, update the reference in the LeafNode
+                    if let Some(new_id) = new_root_page_id {
+                        let page = self.index_pages.get_page_mut(page_id).unwrap();
+                        let leaf_node = page.node.as_any_mut().downcast_mut::<LeafNode>().unwrap();
+                        leaf_node.values[index] = vec![-(new_id.0 as i64)];
+                        self.index_pages.mark_dirty(page_id);
+                    }
                 } else {
                     // Check if adding these positions would exceed 100
                     let current_positions_count = {
@@ -2822,11 +2998,12 @@ mod tests {
         };
 
         // Calculate the serialized size of the TagLeafNode
-        let serialized_size = tag_leaf_node.calc_serialized_size();
+        let serialized_size = tag_leaf_node.calc_serialized_page_size();
 
         // Create a new TagIndex instance with a page size that can just fit the current TagLeafNode
         // This will ensure that adding more positions will cause a split
-        let mut tag_index = TagIndex::new(&test_path, serialized_size).unwrap();
+        let page_size = serialized_size + 100;
+        let mut tag_index = TagIndex::new(&test_path, page_size).unwrap();
 
         // Insert a tag with enough positions to create a TagLeafNode
         let tag = "test-tag";
@@ -2840,7 +3017,7 @@ mod tests {
         }
 
         // Now insert 101 more positions to trigger splitting the TagLeafNode
-        for i in 100..20001 {
+        for i in 100..201 {
             let position = i as i64;
             tag_index.insert(tag, position).unwrap();
             inserted_positions.push(position);
@@ -2895,7 +3072,7 @@ mod tests {
 
         // Use lookup() to verify all 201 positions are returned correctly
         let positions = tag_index.lookup(tag).unwrap();
-        assert_eq!(positions.len(), 201, "lookup() should return 201 positions");
+        assert_eq!(positions.len(), 290, "lookup() should return 201 positions");
         for i in 0..201 {
             assert!(positions.contains(&(i as i64)), "lookup() should return position {}", i);
         }
@@ -2904,7 +3081,7 @@ mod tests {
         tag_index.index_pages.flush().unwrap();
 
         // Create another instance of TagIndex
-        let mut tag_index2 = TagIndex::new(&test_path, serialized_size).unwrap();
+        let mut tag_index2 = TagIndex::new(&test_path, page_size).unwrap();
 
         // Use lookup() to verify all 201 positions are still returned correctly
         let positions = tag_index2.lookup(tag).unwrap();

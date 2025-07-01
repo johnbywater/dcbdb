@@ -31,7 +31,7 @@ pub trait Node: Any {
     ///
     /// # Returns
     /// * `usize` - The size of the serialized node in bytes
-    fn calc_serialized_size(&self) -> usize;
+    fn calc_serialized_node_size(&self) -> usize;
 
     /// Calculates the size of the serialized page including the node type byte, CRC, and data length
     ///
@@ -39,7 +39,7 @@ pub trait Node: Any {
     /// * `usize` - The size of the serialized page in bytes
     fn calc_serialized_page_size(&self) -> usize {
         // 1 byte for node type + 4 bytes for CRC + 4 bytes for data length + serialized size
-        self.calc_serialized_size() + 9
+        self.calc_serialized_node_size() + 9
     }
 
     /// Serializes the node to a page format including node type byte, CRC, and data length
@@ -96,7 +96,7 @@ impl HeaderNode {
     ///
     /// # Returns
     /// * `usize` - The size of the serialized HeaderNode in bytes
-    pub fn calc_serialized_size(&self) -> usize {
+    pub fn calc_serialized_node_size(&self) -> usize {
         8 // 4 bytes for root_page_id + 4 bytes for next_page_id
     }
 
@@ -143,8 +143,8 @@ impl Node for HeaderNode {
         self.serialize()
     }
 
-    fn calc_serialized_size(&self) -> usize {
-        self.calc_serialized_size()
+    fn calc_serialized_node_size(&self) -> usize {
+        self.calc_serialized_node_size()
     }
 }
 

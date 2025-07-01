@@ -39,7 +39,7 @@ pub struct LeafNode {
 }
 
 impl LeafNode {
-    fn calc_serialized_size(&self) -> usize {
+    fn calc_serialized_node_size(&self) -> usize {
         let keys_len = self.keys.len();
         let total_size = 4 + 2 + (keys_len * 8) + (keys_len * 16);
         total_size
@@ -55,7 +55,7 @@ impl LeafNode {
     /// * `Vec<u8>` - The serialized data
     pub fn serialize(&self) -> Vec<u8> {
         // Calculate the total size of the serialized data
-        let total_size = self.calc_serialized_size();
+        let total_size = self.calc_serialized_node_size();
 
         // Create a buffer with the calculated capacity
         let mut result = Vec::with_capacity(total_size);
@@ -188,8 +188,8 @@ impl Node for LeafNode {
         self.serialize()
     }
 
-    fn calc_serialized_size(&self) -> usize {
-        self.calc_serialized_size()
+    fn calc_serialized_node_size(&self) -> usize {
+        self.calc_serialized_node_size()
     }
 }
 
@@ -201,7 +201,7 @@ pub struct InternalNode {
 }
 
 impl InternalNode {
-    fn calc_serialized_size(&self) -> usize {
+    fn calc_serialized_node_size(&self) -> usize {
         let keys_len = self.keys.len();
         let total_size = 2 + (keys_len * 8) + (self.child_ids.len() * 4);
         total_size
@@ -216,7 +216,7 @@ impl InternalNode {
     /// * `Vec<u8>` - The serialized data
     pub fn serialize(&self) -> Vec<u8> {
         // Calculate the total size of the serialized data
-        let total_size = self.calc_serialized_size();
+        let total_size = self.calc_serialized_node_size();
 
         // Create a buffer with the calculated capacity
         let mut result = Vec::with_capacity(total_size);
@@ -313,8 +313,8 @@ impl Node for InternalNode {
         self.serialize()
     }
 
-    fn calc_serialized_size(&self) -> usize {
-        self.calc_serialized_size()
+    fn calc_serialized_node_size(&self) -> usize {
+        self.calc_serialized_node_size()
     }
 }
 

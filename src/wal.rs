@@ -139,7 +139,7 @@ pub struct TransactionWAL {
 }
 
 impl TransactionWAL {
-    pub(crate) fn file_size(&self) -> WalResult<u64> {
+    pub fn file_size(&self) -> WalResult<u64> {
         Ok(self.file.metadata()?.len())
     }
 }

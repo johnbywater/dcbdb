@@ -967,9 +967,9 @@ impl TagIndex {
         if page.node.node_type_byte() == TAG_LEAF_NODE_TYPE {
             // Root is a TagLeafNode, return all positions
             let tag_leaf_node = page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
-            
+
             let mut positions = tag_leaf_node.positions.clone();
-            println!("Found {} positions page {}", positions.len(), page.page_id);
+            // println!("Found {} positions page {}", positions.len(), page.page_id);
 
             // If there's a next leaf node, get positions from it too
             let mut next_leaf_id = tag_leaf_node.next_leaf_id;
@@ -982,22 +982,38 @@ impl TagIndex {
 
             Ok(positions)
         } else if page.node.node_type_byte() == TAG_INTERNAL_NODE_TYPE {
-            // Root is a TagInternalNode, traverse all leaf nodes
-            let mut positions = Vec::new();
-
-            // Get all child IDs
+            // Root is a TagInternalNode, traverse to find the leftmost leaf node
             let tag_internal_node = page.node.as_any().downcast_ref::<TagInternalNode>().unwrap();
-            let child_ids = tag_internal_node.child_ids.clone();
 
-            // Recursively get positions from all children
-            for child_id in child_ids {
-                let child_positions = self.lookup_tag_tree(child_id)?;
-                positions.extend(child_positions.clone());
-                println!("Added {} positions making {} total", child_positions.len(), positions.len());
-                
+            // Start with the leftmost child
+            if tag_internal_node.child_ids.is_empty() {
+                return Ok(Vec::new());
             }
 
-            Ok(positions)
+            // Get the leftmost leaf node
+            let leftmost_child_id = tag_internal_node.child_ids[0];
+            let leftmost_page = self.index_pages.get_page(leftmost_child_id)?;
+
+            // If the leftmost child is a TagLeafNode, we can start collecting positions from there
+            if leftmost_page.node.node_type_byte() == TAG_LEAF_NODE_TYPE {
+                let tag_leaf_node = leftmost_page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
+
+                let mut positions = tag_leaf_node.positions.clone();
+
+                // Follow the next_leaf_id chain to collect all positions
+                let mut next_leaf_id = tag_leaf_node.next_leaf_id;
+                while let Some(leaf_id) = next_leaf_id {
+                    let leaf_page = self.index_pages.get_page(leaf_id)?;
+                    let leaf_node = leaf_page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
+                    positions.extend(leaf_node.positions.clone());
+                    next_leaf_id = leaf_node.next_leaf_id;
+                }
+
+                return Ok(positions);
+            } else {
+                // If the leftmost child is a TagInternalNode, recursively get positions from it
+                return self.lookup_tag_tree(leftmost_child_id);
+            }
         } else {
             // Invalid node type
             Err(std::io::Error::new(
@@ -1162,7 +1178,7 @@ impl TagIndex {
 
         // Check if adding the position would exceed the page size
         if new_size <= max_page_size {
-            println!("Appending position: {}", position);
+            // println!("Appending position: {}", position);
 
             // There's enough space, just append the position
             let page = self.index_pages.get_page_mut(page_id).unwrap();
@@ -1179,8 +1195,8 @@ impl TagIndex {
         } else {
             // Need to split the node
             // Create a new TagLeafNode with the new position
-            println!("Appending position to new tag leaf node: {}", position);
-            
+            // println!("Appending position to new tag leaf node: {}", position);
+
             let new_tag_leaf_node = TagLeafNode {
                 positions: vec![position],
                 next_leaf_id: None,
@@ -3072,7 +3088,7 @@ mod tests {
 
         // Use lookup() to verify all 201 positions are returned correctly
         let positions = tag_index.lookup(tag).unwrap();
-        assert_eq!(positions.len(), 290, "lookup() should return 201 positions");
+        assert_eq!(positions.len(), 201, "lookup() should return 201 positions");
         for i in 0..201 {
             assert!(positions.contains(&(i as i64)), "lookup() should return position {}", i);
         }

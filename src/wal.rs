@@ -750,4 +750,63 @@ mod tests {
         assert_eq!(recovered.len(), 1);
         assert_eq!(recovered[0].0, txn_id_3);
     }
+
+    #[test]
+    fn test_cut_before_offset() {
+        let temp_dir = TempDir::new().unwrap();
+        let wal = TransactionWAL::new(temp_dir.path()).unwrap();
+
+        // Create test events
+        let event1 = Event {
+            event_type: "type1".to_string(),
+            data: br#"{"msg": "hello"}"#.to_vec(),
+            tags: vec![],
+        };
+
+        let event2 = Event {
+            event_type: "type2".to_string(),
+            data: br#"{"msg": "world"}"#.to_vec(),
+            tags: vec![],
+        };
+
+        let payload1 = pack_dcb_event_with_crc(1, event1);
+        let payload2 = pack_dcb_event_with_crc(2, event2);
+
+        // Transaction 1
+        let txn_id_1 = 42;
+        wal.begin_transaction(txn_id_1).unwrap();
+        wal.write_event(txn_id_1, &payload1).unwrap();
+        wal.commit_transaction(txn_id_1).unwrap();
+
+        // Get the file size after first transaction
+        let file_size_after_txn1 = std::fs::metadata(&wal.path).unwrap().len();
+
+        // Transaction 2
+        let txn_id_2 = 43;
+        wal.begin_transaction(txn_id_2).unwrap();
+        wal.write_event(txn_id_2, &payload2).unwrap();
+        wal.commit_transaction(txn_id_2).unwrap();
+
+        // Get the file size after second transaction
+        let file_size_after_txn2 = std::fs::metadata(&wal.path).unwrap().len();
+
+        // Directly call cut_before_offset with the file size after first transaction
+        {
+            let mut file = wal.file.lock().unwrap();
+            wal.cut_before_offset(&mut file, file_size_after_txn1).unwrap();
+        }
+
+        // Verify file size is now the difference between the two sizes
+        let new_file_size = std::fs::metadata(&wal.path).unwrap().len();
+        assert_eq!(new_file_size, file_size_after_txn2 - file_size_after_txn1);
+
+        // Read committed transactions
+        let recovered = wal.read_committed_transactions().unwrap();
+
+        // Only transaction 2 should remain
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].0, txn_id_2);
+        assert_eq!(recovered[0].1.len(), 1);
+        assert_eq!(recovered[0].1[0], payload2);
+    }
 }

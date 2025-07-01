@@ -617,7 +617,7 @@ impl TagIndex {
         }
 
         // Second phase: insert into the leaf node
-        let mut split_info = self.insert_leaf_key_and_value(current_page_id, key, vec![position]);
+        let mut split_info = self.insert_leaf_key_and_value(current_page_id, key, position);
 
         // Third phase: propagate splits up the tree
         while let Some((promoted_key, new_page_id)) = split_info {
@@ -665,7 +665,7 @@ impl TagIndex {
     ///
     /// # Returns
     /// * `Option<([u8; TAG_HASH_LEN], PageID)>` - If the leaf node was split, returns the first key of the new leaf node and the new page ID
-    pub fn insert_leaf_key_and_value(&mut self, page_id: PageID, key: [u8; TAG_HASH_LEN], value: Vec<Position>) -> Option<([u8; TAG_HASH_LEN], PageID)> {
+    pub fn insert_leaf_key_and_value(&mut self, page_id: PageID, key: [u8; TAG_HASH_LEN], value: Position) -> Option<([u8; TAG_HASH_LEN], PageID)> {
         // Get a reference to the page
         let page = self.index_pages.get_page(page_id).unwrap();
         let leaf_node = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
@@ -692,12 +692,7 @@ impl TagIndex {
                     };
 
                     // Insert the positions into the tag B+tree
-                    let mut new_root_page_id = None;
-                    for pos in value {
-                        if let Some(new_id) = self.insert_tag_tree(tag_leaf_page_id, pos) {
-                            new_root_page_id = Some(new_id);
-                        }
-                    }
+                    let new_root_page_id = self.insert_tag_tree(tag_leaf_page_id, value);
 
                     // If the root of the tag B+tree changed, update the reference in the LeafNode
                     if let Some(new_id) = new_root_page_id {
@@ -714,9 +709,7 @@ impl TagIndex {
                         leaf_node.values[index].len()
                     };
 
-                    let will_exceed_100 = current_positions_count + value.len() > 100;
-
-                    if will_exceed_100 && current_positions_count <= 100 {
+                    if current_positions_count >= 100 {
                         // We need to create a TagLeafNode
 
                         // First, get all the current positions
@@ -726,7 +719,7 @@ impl TagIndex {
                             let mut positions = leaf_node.values[index].clone();
 
                             // Add the new positions
-                            positions.extend(value);
+                            positions.push(value);
                             positions
                         };
 
@@ -764,9 +757,7 @@ impl TagIndex {
 
                         // Append the new position to the existing list
                         // We can assume that a new Position for an existing tag is greater than previously added Positions
-                        for pos in value {
-                            leaf_node.values[index].push(pos);
-                        }
+                        leaf_node.values[index].push(value);
 
                         self.index_pages.mark_dirty(page_id);
                     }
@@ -783,7 +774,7 @@ impl TagIndex {
                     let page = self.index_pages.get_page(page_id).unwrap();
                     let page_size = page.node.calc_serialized_page_size();
                     // Calculate the additional size needed for the new key and value
-                    let additional_size = TAG_HASH_LEN + 2 + (value.len() * POSITION_SIZE);
+                    let additional_size = TAG_HASH_LEN + 2 + POSITION_SIZE;
                     page_size + additional_size > max_page_size
                 };
 
@@ -794,7 +785,7 @@ impl TagIndex {
 
                     // Insert the key and value at the correct position
                     leaf_node.keys.insert(insert_index, key);
-                    leaf_node.values.insert(insert_index, value);
+                    leaf_node.values.insert(insert_index, vec![value]);
 
                     self.index_pages.mark_dirty(page_id);
                     return None;
@@ -820,7 +811,7 @@ impl TagIndex {
 
         // Insert the new key and value at the correct position
         leaf_node.keys.insert(insert_index, key);
-        leaf_node.values.insert(insert_index, value);
+        leaf_node.values.insert(insert_index, vec![value]);
 
         // Calculate the midpoint
         let mid = leaf_node.keys.len() / 2;
@@ -1941,10 +1932,9 @@ mod tests {
         let new_tag_hash = hash_tag("NewTag");
         let mut new_key = [0u8; TAG_HASH_LEN];
         new_key.copy_from_slice(&new_tag_hash[..TAG_HASH_LEN]);
-        let new_value = vec![9999, 9998, 9997];
 
         // Call append_leaf_key_and_value with the page_id, key, and value
-        let split_result = tag_index.insert_leaf_key_and_value(page_id, new_key, new_value.clone());
+        let split_result = tag_index.insert_leaf_key_and_value(page_id, new_key, 9999);
 
         // Verify that the leaf was not split
         assert!(split_result.is_none());
@@ -1965,7 +1955,7 @@ mod tests {
         }
 
         assert_eq!(leaf.keys[new_key_index], new_key);
-        assert_eq!(leaf.values[new_key_index], new_value);
+        assert_eq!(leaf.values[new_key_index], vec![9999]);
 
         // Flush changes to disk
         tag_index.index_pages.flush().unwrap();
@@ -1989,7 +1979,7 @@ mod tests {
         }
 
         assert_eq!(leaf2.keys[new_key_index2], new_key);
-        assert_eq!(leaf2.values[new_key_index2], new_value);
+        assert_eq!(leaf2.values[new_key_index2], vec![9999]);
 
         // No need to clean up the test file, it will be removed when temp_dir goes out of scope
     }
@@ -2047,10 +2037,10 @@ mod tests {
         let new_tag_hash = hash_tag("NewTag");
         let mut new_key = [0u8; TAG_HASH_LEN];
         new_key.copy_from_slice(&new_tag_hash[..TAG_HASH_LEN]);
-        let new_value = vec![9999, 9998, 9997];
+        let new_value = 9999;
 
         // Call append_leaf_key_and_value with the page_id, key, and value
-        let split_result = tag_index.insert_leaf_key_and_value(page_id, new_key, new_value.clone());
+        let split_result = tag_index.insert_leaf_key_and_value(page_id, new_key, new_value);
 
         // Verify that the leaf was split
         assert!(split_result.is_some());
@@ -2069,7 +2059,7 @@ mod tests {
             let new_key_in_original = original_leaf.keys.contains(&new_key);
             if new_key_in_original {
                 let index = original_leaf.keys.iter().position(|k| *k == new_key).unwrap();
-                assert_eq!(original_leaf.values[index], new_value);
+                assert_eq!(original_leaf.values[index], vec![new_value]);
             }
         }
 
@@ -2089,7 +2079,7 @@ mod tests {
             let new_key_in_new = new_leaf.keys.contains(&new_key);
             if new_key_in_new {
                 let index = new_leaf.keys.iter().position(|k| *k == new_key).unwrap();
-                assert_eq!(new_leaf.values[index], new_value);
+                assert_eq!(new_leaf.values[index], vec![new_value]);
             }
         }
 
@@ -2164,7 +2154,7 @@ mod tests {
                 _ => 0,
             };
 
-            let value = vec![position];
+            let value = position;
 
             // Add the key and value to the leaf node
             let split_result = tag_index.insert_leaf_key_and_value(page_id, key, value);
@@ -2204,7 +2194,7 @@ mod tests {
 
         // Add another position to TagC
         let new_position = 3001;
-        let split_result = tag_index.insert_leaf_key_and_value(page_id, tag_c_key, vec![new_position]);
+        let split_result = tag_index.insert_leaf_key_and_value(page_id, tag_c_key, new_position);
 
         // Verify that the leaf was not split
         assert!(split_result.is_none());
@@ -2299,14 +2289,16 @@ mod tests {
         // Add the tag with 100 positions
         let mut positions = Vec::new();
         for i in 0..100 {
+            // Add the key and value to the leaf node
+            let split_result = tag_index.insert_leaf_key_and_value(page_id, tag_key, i);
+
+            // Verify that the leaf was not split
+            assert!(split_result.is_none());
+
             positions.push(i as i64);
+            
         }
 
-        // Add the key and value to the leaf node
-        let split_result = tag_index.insert_leaf_key_and_value(page_id, tag_key, positions);
-
-        // Verify that the leaf was not split
-        assert!(split_result.is_none());
 
         // Get the page and verify it has 1 key and value
         let page = tag_index.index_pages.get_page(page_id).unwrap();
@@ -2317,7 +2309,7 @@ mod tests {
 
         // Add one more position to the tag
         let new_position = 100;
-        let split_result = tag_index.insert_leaf_key_and_value(page_id, tag_key, vec![new_position]);
+        let split_result = tag_index.insert_leaf_key_and_value(page_id, tag_key, new_position);
 
         // Verify that the leaf was not split
         assert!(split_result.is_none());

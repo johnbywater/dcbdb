@@ -563,6 +563,117 @@ impl TagIndex {
         self.index_pages.paged_file.page_size
     }
 
+    /// Looks up a tag in the tag index and returns an iterator of positions
+    ///
+    /// # Arguments
+    /// * `tag` - The tag to look up
+    ///
+    /// # Returns
+    /// * `std::io::Result<Vec<Position>>` - Ok(positions) if the tag was found, Ok(empty vec) if not found, Err if an error occurred
+    pub fn lookup(&mut self, tag: &str) -> std::io::Result<Vec<Position>> {
+        // Hash the tag to get the key
+        let tag_hash = hash_tag(tag);
+        let mut key = [0u8; TAG_HASH_LEN];
+        key.copy_from_slice(&tag_hash[..TAG_HASH_LEN]);
+
+        // Get the root page ID from the header page
+        let header_node = self.index_pages.header_node();
+        let root_page_id = header_node.root_page_id;
+
+        // Get the root page
+        let page = self.index_pages.get_page(root_page_id)?;
+
+        // Check if the root page is a leaf node
+        if page.node.node_type_byte() == LEAF_NODE_TYPE {
+            // Downcast the node to a LeafNode
+            let leaf_node = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+
+            // Use binary search to find the key in the leaf node's keys
+            match leaf_node.keys.binary_search(&key) {
+                Ok(index) => {
+                    // Key found, check if the positions are stored directly or in a TagLeafNode
+                    if leaf_node.values[index].len() == 1 && leaf_node.values[index][0] < 0 {
+                        // Positions are stored in a TagLeafNode
+                        let tag_leaf_page_id = PageID((-leaf_node.values[index][0]) as u32);
+                        let tag_leaf_page = self.index_pages.get_page(tag_leaf_page_id)?;
+                        let tag_leaf_node = tag_leaf_page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
+
+                        // Return all positions from the TagLeafNode
+                        return Ok(tag_leaf_node.positions.clone());
+                    } else {
+                        // Positions are stored directly in the leaf node
+                        return Ok(leaf_node.values[index].clone());
+                    }
+                }
+                Err(_) => {
+                    // Key not found
+                    return Ok(Vec::new());
+                }
+            }
+        } else if page.node.node_type_byte() == INTERNAL_NODE_TYPE {
+            // If the root is an internal node, we need to traverse the tree to find the leaf node
+            let mut current_page_id = root_page_id;
+
+            // Traverse the tree until we find a leaf node
+            loop {
+                let page = self.index_pages.get_page(current_page_id)?;
+
+                if page.node.node_type_byte() == LEAF_NODE_TYPE {
+                    // Found a leaf node, search for the key
+                    let leaf_node = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+
+                    // Use binary search to find the key in the leaf node's keys
+                    match leaf_node.keys.binary_search(&key) {
+                        Ok(index) => {
+                            // Key found, check if the positions are stored directly or in a TagLeafNode
+                            if leaf_node.values[index].len() == 1 && leaf_node.values[index][0] < 0 {
+                                // Positions are stored in a TagLeafNode
+                                let tag_leaf_page_id = PageID((-leaf_node.values[index][0]) as u32);
+                                let tag_leaf_page = self.index_pages.get_page(tag_leaf_page_id)?;
+                                let tag_leaf_node = tag_leaf_page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
+
+                                // Return all positions from the TagLeafNode
+                                return Ok(tag_leaf_node.positions.clone());
+                            } else {
+                                // Positions are stored directly in the leaf node
+                                return Ok(leaf_node.values[index].clone());
+                            }
+                        }
+                        Err(_) => {
+                            // Key not found
+                            return Ok(Vec::new());
+                        }
+                    }
+                } else if page.node.node_type_byte() == INTERNAL_NODE_TYPE {
+                    // Internal node, find the child to follow
+                    let internal_node = page.node.as_any().downcast_ref::<InternalNode>().unwrap();
+
+                    // Find the index of the first key greater than the search key using binary search
+                    let index = match internal_node.keys.binary_search(&key) {
+                        // If key is found, use the child at that index + 1
+                        Ok(idx) => idx + 1,
+                        // If key is not found, Err(idx) gives the index where it would be inserted
+                        // This is the index of the first key greater than the search key
+                        Err(idx) => idx,
+                    };
+
+                    // Use the child at the found index
+                    current_page_id = internal_node.child_ids[index];
+                } else {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Invalid node type",
+                    ));
+                }
+            }
+        } else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Invalid node type",
+            ));
+        }
+    }
+
     /// Inserts a tag and position into the tag index
     ///
     /// # Arguments
@@ -2416,7 +2527,7 @@ mod tests {
     }
 
     #[test]
-    fn test_insert() {
+    fn test_insert_lookup() {
         // Create a temporary directory
         let temp_dir = TempDir::new().expect("Failed to create temporary directory");
 
@@ -2460,6 +2571,16 @@ mod tests {
         assert_eq!(leaf_node.values[0].len(), 1);
         assert_eq!(leaf_node.values[0][0], position);
 
+        // Use the lookup method to find the position for the tag
+        let positions = tag_index.lookup(tag).unwrap();
+        assert_eq!(positions.len(), 1);
+        assert_eq!(positions[0], position);
+
+        // Lookup a non-existent tag
+        let non_existent_tag = "non_existent";
+        let positions = tag_index.lookup(non_existent_tag).unwrap();
+        assert_eq!(positions.len(), 0);
+
         // Flush changes to disk
         tag_index.index_pages.flush().unwrap();
 
@@ -2485,6 +2606,11 @@ mod tests {
         // Verify that the value still contains the position
         assert_eq!(leaf_node2.values[0].len(), 1);
         assert_eq!(leaf_node2.values[0][0], position);
+
+        // Use the lookup method to find the position for the tag after reopening
+        let positions = tag_index2.lookup(tag).unwrap();
+        assert_eq!(positions.len(), 1);
+        assert_eq!(positions[0], position);
     }
 
     #[test]

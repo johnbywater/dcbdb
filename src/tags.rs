@@ -563,6 +563,99 @@ impl TagIndex {
         self.index_pages.paged_file.page_size
     }
 
+    /// Inserts a tag and position into the tag index
+    ///
+    /// # Arguments
+    /// * `tag` - The tag to insert
+    /// * `position` - The position to insert
+    ///
+    /// # Returns
+    /// * `std::io::Result<()>` - Ok if the insertion was successful, Err otherwise
+    pub fn insert(&mut self, tag: &str, position: Position) -> std::io::Result<()> {
+        // Hash the tag to get the key
+        let tag_hash = hash_tag(tag);
+        let mut key = [0u8; TAG_HASH_LEN];
+        key.copy_from_slice(&tag_hash[..TAG_HASH_LEN]);
+
+        // Get the root page ID from the header page
+        let header_node = self.index_pages.header_node();
+        let root_page_id = header_node.root_page_id;
+
+        // Stack to keep track of the path from root to leaf
+        // Each entry is a page ID and the index of the child to follow
+        let mut stack: Vec<(PageID, usize)> = Vec::new();
+        let mut current_page_id = root_page_id;
+
+        // First phase: traverse down to the leaf node
+        loop {
+            let page = self.index_pages.get_page(current_page_id)?;
+
+            if page.node.node_type_byte() == LEAF_NODE_TYPE {
+                // Found the leaf node, break out of the loop
+                break;
+            } else if page.node.node_type_byte() == INTERNAL_NODE_TYPE {
+                // Internal node, find the correct child to follow
+                let internal_node = page.node.as_any().downcast_ref::<InternalNode>().unwrap();
+
+                // Use binary search to find the correct child
+                let index = match internal_node.keys.binary_search(&key) {
+                    Ok(index) => index + 1, // Key found, follow the child after the key
+                    Err(index) => index,    // Key not found, follow the child at the insertion point
+                };
+
+                // Push the current page and child index onto the stack
+                stack.push((current_page_id, index));
+
+                // Move to the child
+                current_page_id = internal_node.child_ids[index];
+            } else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Invalid node type",
+                ));
+            }
+        }
+
+        // Second phase: insert into the leaf node
+        let mut split_info = self.insert_leaf_key_and_value(current_page_id, key, vec![position]);
+
+        // Third phase: propagate splits up the tree
+        while let Some((promoted_key, new_page_id)) = split_info {
+            if stack.is_empty() {
+                // We've reached the root, create a new root
+                let new_root_page_id = self.index_pages.alloc_page_id();
+
+                // Create a new internal node with the promoted key and two child IDs
+                let internal_node = InternalNode {
+                    keys: vec![promoted_key],
+                    child_ids: vec![root_page_id, new_page_id],
+                };
+
+                // Create a new page with the internal node
+                let new_root_page = IndexPage {
+                    page_id: new_root_page_id,
+                    node: Box::new(internal_node),
+                };
+
+                // Add the new page to the collection
+                self.index_pages.add_page(new_root_page);
+
+                // Set the new page as the root page
+                self.index_pages.set_root_page_id(new_root_page_id);
+
+                break;
+            }
+
+            // Pop the parent from the stack
+            let (parent_id, _child_index) = stack.pop().unwrap();
+
+            // Insert the promoted key and new page ID into the parent
+            split_info = self.insert_internal_key_and_value(parent_id, promoted_key, new_page_id);
+        }
+
+        Ok(())
+    }
+
     /// Appends a position key and page ID to a tag internal node if the key is greater than the last key
     ///
     /// # Arguments
@@ -2320,6 +2413,185 @@ mod tests {
         assert_eq!(new_tag_internal2.keys[0], 4000);
         assert_eq!(new_tag_internal2.child_ids[0], PageID(40));
         assert_eq!(new_tag_internal2.child_ids[1], PageID(50));
+    }
+
+    #[test]
+    fn test_insert() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+
+        // Append the filename to the directory path
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Create a new TagIndex instance
+        let mut tag_index = TagIndex::new(&test_path, 4096).unwrap();
+
+        // Insert a tag and position
+        let tag = "user";
+        let position = 1000;
+        tag_index.insert(tag, position).unwrap();
+
+        // Get the root page ID from the header page
+        let header_node = tag_index.index_pages.header_node();
+        let root_page_id = header_node.root_page_id;
+
+        // Get the root page
+        let root_page = tag_index.index_pages.get_page(root_page_id).unwrap();
+
+        // Verify that the root page is a LeafNode
+        assert_eq!(root_page.node.node_type_byte(), LEAF_NODE_TYPE);
+
+        // Downcast the node to a LeafNode
+        let leaf_node = root_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+
+        // Verify that the LeafNode has one key
+        assert_eq!(leaf_node.keys.len(), 1);
+        assert_eq!(leaf_node.values.len(), 1);
+
+        // Hash the tag to get the expected key
+        let tag_hash = hash_tag(tag);
+        let mut expected_key = [0u8; TAG_HASH_LEN];
+        expected_key.copy_from_slice(&tag_hash[..TAG_HASH_LEN]);
+
+        // Verify that the key matches the expected key
+        assert_eq!(leaf_node.keys[0], expected_key);
+
+        // Verify that the value contains the position
+        assert_eq!(leaf_node.values[0].len(), 1);
+        assert_eq!(leaf_node.values[0][0], position);
+
+        // Flush changes to disk
+        tag_index.index_pages.flush().unwrap();
+
+        // Create another instance of TagIndex
+        let mut tag_index2 = TagIndex::new(&test_path, 4096).unwrap();
+
+        // Get the root page again
+        let root_page2 = tag_index2.index_pages.get_page(root_page_id).unwrap();
+
+        // Verify that the root page is still a LeafNode
+        assert_eq!(root_page2.node.node_type_byte(), LEAF_NODE_TYPE);
+
+        // Downcast the node to a LeafNode
+        let leaf_node2 = root_page2.node.as_any().downcast_ref::<LeafNode>().unwrap();
+
+        // Verify that the LeafNode still has one key
+        assert_eq!(leaf_node2.keys.len(), 1);
+        assert_eq!(leaf_node2.values.len(), 1);
+
+        // Verify that the key still matches the expected key
+        assert_eq!(leaf_node2.keys[0], expected_key);
+
+        // Verify that the value still contains the position
+        assert_eq!(leaf_node2.values[0].len(), 1);
+        assert_eq!(leaf_node2.values[0][0], position);
+    }
+
+    #[test]
+    fn test_insert_split_leaf() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+
+        // Append the filename to the directory path
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Create a new TagIndex instance with a small page size to force splitting
+        let page_size = 256;
+        let mut tag_index = TagIndex::new(&test_path, page_size).unwrap();
+
+        // Insert enough tags to cause the leaf node to split
+        let mut inserted_tags = Vec::new();
+        for i in 0..20 {
+            let tag = format!("tag-{}", i);
+            let position = (i * 100) as i64;
+            tag_index.insert(&tag, position).unwrap();
+            inserted_tags.push((tag, position));
+        }
+
+        // Get the root page ID from the header page
+        let header_node = tag_index.index_pages.header_node();
+        let root_page_id = header_node.root_page_id;
+
+        // First, check that the root is an InternalNode and get child page IDs
+        let (left_child_id, right_child_id) = {
+            let root_page = tag_index.index_pages.get_page(root_page_id).unwrap();
+            assert_eq!(root_page.node.node_type_byte(), INTERNAL_NODE_TYPE, "Root node should be an InternalNode");
+
+            // Get the child page IDs
+            let internal_node = root_page.node.as_any().downcast_ref::<InternalNode>().unwrap();
+            assert!(!internal_node.keys.is_empty(), "InternalNode should have at least one key");
+            assert_eq!(internal_node.child_ids.len(), 2, "InternalNode should have two child IDs");
+
+            // Return the child page IDs
+            (internal_node.child_ids[0], internal_node.child_ids[1])
+        };
+
+        // Check that the left child is a LeafNode and collect its keys and values
+        let left_keys_values = {
+            let left_child_page = tag_index.index_pages.get_page(left_child_id).unwrap();
+            assert_eq!(left_child_page.node.node_type_byte(), LEAF_NODE_TYPE, "Left child should be a LeafNode");
+
+            let left_leaf = left_child_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+
+            // Clone the keys and values to avoid borrowing issues
+            (left_leaf.keys.clone(), left_leaf.values.clone())
+        };
+
+        // Check that the right child is a LeafNode and collect its keys and values
+        let right_keys_values = {
+            let right_child_page = tag_index.index_pages.get_page(right_child_id).unwrap();
+            assert_eq!(right_child_page.node.node_type_byte(), LEAF_NODE_TYPE, "Right child should be a LeafNode");
+
+            let right_leaf = right_child_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+
+            // Clone the keys and values to avoid borrowing issues
+            (right_leaf.keys.clone(), right_leaf.values.clone())
+        };
+
+        // Now verify that all inserted tags and positions are in the leaf nodes
+        for (tag, position) in &inserted_tags {
+            // Hash the tag to get the key
+            let tag_hash = hash_tag(tag);
+            let mut key = [0u8; TAG_HASH_LEN];
+            key.copy_from_slice(&tag_hash[..TAG_HASH_LEN]);
+
+            // Check if the key is in the left leaf
+            let in_left = left_keys_values.0.iter().position(|k| *k == key);
+            // Check if the key is in the right leaf
+            let in_right = right_keys_values.0.iter().position(|k| *k == key);
+
+            // The key should be in exactly one of the leaves
+            assert!(in_left.is_some() || in_right.is_some(), "Tag {} not found in either leaf", tag);
+            assert!(!(in_left.is_some() && in_right.is_some()), "Tag {} found in both leaves", tag);
+
+            // Verify the position is correct
+            if let Some(idx) = in_left {
+                assert!(left_keys_values.1[idx].contains(position), "Position {} not found for tag {}", position, tag);
+            } else if let Some(idx) = in_right {
+                assert!(right_keys_values.1[idx].contains(position), "Position {} not found for tag {}", position, tag);
+            }
+        }
+
+        // Flush changes to disk
+        tag_index.index_pages.flush().unwrap();
+
+        // Create another instance of TagIndex
+        let mut tag_index2 = TagIndex::new(&test_path, page_size).unwrap();
+
+        // Get the root page again
+        let root_page2 = tag_index2.index_pages.get_page(root_page_id).unwrap();
+
+        // Verify that the root page is still an InternalNode
+        assert_eq!(root_page2.node.node_type_byte(), INTERNAL_NODE_TYPE);
+
+        // Downcast the node to an InternalNode
+        let internal_node2 = root_page2.node.as_any().downcast_ref::<InternalNode>().unwrap();
+
+        // Verify that the InternalNode still has at least one key
+        assert!(!internal_node2.keys.is_empty());
+
+        // Verify that the InternalNode still has two child PageIDs
+        assert_eq!(internal_node2.child_ids.len(), 2);
     }
 
     #[test]

@@ -985,45 +985,17 @@ impl TagIndex {
         // Get the root page
         let page = self.index_pages.get_page(root_page_id).unwrap();
 
-        // Check if the root is a TagLeafNode or a TagInternalNode
+        // Stack to keep track of the path from root to leaf
+        // Each entry is a page ID and the index of the child to follow
+        let mut stack: Vec<(PageID, usize)> = Vec::new();
+        let mut current_page_id = root_page_id;
+
+        // First phase: traverse down to the leaf node
         if page.node.node_type_byte() == TAG_LEAF_NODE_TYPE {
-            // Root is a TagLeafNode, insert directly
-            let split_result = self.append_tag_leaf_position(root_page_id, position);
-
-            if let Some((promoted_position, new_page_id)) = split_result {
-                // The TagLeafNode was split, create a TagInternalNode as the new root
-                let new_root_page_id = self.index_pages.alloc_page_id();
-
-                // Create a new TagInternalNode with the promoted position and two child IDs
-                let tag_internal_node = TagInternalNode {
-                    keys: vec![promoted_position],
-                    child_ids: vec![root_page_id, new_page_id],
-                };
-
-                // Create a new IndexPage with the TagInternalNode
-                let new_root_page = IndexPage {
-                    page_id: new_root_page_id,
-                    node: Box::new(tag_internal_node),
-                };
-
-                // Add the new page to the collection
-                self.index_pages.add_page(new_root_page);
-
-                // Return the new root page ID
-                Some(new_root_page_id)
-            } else {
-                // No split occurred, return None
-                None
-            }
+            // Root is already a leaf node, no need to traverse
+            // current_page_id is already set to root_page_id
         } else if page.node.node_type_byte() == TAG_INTERNAL_NODE_TYPE {
-            // Root is a TagInternalNode, traverse down to the leaf node
-
-            // Stack to keep track of the path from root to leaf
-            // Each entry is a page ID and the index of the child to follow
-            let mut stack: Vec<(PageID, usize)> = Vec::new();
-            let mut current_page_id = root_page_id;
-
-            // First phase: traverse down to the leaf node
+            // Root is an internal node, traverse down to the leaf
             loop {
                 let page = self.index_pages.get_page(current_page_id).unwrap();
 
@@ -1050,48 +1022,48 @@ impl TagIndex {
                     return None;
                 }
             }
-
-            // Second phase: insert into the leaf node
-            let mut split_info = self.append_tag_leaf_position(current_page_id, position);
-
-            // Third phase: propagate splits up the tree
-            while let Some((promoted_position, new_page_id)) = split_info {
-                if stack.is_empty() {
-                    // We've reached the root, create a new root
-                    let new_root_page_id = self.index_pages.alloc_page_id();
-
-                    // Create a new TagInternalNode with the promoted position and two child IDs
-                    let tag_internal_node = TagInternalNode {
-                        keys: vec![promoted_position],
-                        child_ids: vec![root_page_id, new_page_id],
-                    };
-
-                    // Create a new IndexPage with the TagInternalNode
-                    let new_root_page = IndexPage {
-                        page_id: new_root_page_id,
-                        node: Box::new(tag_internal_node),
-                    };
-
-                    // Add the new page to the collection
-                    self.index_pages.add_page(new_root_page);
-
-                    // Return the new root page ID
-                    return Some(new_root_page_id);
-                }
-
-                // Pop the parent from the stack
-                let (parent_id, child_index) = stack.pop().unwrap();
-
-                // Insert the promoted position and new page ID into the parent
-                split_info = self.append_tag_internal_node(parent_id, promoted_position, new_page_id);
-            }
-
-            // No new root was created
-            None
         } else {
             // Invalid node type
-            None
+            return None;
         }
+
+        // Second phase: insert into the leaf node
+        let mut split_info = self.append_tag_leaf_position(current_page_id, position);
+
+        // Third phase: propagate splits up the tree
+        while let Some((promoted_position, new_page_id)) = split_info {
+            if stack.is_empty() {
+                // We've reached the root, create a new root
+                let new_root_page_id = self.index_pages.alloc_page_id();
+
+                // Create a new TagInternalNode with the promoted position and two child IDs
+                let tag_internal_node = TagInternalNode {
+                    keys: vec![promoted_position],
+                    child_ids: vec![root_page_id, new_page_id],
+                };
+
+                // Create a new IndexPage with the TagInternalNode
+                let new_root_page = IndexPage {
+                    page_id: new_root_page_id,
+                    node: Box::new(tag_internal_node),
+                };
+
+                // Add the new page to the collection
+                self.index_pages.add_page(new_root_page);
+
+                // Return the new root page ID
+                return Some(new_root_page_id);
+            }
+
+            // Pop the parent from the stack
+            let (parent_id, _child_index) = stack.pop().unwrap();
+
+            // Insert the promoted position and new page ID into the parent
+            split_info = self.append_tag_internal_node(parent_id, promoted_position, new_page_id);
+        }
+
+        // No new root was created
+        None
     }
 
     /// Appends a position key and page ID to a tag internal node if the key is greater than the last key

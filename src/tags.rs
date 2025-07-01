@@ -1006,11 +1006,8 @@ impl TagIndex {
                     // Internal node, find the correct child to follow
                     let tag_internal_node = page.node.as_any().downcast_ref::<TagInternalNode>().unwrap();
 
-                    // Find the index of the first key greater than the position
-                    let mut index = 0;
-                    while index < tag_internal_node.keys.len() && tag_internal_node.keys[index] <= position {
-                        index += 1;
-                    }
+                    // Since positions are monotonically increasing, we always want the last child
+                    let index = tag_internal_node.child_ids.len() - 1;
 
                     // Push the current page and child index onto the stack
                     stack.push((current_page_id, index));

@@ -8,7 +8,7 @@ use thiserror::Error;
 
 /// Represents a query item for filtering events
 #[derive(Debug, Clone, Default)]
-pub struct QueryItem {
+pub struct DCBQueryItem {
     /// Event types to match
     pub types: Vec<String>,
     /// Tags that must all be present in the event
@@ -17,16 +17,16 @@ pub struct QueryItem {
 
 /// A query composed of multiple query items
 #[derive(Debug, Clone, Default)]
-pub struct Query {
+pub struct DCBQuery {
     /// List of query items, where events matching any item are included in results
-    pub items: Vec<QueryItem>,
+    pub items: Vec<DCBQueryItem>,
 }
 
 /// Conditions that must be satisfied for an append operation to succeed
 #[derive(Debug, Clone, Default)]
-pub struct AppendCondition {
+pub struct DCBAppendCondition {
     /// Query that, if matching any events, will cause the append to fail
-    pub fail_if_events_match: Query,
+    pub fail_if_events_match: DCBQuery,
     /// Position after which to append; if None, append at the end
     pub after: Option<i64>,
 }
@@ -58,7 +58,7 @@ pub trait DCBReadResponse: Iterator<Item = DCBSequencedEvent> {
 }
 
 /// Interface for recording and retrieving events
-pub trait EventStoreAPI {
+pub trait DCBEventStoreAPI {
     /// Reads events from the store based on the provided query and constraints
     ///
     /// Returns all events, unless 'after' is given then only those with position
@@ -68,16 +68,30 @@ pub trait EventStoreAPI {
     /// in the event tags.
     fn read(
         &self,
-        query: Option<&Query>,
+        query: Option<DCBQuery>,
         after: Option<i64>,
         limit: Option<usize>,
-    ) -> Box<dyn DCBReadResponse>;
+    ) -> Result<(Vec<DCBSequencedEvent>, Option<i64>)>;
 
     /// Appends given events to the event store, unless the condition fails
     ///
     /// Returns the position of the last appended event
-    fn append(&self, events: &[Event], condition: Option<&AppendCondition>) -> i64;
+    fn append(&self, events: Vec<Event>, condition: Option<DCBAppendCondition>) -> Result<i64>;
 }
+
+// Error types
+#[derive(Error, Debug)]
+pub enum EventStoreError {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Serialization error: {0}")]
+    Serialization(#[from] bincode::error::EncodeError),
+    #[error("Integrity error: condition failed")]
+    IntegrityError,
+    #[error("Corruption detected: {0}")]
+    Corruption(String),
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -161,19 +175,4 @@ mod tests {
     }
 }
 
-
-// Error types
-#[derive(Error, Debug)]
-pub enum EventStoreError {
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("Serialization error: {0}")]
-    Serialization(#[from] bincode::error::EncodeError),
-    #[error("Integrity error: condition failed")]
-    IntegrityError,
-    #[error("Corruption detected: {0}")]
-    Corruption(String),
-}
-
 pub type Result<T> = std::result::Result<T, EventStoreError>;
-

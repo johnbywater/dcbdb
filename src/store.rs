@@ -162,17 +162,10 @@ impl DCBEventStoreAPI for EventStore {
 
                 // Merge the iterators and group by position
 
-                // Collect all (position, tag, qiids) tuples
-                let mut all_tuples = Vec::new();
-                for iter in tag_iterators {
-                    all_tuples.extend(iter);
-                }
-
-                // Sort by position to prepare for grouping
-                all_tuples.sort_by_key(|(pos, _, _)| *pos);
-
-                // Group by position using an iterator
-                let all_tuples_iter = all_tuples.into_iter();
+                // Merge the iterators by position using itertools::merge_by
+                let all_tuples_iter = tag_iterators
+                    .into_iter()
+                    .kmerge_by(|a, b| a.0 < b.0);
 
                 // Iterator that groups tuples by position
                 struct GroupByPositionIterator<I> 

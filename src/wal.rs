@@ -113,11 +113,11 @@ impl RecordHeader {
 
 /// Event with position for serialization
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct DCBEventWithPosition {
-    position: Position,
-    type_: String,
-    data: Vec<u8>,
-    tags: Vec<String>,
+pub struct DCBEventWithPosition {
+    pub position: Position,
+    pub type_: String,
+    pub data: Vec<u8>,
+    pub tags: Vec<String>,
 }
 
 impl From<(Position, Event)> for DCBEventWithPosition {
@@ -222,7 +222,7 @@ impl TransactionWAL {
         for record in buffered {
             self.file.write_all(&record)?;
         }
-        
+
         self.flush_and_sync()?;
         self.commit_offset = self.file.stream_position()? as i64;
 

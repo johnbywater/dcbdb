@@ -27,6 +27,9 @@ pub mod tags;
 // Export the Checkpoint module
 pub mod checkpoint;
 
+// Export the Transactions module
+pub mod transactions;
+
 // Export the EventStore module
 pub mod event_store;
 

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::io;
 
+use lru::LruCache;
 use thiserror::Error;
 
 use crate::api::{DCBEvent, DCBSequencedEvent};
@@ -79,6 +80,11 @@ pub struct TransactionManager {
     last_issued_txn_id: u64,
     last_issued_position: Position,
     last_committed: LastCommittedTxnPosition,
+
+    /// Cache of events by position
+    cache: LruCache<Position, DCBSequencedEvent>,
+    /// Cache capacity
+    cache_capacity: usize,
 }
 
 impl TransactionManager {
@@ -134,6 +140,8 @@ impl TransactionManager {
             cache_size,
         )?;
 
+        let cache_capacity = cache_size.unwrap_or(1000);
+
         let mut tm = Self {
             path: path_buf,
             uncommitted: HashMap::new(),
@@ -147,6 +155,9 @@ impl TransactionManager {
             last_issued_txn_id: 0,
             last_issued_position: 0,
             last_committed: LastCommittedTxnPosition { txn_id: 0, position: 0 },
+
+            cache: LruCache::unbounded(),
+            cache_capacity,
         };
 
         // If either index doesn't exist or is invalid, rebuild both from segment files
@@ -305,6 +316,12 @@ impl TransactionManager {
 
             // Push to indexes
             self.add_event_to_indexes(*position, segment_number, segment_offset, event)?;
+
+            // Cache the event
+            self.cache.put(*position, DCBSequencedEvent {
+                event: event.clone(),
+                position: *position,
+            });
         }
 
         Ok(())
@@ -347,6 +364,11 @@ impl TransactionManager {
         // We can't call wal.cut_before_offset directly, so we use truncate_wal_before_checkpoint
         if let Err(e) = self.wal.truncate_wal_before_checkpoint(last_committed.txn_id) {
             return Err(TransactionError::Wal(e));
+        }
+
+        // Reduce the cache to the cache_capacity
+        while self.cache.len() > self.cache_capacity {
+            self.cache.pop_lru();
         }
 
         Ok(())
@@ -392,6 +414,11 @@ impl TransactionManager {
         &mut self,
         position: Position,
     ) -> Result<DCBSequencedEvent> {
+        // Check if the event is in the cache
+        if let Some(event) = self.cache.get(&position) {
+            return Ok(event.clone());
+        }
+
         // Get the segment number and offset from the index
         let position_index_record = self.position_idx.lookup(position).map_err(TransactionError::Io)?
             .ok_or_else(|| {
@@ -423,6 +450,9 @@ impl TransactionManager {
             event,
             position,
         };
+
+        // Cache the event
+        self.cache.put(position, sequenced_event.clone());
 
         Ok(sequenced_event)
     }
@@ -553,6 +583,8 @@ mod tests {
         assert_eq!(read_event.event.event_type, event.event_type);
         assert_eq!(read_event.event.data, event.data);
         assert_eq!(read_event.event.tags, event.tags);
+        
+        
 
         Ok(())
     }

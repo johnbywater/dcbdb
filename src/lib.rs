@@ -30,10 +30,7 @@ pub mod checkpoint;
 // Export the Transactions module
 pub mod transactions;
 
-// Export the EventStore module
-pub mod event_store;
-
-// Export the Store module
+// Export the Event Store module
 pub mod store;
 
 #[cfg(test)]

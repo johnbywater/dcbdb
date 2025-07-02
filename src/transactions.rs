@@ -584,7 +584,21 @@ mod tests {
         assert_eq!(read_event.event.data, event.data);
         assert_eq!(read_event.event.tags, event.tags);
         
+        tm.flush_and_checkpoint()?;
+
+        let mut tm = TransactionManager::new(dir.path(), None, None)?;
         
+        let positions = tm.tags_idx.lookup("tag1")?;
+        assert_eq!(positions.len(), 1);
+        assert_eq!(positions[0], position);
+
+        let read_event = tm.read_event_at_position(position)?;
+        assert_eq!(read_event.position, position);
+        assert_eq!(read_event.event.event_type, event.event_type);
+        assert_eq!(read_event.event.data, event.data);
+        assert_eq!(read_event.event.tags, event.tags);
+
+
 
         Ok(())
     }
@@ -626,6 +640,29 @@ mod tests {
         let read_event2 = tm.read_event_at_position(position2)?;
         assert_eq!(read_event2.position, position2);
         assert_eq!(read_event2.event.event_type, event2.event_type);
+
+        tm.flush_and_checkpoint()?;
+
+        let mut tm = TransactionManager::new(dir.path(), None, None)?;
+
+        let positions = tm.tags_idx.lookup("tag1")?;
+        assert_eq!(positions.len(), 1);
+        assert_eq!(positions[0], position1);
+
+        let read_event = tm.read_event_at_position(position1)?;
+        assert_eq!(read_event.position, position1);
+        assert_eq!(read_event.event.event_type, event1.event_type);
+        assert_eq!(read_event.event.data, event1.data);
+        assert_eq!(read_event.event.tags, event1.tags);
+
+        let positions = tm.tags_idx.lookup("tag2")?;
+        assert_eq!(positions.len(), 2);
+        assert_eq!(positions[0], position1);
+        assert_eq!(positions[1], position2);
+
+        let positions = tm.tags_idx.lookup("tag3")?;
+        assert_eq!(positions.len(), 1);
+        assert_eq!(positions[0], position2);
 
         Ok(())
     }

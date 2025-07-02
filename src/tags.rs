@@ -1355,10 +1355,18 @@ impl TagIndex {
         // Start with the first leaf node
         let page = self.index_pages.get_page(current_page_id)?;
         let tag_leaf_node = page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
-        positions.extend(tag_leaf_node.positions.clone());
 
-        // Filter positions based on the 'after' parameter
-        positions.retain(|&pos| pos > after);
+        // Use binary search to find the index of the first position greater than 'after'
+        let start_idx = match tag_leaf_node.positions.binary_search(&after) {
+            // If 'after' is found, start from the next position
+            Ok(idx) => idx + 1,
+            // If 'after' is not found, Err(idx) gives the index where it would be inserted
+            // This is the index of the first position greater than 'after'
+            Err(idx) => idx,
+        };
+
+        // Only take positions from start_idx onwards
+        positions.extend(tag_leaf_node.positions[start_idx..].iter().cloned());
 
         // Follow the next_leaf_id chain
         let mut next_leaf_id = tag_leaf_node.next_leaf_id;
@@ -1373,6 +1381,8 @@ impl TagIndex {
             }
 
             let leaf_node = leaf_page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
+            // Since we're past the first leaf node, we know all positions in subsequent nodes
+            // are greater than 'after', so we can just extend with all positions
             positions.extend(leaf_node.positions.clone());
 
             // Move to the next leaf node

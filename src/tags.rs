@@ -2,6 +2,7 @@ use uuid::{uuid, Uuid};
 use std::format;
 use std::path::Path;
 use std::any::Any;
+use std::cell::RefCell;
 use crate::pagedfile::{PageID, PAGE_ID_SIZE};
 use crate::wal::{Position, POSITION_SIZE};
 use crate::indexpages::{IndexPages, Node, IndexPage, HeaderNode};
@@ -45,7 +46,7 @@ impl Iterator for DirectPositionIterator {
 
 /// An iterator over positions in a tag B+tree
 pub struct TagTreePositionIterator<'a> {
-    tag_index: &'a mut TagIndex,
+    tag_index: &'a TagIndex,
     current_page_id: Option<PageID>,
     current_positions: Vec<Position>,
     current_index: usize,
@@ -55,7 +56,7 @@ pub struct TagTreePositionIterator<'a> {
 
 impl<'a> TagTreePositionIterator<'a> {
     /// Creates a new TagTreePositionIterator
-    pub fn new(tag_index: &'a mut TagIndex, root_page_id: PageID, after: Position) -> Self {
+    pub fn new(tag_index: &'a TagIndex, root_page_id: PageID, after: Position) -> Self {
         Self {
             tag_index,
             current_page_id: Some(root_page_id),
@@ -74,8 +75,9 @@ impl<'a> TagTreePositionIterator<'a> {
         };
 
         // Traverse down the tree until we find a leaf node
+        let mut index_pages = self.tag_index.index_pages.borrow_mut();
         loop {
-            let page = self.tag_index.index_pages.get_page(current_page_id)?;
+            let page = index_pages.get_page(current_page_id)?;
 
             if page.node.node_type_byte() == TAG_LEAF_NODE_TYPE {
                 // Found a leaf node
@@ -126,7 +128,8 @@ impl<'a> TagTreePositionIterator<'a> {
         };
 
         // Get the leaf node
-        let page = self.tag_index.index_pages.get_page(current_page_id)?;
+        let mut index_pages_ref = self.tag_index.index_pages.borrow_mut();
+        let page = index_pages_ref.get_page(current_page_id)?;
 
         if page.node.node_type_byte() != TAG_LEAF_NODE_TYPE {
             return Err(io::Error::new(
@@ -697,7 +700,8 @@ impl Node for TagInternalNode {
 
 /// A structure that manages tag indexing using IndexPages
 pub struct TagIndex {
-    pub index_pages: IndexPages,
+    pub page_size: usize,
+    pub index_pages: RefCell<IndexPages>,
 }
 
 impl TagIndex {
@@ -759,12 +763,7 @@ impl TagIndex {
             index_pages.flush()?;
         }
 
-        Ok(Self { index_pages })
-    }
-
-    /// Returns the maximum page size
-    fn get_max_page_size(&mut self) -> usize {
-        self.index_pages.paged_file.page_size
+        Ok(Self { page_size: page_size, index_pages: RefCell::new(index_pages) })
     }
 
     /// Inserts a tag and position into the tag index
@@ -782,7 +781,8 @@ impl TagIndex {
         key.copy_from_slice(&tag_hash[..TAG_HASH_LEN]);
 
         // Get the root page ID from the header page
-        let header_node = self.index_pages.header_node();
+        let mut index_pages = self.index_pages.borrow_mut();
+        let header_node = index_pages.header_node();
         let root_page_id = header_node.root_page_id;
 
         // Stack to keep track of the path from root to leaf
@@ -792,7 +792,7 @@ impl TagIndex {
 
         // First phase: traverse down to the leaf node
         loop {
-            let page = self.index_pages.get_page(current_page_id)?;
+            let page = index_pages.get_page(current_page_id)?;
 
             if page.node.node_type_byte() == LEAF_NODE_TYPE {
                 // Found the leaf node, break out of the loop
@@ -819,15 +819,19 @@ impl TagIndex {
                 ));
             }
         }
+        
+        drop(index_pages);
 
         // Second phase: insert into the leaf node
         let mut split_info = self.insert_leaf_key_and_value(current_page_id, key, position);
 
+        
         // Third phase: propagate splits up the tree
         while let Some((promoted_key, new_page_id)) = split_info {
             if stack.is_empty() {
                 // We've reached the root, create a new root
-                let new_root_page_id = self.index_pages.alloc_page_id();
+                let mut index_pages = self.index_pages.borrow_mut();
+                let new_root_page_id = index_pages.alloc_page_id();
 
                 // Create a new internal node with the promoted key and two child IDs
                 let internal_node = InternalNode {
@@ -842,10 +846,10 @@ impl TagIndex {
                 };
 
                 // Add the new page to the collection
-                self.index_pages.add_page(new_root_page);
+                index_pages.add_page(new_root_page);
 
                 // Set the new page as the root page
-                self.index_pages.set_root_page_id(new_root_page_id);
+                index_pages.set_root_page_id(new_root_page_id);
 
                 break;
             }
@@ -871,7 +875,8 @@ impl TagIndex {
     /// * `Option<([u8; TAG_HASH_LEN], PageID)>` - If the leaf node was split, returns the first key of the new leaf node and the new page ID
     pub fn insert_leaf_key_and_value(&mut self, page_id: PageID, key: [u8; TAG_HASH_LEN], value: Position) -> Option<([u8; TAG_HASH_LEN], PageID)> {
         // Get a reference to the page
-        let page = self.index_pages.get_page(page_id).unwrap();
+        let mut index_pages = self.index_pages.borrow_mut();
+        let page = index_pages.get_page(page_id).unwrap();
         let leaf_node = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
 
         // Use binary search to find the correct insertion point for the key
@@ -882,7 +887,7 @@ impl TagIndex {
             Ok(index) => {
                 // Check if the value is a single negative number, which indicates a TagLeafNode
                 let is_tag_leaf_node = {
-                    let page = self.index_pages.get_page(page_id).unwrap();
+                    let page = index_pages.get_page(page_id).unwrap();
                     let leaf_node = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
                     leaf_node.values[index].len() == 1 && leaf_node.values[index][0] < 0
                 };
@@ -890,25 +895,27 @@ impl TagIndex {
                 if is_tag_leaf_node {
                     // Get the TagLeafNode page ID
                     let tag_leaf_page_id = {
-                        let page = self.index_pages.get_page(page_id).unwrap();
+                        let page = index_pages.get_page(page_id).unwrap();
                         let leaf_node = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
                         PageID((-leaf_node.values[index][0]) as u32)
                     };
 
                     // Insert the positions into the tag B+tree
+                    drop(index_pages);
                     let new_root_page_id = self.insert_tag_tree(tag_leaf_page_id, value);
 
                     // If the root of the tag B+tree changed, update the reference in the LeafNode
                     if let Some(new_id) = new_root_page_id {
-                        let page = self.index_pages.get_page_mut(page_id).unwrap();
+                        let mut index_pages = self.index_pages.borrow_mut();
+                        let page = index_pages.get_page_mut(page_id).unwrap();
                         let leaf_node = page.node.as_any_mut().downcast_mut::<LeafNode>().unwrap();
                         leaf_node.values[index] = vec![-(new_id.0 as i64)];
-                        self.index_pages.mark_dirty(page_id);
+                        index_pages.mark_dirty(page_id);
                     }
                 } else {
                     // Check if adding these positions would exceed 100
                     let current_positions_count = {
-                        let page = self.index_pages.get_page(page_id).unwrap();
+                        let page = index_pages.get_page(page_id).unwrap();
                         let leaf_node = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
                         leaf_node.values[index].len()
                     };
@@ -918,7 +925,7 @@ impl TagIndex {
 
                         // First, get all the current positions
                         let all_positions = {
-                            let page = self.index_pages.get_page(page_id).unwrap();
+                            let page = index_pages.get_page(page_id).unwrap();
                             let leaf_node = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
                             let mut positions = leaf_node.values[index].clone();
 
@@ -934,7 +941,7 @@ impl TagIndex {
                         };
 
                         // Allocate a new page ID for the TagLeafNode
-                        let tag_leaf_page_id = self.index_pages.alloc_page_id();
+                        let tag_leaf_page_id = index_pages.alloc_page_id();
 
                         // Create a new IndexPage with the TagLeafNode
                         let tag_leaf_page = IndexPage {
@@ -943,27 +950,27 @@ impl TagIndex {
                         };
 
                         // Add the page to the collection
-                        self.index_pages.add_page(tag_leaf_page);
+                        index_pages.add_page(tag_leaf_page);
 
                         // Now update the LeafNode to store the PageID instead of the positions
-                        let page = self.index_pages.get_page_mut(page_id).unwrap();
+                        let page = index_pages.get_page_mut(page_id).unwrap();
                         let leaf_node = page.node.as_any_mut().downcast_mut::<LeafNode>().unwrap();
 
                         // Replace the list of positions with a single position that is the negative of the page ID
                         // This is a special marker to indicate that the positions are stored in a TagLeafNode
                         leaf_node.values[index] = vec![-(tag_leaf_page_id.0 as i64)];
 
-                        self.index_pages.mark_dirty(page_id);
+                        index_pages.mark_dirty(page_id);
                     } else {
                         // Just append the new positions to the existing list
-                        let page = self.index_pages.get_page_mut(page_id).unwrap();
+                        let page = index_pages.get_page_mut(page_id).unwrap();
                         let leaf_node = page.node.as_any_mut().downcast_mut::<LeafNode>().unwrap();
 
                         // Append the new position to the existing list
                         // We can assume that a new Position for an existing tag is greater than previously added Positions
                         leaf_node.values[index].push(value);
 
-                        self.index_pages.mark_dirty(page_id);
+                        index_pages.mark_dirty(page_id);
                     }
                 }
 
@@ -971,40 +978,38 @@ impl TagIndex {
             },
             // Key doesn't exist, insert it at the correct position
             Err(insert_index) => {
-                let max_page_size = self.get_max_page_size();
-
                 // Check if there is space for this key and value in the leaf node
                 let needs_splitting: bool = {
-                    let page = self.index_pages.get_page(page_id).unwrap();
+                    let page = index_pages.get_page(page_id).unwrap();
                     let page_size = page.node.calc_serialized_page_size();
                     // Calculate the additional size needed for the new key and value
                     let additional_size = TAG_HASH_LEN + 2 + POSITION_SIZE;
-                    page_size + additional_size > max_page_size
+                    page_size + additional_size > self.page_size
                 };
 
                 if !needs_splitting {
                     // Get a mutable reference to the page
-                    let page = self.index_pages.get_page_mut(page_id).unwrap();
+                    let page = index_pages.get_page_mut(page_id).unwrap();
                     let leaf_node = page.node.as_any_mut().downcast_mut::<LeafNode>().unwrap();
 
                     // Insert the key and value at the correct position
                     leaf_node.keys.insert(insert_index, key);
                     leaf_node.values.insert(insert_index, vec![value]);
 
-                    self.index_pages.mark_dirty(page_id);
+                    index_pages.mark_dirty(page_id);
                     return None;
                 }
             }
         }
 
         // Allocate a new page ID
-        let new_page_id = self.index_pages.alloc_page_id();
+        let new_page_id = index_pages.alloc_page_id();
 
         // When splitting, we need to decide which keys go to the new node
         // Move half of the keys and values to the new node
 
         // Get a mutable reference to the page
-        let page = self.index_pages.get_page_mut(page_id).unwrap();
+        let page = index_pages.get_page_mut(page_id).unwrap();
         let leaf_node = page.node.as_any_mut().downcast_mut::<LeafNode>().unwrap();
 
         // Find the correct insertion point for the new key
@@ -1040,10 +1045,10 @@ impl TagIndex {
         };
 
         // Mark the original page as dirty
-        self.index_pages.mark_dirty(page_id);
+        index_pages.mark_dirty(page_id);
 
         // Add the new page to the collection
-        self.index_pages.add_page(new_page);
+        index_pages.add_page(new_page);
 
         // Return the first key of the new leaf node and the new page ID
         Some((first_key, new_page_id))
@@ -1060,7 +1065,8 @@ impl TagIndex {
     /// * `Option<([u8; TAG_HASH_LEN], PageID)>` - If the internal node was split, returns the middle key and the new page ID
     pub fn insert_internal_key_and_value(&mut self, page_id: PageID, key: [u8; TAG_HASH_LEN], child_id: PageID) -> Option<([u8; TAG_HASH_LEN], PageID)> {
         // Get a reference to the page
-        let page = self.index_pages.get_page(page_id).unwrap();
+        let mut index_pages = self.index_pages.borrow_mut();
+        let page = index_pages.get_page(page_id).unwrap();
         let internal_node = page.node.as_any().downcast_ref::<InternalNode>().unwrap();
 
         // Use binary search to find the correct insertion point for the key
@@ -1070,31 +1076,30 @@ impl TagIndex {
             // Key already exists, replace the child_id at the corresponding position
             Ok(index) => {
                 // Get a mutable reference to the page
-                let page = self.index_pages.get_page_mut(page_id).unwrap();
+                let page = index_pages.get_page_mut(page_id).unwrap();
                 let internal_node = page.node.as_any_mut().downcast_mut::<InternalNode>().unwrap();
 
                 // Replace the child_id at the corresponding position
                 internal_node.child_ids[index + 1] = child_id;
 
-                self.index_pages.mark_dirty(page_id);
+                index_pages.mark_dirty(page_id);
                 return None;
             },
             // Key doesn't exist, insert it at the correct position
             Err(insert_index) => {
-                let max_page_size = self.get_max_page_size();
 
                 // Check if there is space for this key and value in the internal node
                 let needs_splitting: bool = {
-                    let page = self.index_pages.get_page(page_id).unwrap();
+                    let page = index_pages.get_page(page_id).unwrap();
                     let page_size = page.node.calc_serialized_page_size();
                     // Calculate the additional size needed for the new key and child_id
                     let additional_size = TAG_HASH_LEN + PAGE_ID_SIZE;
-                    page_size + additional_size > max_page_size
+                    page_size + additional_size > self.page_size
                 };
 
                 if !needs_splitting {
                     // Get a mutable reference to the page
-                    let page = self.index_pages.get_page_mut(page_id).unwrap();
+                    let page = index_pages.get_page_mut(page_id).unwrap();
                     let internal_node = page.node.as_any_mut().downcast_mut::<InternalNode>().unwrap();
 
                     // Insert the key at the correct position
@@ -1102,7 +1107,7 @@ impl TagIndex {
                     // Insert the child_id at the correct position (one after the key)
                     internal_node.child_ids.insert(insert_index + 1, child_id);
 
-                    self.index_pages.mark_dirty(page_id);
+                    index_pages.mark_dirty(page_id);
                     return None;
                 }
             }
@@ -1110,10 +1115,10 @@ impl TagIndex {
 
         // If we reach here, we need to split the node
         // Allocate a new page ID
-        let new_page_id = self.index_pages.alloc_page_id();
+        let new_page_id = index_pages.alloc_page_id();
 
         // Get a mutable reference to the page
-        let page = self.index_pages.get_page_mut(page_id).unwrap();
+        let page = index_pages.get_page_mut(page_id).unwrap();
         let internal_node = page.node.as_any_mut().downcast_mut::<InternalNode>().unwrap();
 
         // Find the correct insertion point for the new key
@@ -1159,10 +1164,10 @@ impl TagIndex {
         };
 
         // Mark the original page as dirty
-        self.index_pages.mark_dirty(page_id);
+        index_pages.mark_dirty(page_id);
 
         // Add the new page to the collection
-        self.index_pages.add_page(new_page);
+        index_pages.add_page(new_page);
 
         // Return the promoted key and the new page ID
         Some((promoted_key, new_page_id))
@@ -1178,7 +1183,8 @@ impl TagIndex {
     /// * `Option<PageID>` - If the root was changed, returns the new root page ID
     pub fn insert_tag_tree(&mut self, root_page_id: PageID, position: Position) -> Option<PageID> {
         // Get the root page
-        let page = self.index_pages.get_page(root_page_id).unwrap();
+        let mut index_pages = self.index_pages.borrow_mut();
+        let page = index_pages.get_page(root_page_id).unwrap();
 
         // Stack to keep track of the path from root to leaf
         // Each entry is a page ID and the index of the child to follow
@@ -1192,7 +1198,7 @@ impl TagIndex {
         } else if page.node.node_type_byte() == TAG_INTERNAL_NODE_TYPE {
             // Root is an internal node, traverse down to the leaf
             loop {
-                let page = self.index_pages.get_page(current_page_id).unwrap();
+                let page = index_pages.get_page(current_page_id).unwrap();
 
                 if page.node.node_type_byte() == TAG_LEAF_NODE_TYPE {
                     // Found the leaf node, break out of the loop
@@ -1220,13 +1226,15 @@ impl TagIndex {
         }
 
         // Second phase: insert into the leaf node
+        drop(index_pages);
         let mut split_info = self.append_tag_leaf_position(current_page_id, position);
 
         // Third phase: propagate splits up the tree
         while let Some((promoted_position, new_page_id)) = split_info {
             if stack.is_empty() {
                 // We've reached the root, create a new root
-                let new_root_page_id = self.index_pages.alloc_page_id();
+                let mut index_pages = self.index_pages.borrow_mut();
+                let new_root_page_id = index_pages.alloc_page_id();
 
                 // Create a new TagInternalNode with the promoted position and two child IDs
                 let tag_internal_node = TagInternalNode {
@@ -1241,7 +1249,7 @@ impl TagIndex {
                 };
 
                 // Add the new page to the collection
-                self.index_pages.add_page(new_root_page);
+                index_pages.add_page(new_root_page);
 
                 // Return the new root page ID
                 return Some(new_root_page_id);
@@ -1269,7 +1277,8 @@ impl TagIndex {
     /// * `Option<(Position, PageID)>` - If the node was split, returns the first position of the new node and the new page ID
     pub fn append_tag_internal_node(&mut self, page_id: PageID, key: Position, child_id: PageID) -> Option<(Position, PageID)> {
         // Get a reference to the page
-        let page = self.index_pages.get_page(page_id).unwrap();
+        let mut index_pages = self.index_pages.borrow_mut();
+        let page = index_pages.get_page(page_id).unwrap();
         let tag_internal_node = page.node.as_any().downcast_ref::<TagInternalNode>().unwrap();
 
         // Calculate the current serialized size
@@ -1280,12 +1289,11 @@ impl TagIndex {
         let new_size = current_size + POSITION_SIZE + PAGE_ID_SIZE;
 
         // Get the maximum page size
-        let max_page_size = self.get_max_page_size();
 
         // Check if adding the key and child_id would exceed the page size
-        if new_size <= max_page_size {
+        if new_size <= self.page_size {
             // There's enough space, just append the key and child_id
-            let page = self.index_pages.get_page_mut(page_id).unwrap();
+            let page = index_pages.get_page_mut(page_id).unwrap();
             let tag_internal_node = page.node.as_any_mut().downcast_mut::<TagInternalNode>().unwrap();
 
             // Append the key and child_id
@@ -1293,17 +1301,17 @@ impl TagIndex {
             tag_internal_node.child_ids.push(child_id);
 
             // Mark the page as dirty
-            self.index_pages.mark_dirty(page_id);
+            index_pages.mark_dirty(page_id);
 
             // No split needed
             None
         } else {
             // Need to split the node
             // Allocate a new page ID for the new TagInternalNode
-            let new_page_id = self.index_pages.alloc_page_id();
+            let new_page_id = index_pages.alloc_page_id();
 
             // Get a mutable reference to the page
-            let page = self.index_pages.get_page_mut(page_id).unwrap();
+            let page = index_pages.get_page_mut(page_id).unwrap();
             let tag_internal_node = page.node.as_any_mut().downcast_mut::<TagInternalNode>().unwrap();
 
             let promote_key = tag_internal_node.keys.pop().unwrap();
@@ -1322,10 +1330,10 @@ impl TagIndex {
             };
 
             // Add the new page to the collection
-            self.index_pages.add_page(new_page);
+            index_pages.add_page(new_page);
 
             // Mark the original page as dirty
-            self.index_pages.mark_dirty(page_id);
+            index_pages.mark_dirty(page_id);
 
             // Return the popped key and the new page ID
             Some((promote_key, new_page_id))
@@ -1343,7 +1351,8 @@ impl TagIndex {
     /// * `Option<(Position, PageID)>` - If the node was split, returns the first position of the new node and the new page ID
     pub fn append_tag_leaf_position(&mut self, page_id: PageID, position: Position) -> Option<(Position, PageID)> {
         // Get a reference to the page
-        let page = self.index_pages.get_page(page_id).unwrap();
+        let mut index_pages = self.index_pages.borrow_mut();
+        let page = index_pages.get_page(page_id).unwrap();
         let tag_leaf_node = page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
 
         // Check if the position is greater than the last position in the TagLeafNode
@@ -1362,21 +1371,20 @@ impl TagIndex {
         let new_size = current_size + POSITION_SIZE;
 
         // Get the maximum page size
-        let max_page_size = self.get_max_page_size();
 
         // Check if adding the position would exceed the page size
-        if new_size <= max_page_size {
+        if new_size <= self.page_size {
             // println!("Appending position: {}", position);
 
             // There's enough space, just append the position
-            let page = self.index_pages.get_page_mut(page_id).unwrap();
+            let page = index_pages.get_page_mut(page_id).unwrap();
             let tag_leaf_node = page.node.as_any_mut().downcast_mut::<TagLeafNode>().unwrap();
 
             // Append the position
             tag_leaf_node.positions.push(position);
 
             // Mark the page as dirty
-            self.index_pages.mark_dirty(page_id);
+            index_pages.mark_dirty(page_id);
 
             // No split needed
             None
@@ -1391,7 +1399,7 @@ impl TagIndex {
             };
 
             // Allocate a new page ID for the new TagLeafNode
-            let new_page_id = self.index_pages.alloc_page_id();
+            let new_page_id = index_pages.alloc_page_id();
 
             // Create a new IndexPage with the new TagLeafNode
             let new_page = IndexPage {
@@ -1400,15 +1408,15 @@ impl TagIndex {
             };
 
             // Add the new page to the collection
-            self.index_pages.add_page(new_page);
+            index_pages.add_page(new_page);
 
             // Update the next_leaf_id of the original TagLeafNode
-            let page = self.index_pages.get_page_mut(page_id).unwrap();
+            let page = index_pages.get_page_mut(page_id).unwrap();
             let tag_leaf_node = page.node.as_any_mut().downcast_mut::<TagLeafNode>().unwrap();
             tag_leaf_node.next_leaf_id = Some(new_page_id);
 
             // Mark the original page as dirty
-            self.index_pages.mark_dirty(page_id);
+            index_pages.mark_dirty(page_id);
 
             // Return the first position of the new node and the new page ID
             Some((position, new_page_id))
@@ -1422,7 +1430,7 @@ impl TagIndex {
     ///
     /// # Returns
     /// * `std::io::Result<TagPositionIterator>` - An iterator over positions if the tag was found, empty iterator if not found, Err if an error occurred
-    pub fn lookup_iter<'a>(&'a mut self, tag: &str) -> std::io::Result<TagPositionIterator<'a>> {
+    pub fn lookup_iter<'a>(&'a self, tag: &str) -> std::io::Result<TagPositionIterator<'a>> {
         self.lookup_with_after_iter(tag, 0)
     }
 
@@ -1433,7 +1441,7 @@ impl TagIndex {
     ///
     /// # Returns
     /// * `std::io::Result<Vec<Position>>` - Ok(positions) if the tag was found, Ok(empty vec) if not found, Err if an error occurred
-    pub fn lookup(&mut self, tag: &str) -> std::io::Result<Vec<Position>> {
+    pub fn lookup(&self, tag: &str) -> std::io::Result<Vec<Position>> {
         // Get an iterator over positions
         let iter = self.lookup_iter(tag)?;
 
@@ -1454,20 +1462,21 @@ impl TagIndex {
     ///
     /// # Returns
     /// * `std::io::Result<TagPositionIterator>` - An iterator over positions if the tag was found, empty iterator if not found, Err if an error occurred
-    pub fn lookup_with_after_iter<'a>(&'a mut self, tag: &str, after: Position) -> std::io::Result<TagPositionIterator<'a>> {
+    pub fn lookup_with_after_iter<'a>(&'a self, tag: &str, after: Position) -> std::io::Result<TagPositionIterator<'a>> {
         // Hash the tag to get the key
         let tag_hash = hash_tag(tag);
         let mut key = [0u8; TAG_HASH_LEN];
         key.copy_from_slice(&tag_hash[..TAG_HASH_LEN]);
 
         // Get the root page ID from the header page
-        let header_node = self.index_pages.header_node();
+        let mut index_pages = self.index_pages.borrow_mut();
+        let header_node = index_pages.header_node();
         let root_page_id = header_node.root_page_id;
 
         // Find the leaf node that would contain the key
         let mut current_page_id = root_page_id;
         loop {
-            let page = self.index_pages.get_page(current_page_id)?;
+            let page = index_pages.get_page(current_page_id)?;
 
             if page.node.node_type_byte() == LEAF_NODE_TYPE {
                 // This is a leaf node, we found it
@@ -1496,7 +1505,7 @@ impl TagIndex {
         }
 
         // Get the leaf page
-        let leaf_page = self.index_pages.get_page(current_page_id)?;
+        let leaf_page = index_pages.get_page(current_page_id)?;
 
         // Downcast the node to a LeafNode
         let leaf_node = leaf_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
@@ -1508,6 +1517,7 @@ impl TagIndex {
                 if leaf_node.values[index].len() == 1 && leaf_node.values[index][0] < 0 {
                     // Positions are stored in a tag B+tree
                     let tag_tree_root_id = PageID((-leaf_node.values[index][0]) as u32);
+                    drop(index_pages);
                     Ok(TagPositionIterator::TagTree(TagTreePositionIterator::new(self, tag_tree_root_id, after)))
                 } else {
                     // Positions are stored directly in the leaf node
@@ -1555,10 +1565,11 @@ impl TagIndex {
     pub fn lookup_tag_tree(&mut self, root_page_id: PageID, after: Position) -> std::io::Result<Vec<Position>> {
         // Start with the root page ID
         let mut current_page_id = root_page_id;
+        let mut index_pages = self.index_pages.borrow_mut();
 
         // Traverse down the tree until we find a leaf node
         loop {
-            let page = self.index_pages.get_page(current_page_id)?;
+            let page = index_pages.get_page(current_page_id)?;
 
             if page.node.node_type_byte() == TAG_LEAF_NODE_TYPE {
                 // Found a leaf node, break out of the loop
@@ -1596,7 +1607,7 @@ impl TagIndex {
         let mut positions = Vec::new();
 
         // Start with the first leaf node
-        let page = self.index_pages.get_page(current_page_id)?;
+        let page = index_pages.get_page(current_page_id)?;
         let tag_leaf_node = page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
 
         // Use binary search to find the index of the first position greater than 'after'
@@ -1614,7 +1625,7 @@ impl TagIndex {
         // Follow the next_leaf_id chain
         let mut next_leaf_id = tag_leaf_node.next_leaf_id;
         while let Some(leaf_id) = next_leaf_id {
-            let leaf_page = self.index_pages.get_page(leaf_id)?;
+            let leaf_page = index_pages.get_page(leaf_id)?;
 
             if leaf_page.node.node_type_byte() != TAG_LEAF_NODE_TYPE {
                 return Err(std::io::Error::new(
@@ -1651,17 +1662,18 @@ mod tests {
         let test_path = temp_dir.path().join("index.dat");
 
         // Create a new TagIndex instance using the constructor
-        let mut tag_index = TagIndex::new(&test_path, 4096).unwrap();
+        let tag_index = TagIndex::new(&test_path, 4096).unwrap();
 
         // Verify that the TagIndex was created successfully
         assert!(test_path.exists());
 
         // Get the root page ID from the header page
-        let header_node = tag_index.index_pages.header_page.node.as_any().downcast_ref::<HeaderNode>().unwrap();
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        let header_node = index_pages.header_page.node.as_any().downcast_ref::<HeaderNode>().unwrap();
         let root_page_id = header_node.root_page_id;
 
         // Get the root page
-        let root_page = tag_index.index_pages.get_page(root_page_id).unwrap();
+        let root_page = index_pages.get_page(root_page_id).unwrap();
 
         // Verify that the root page contains a LeafNode
         assert_eq!(root_page.node.node_type_byte(), LEAF_NODE_TYPE);
@@ -1674,10 +1686,11 @@ mod tests {
         assert!(leaf_node.values.is_empty());
 
         // Create a second instance of TagIndex
-        let mut tag_index2 = TagIndex::new(&test_path, 4096).unwrap();
+        let tag_index2 = TagIndex::new(&test_path, 4096).unwrap();
 
         // Get the root page from the second instance
-        let root_page2 = tag_index2.index_pages.get_page(root_page_id).unwrap();
+        let mut index_pages2 = tag_index2.index_pages.borrow_mut();
+        let root_page2 = index_pages2.get_page(root_page_id).unwrap();
 
         // Verify that the root page contains a LeafNode
         assert_eq!(root_page2.node.node_type_byte(), LEAF_NODE_TYPE);
@@ -2098,10 +2111,11 @@ mod tests {
         let tag_internal_serialized = tag_internal_page.node.serialize_page();
 
         // Deserialize the pages using the registered deserializers
-        let deserialized_leaf_page = tag_index.index_pages.deserializer.deserialize_page(&leaf_serialized, PageID(1)).unwrap();
-        let deserialized_internal_page = tag_index.index_pages.deserializer.deserialize_page(&internal_serialized, PageID(2)).unwrap();
-        let deserialized_tag_leaf_page = tag_index.index_pages.deserializer.deserialize_page(&tag_leaf_serialized, PageID(3)).unwrap();
-        let deserialized_tag_internal_page = tag_index.index_pages.deserializer.deserialize_page(&tag_internal_serialized, PageID(4)).unwrap();
+        let index_pages = tag_index.index_pages.borrow();
+        let deserialized_leaf_page = index_pages.deserializer.deserialize_page(&leaf_serialized, PageID(1)).unwrap();
+        let deserialized_internal_page = index_pages.deserializer.deserialize_page(&internal_serialized, PageID(2)).unwrap();
+        let deserialized_tag_leaf_page = index_pages.deserializer.deserialize_page(&tag_leaf_serialized, PageID(3)).unwrap();
+        let deserialized_tag_internal_page = index_pages.deserializer.deserialize_page(&tag_internal_serialized, PageID(4)).unwrap();
 
         // Verify that the deserialized nodes have the correct type
         assert_eq!(deserialized_leaf_page.node.node_type_byte(), LEAF_NODE_TYPE);
@@ -2176,7 +2190,9 @@ mod tests {
         };
 
         // Add the page to the index
-        tag_index.index_pages.add_page(leaf_page);
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        index_pages.add_page(leaf_page);
+        drop(index_pages);
 
         // Add a new key and value that will not cause the leaf to split
         let new_tag_hash = hash_tag("NewTag");
@@ -2190,7 +2206,8 @@ mod tests {
         assert!(split_result.is_none());
 
         // Get the page and verify it has 11 keys and values
-        let page = tag_index.index_pages.get_page(page_id).unwrap();
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        let page = index_pages.get_page(page_id).unwrap();
         let leaf = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
         assert_eq!(leaf.keys.len(), 11);
         assert_eq!(leaf.values.len(), 11);
@@ -2208,13 +2225,14 @@ mod tests {
         assert_eq!(leaf.values[new_key_index], vec![9999]);
 
         // Flush changes to disk
-        tag_index.index_pages.flush().unwrap();
+        index_pages.flush().unwrap();
 
         // Create another instance of TagIndex
-        let mut tag_index2 = TagIndex::new(&test_path, 4096).unwrap();
+        let tag_index2 = TagIndex::new(&test_path, 4096).unwrap();
 
         // Get the page and verify it has 11 keys and values
-        let page2 = tag_index2.index_pages.get_page(page_id).unwrap();
+        let mut index_pages2 = tag_index2.index_pages.borrow_mut();
+        let page2 = index_pages2.get_page(page_id).unwrap();
         let leaf2 = page2.node.as_any().downcast_ref::<LeafNode>().unwrap();
         assert_eq!(leaf2.keys.len(), 11);
         assert_eq!(leaf2.values.len(), 11);
@@ -2281,7 +2299,9 @@ mod tests {
         let mut tag_index = TagIndex::new(&test_path, serialized_size).unwrap();
 
         // Add the page to the index
-        tag_index.index_pages.add_page(leaf_page);
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        index_pages.add_page(leaf_page);
+        drop(index_pages);
 
         // Add a new key and value that will cause the leaf to split
         let new_tag_hash = hash_tag("NewTag");
@@ -2298,7 +2318,8 @@ mod tests {
 
         // Check the original page
         {
-            let original_page = tag_index.index_pages.get_page(page_id).unwrap();
+            let mut index_pages = tag_index.index_pages.borrow_mut();
+            let original_page = index_pages.get_page(page_id).unwrap();
             let original_leaf = original_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
 
             // Verify it has 5 keys and values (half of the original 10 + 1 new)
@@ -2315,7 +2336,8 @@ mod tests {
 
         // Check the new page
         {
-            let new_page = tag_index.index_pages.get_page(new_page_id).unwrap();
+            let mut index_pages = tag_index.index_pages.borrow_mut();
+            let new_page = index_pages.get_page(new_page_id).unwrap();
             let new_leaf = new_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
 
             // Verify it has 6 keys and values (the other half of the original 10 + 1 new)
@@ -2335,13 +2357,15 @@ mod tests {
 
         // Verify that the new key is in one of the nodes
         let new_key_in_original = {
-            let original_page = tag_index.index_pages.get_page(page_id).unwrap();
+            let mut index_pages = tag_index.index_pages.borrow_mut();
+            let original_page = index_pages.get_page(page_id).unwrap();
             let original_leaf = original_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
             original_leaf.keys.contains(&new_key)
         };
 
         let new_key_in_new = {
-            let new_page = tag_index.index_pages.get_page(new_page_id).unwrap();
+            let mut index_pages = tag_index.index_pages.borrow_mut();
+            let new_page = index_pages.get_page(new_page_id).unwrap();
             let new_leaf = new_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
             new_leaf.keys.contains(&new_key)
         };
@@ -2378,7 +2402,9 @@ mod tests {
         };
 
         // Add the page to the index
-        tag_index.index_pages.add_page(leaf_page);
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        index_pages.add_page(leaf_page);
+        drop(index_pages);
 
         // Create tag hashes for testing
         let tag_hashes = [
@@ -2414,7 +2440,8 @@ mod tests {
         }
 
         // Get the page and verify it has 5 keys and values
-        let page = tag_index.index_pages.get_page(page_id).unwrap();
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        let page = index_pages.get_page(page_id).unwrap();
         let leaf = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
         assert_eq!(leaf.keys.len(), 5);
         assert_eq!(leaf.values.len(), 5);
@@ -2441,6 +2468,7 @@ mod tests {
         // Verify that TagC has only one position before adding another
         assert_eq!(leaf.values[tag_c_index].len(), 1);
         assert_eq!(leaf.values[tag_c_index][0], 3000);
+        drop(index_pages);
 
         // Add another position to TagC
         let new_position = 3001;
@@ -2450,7 +2478,8 @@ mod tests {
         assert!(split_result.is_none());
 
         // Get the page again and verify that TagC now has two positions
-        let page = tag_index.index_pages.get_page(page_id).unwrap();
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        let page = index_pages.get_page(page_id).unwrap();
         let leaf = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
 
         // Find the index of TagC again
@@ -2471,13 +2500,14 @@ mod tests {
         assert_eq!(leaf.keys.len(), 5);
 
         // Flush changes to disk
-        tag_index.index_pages.flush().unwrap();
+        index_pages.flush().unwrap();
 
         // Create another instance of TagIndex
-        let mut tag_index2 = TagIndex::new(&test_path, 4096).unwrap();
+        let tag_index2 = TagIndex::new(&test_path, 4096).unwrap();
 
         // Get the page and verify it still has 5 keys and values
-        let page2 = tag_index2.index_pages.get_page(page_id).unwrap();
+        let mut index_pages = tag_index2.index_pages.borrow_mut();
+        let page2 = index_pages.get_page(page_id).unwrap();
         let leaf2 = page2.node.as_any().downcast_ref::<LeafNode>().unwrap();
         assert_eq!(leaf2.keys.len(), 5);
         assert_eq!(leaf2.values.len(), 5);
@@ -2549,7 +2579,9 @@ mod tests {
         };
 
         // Add the page to the index
-        tag_index.index_pages.add_page(internal_page);
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        index_pages.add_page(internal_page);
+        drop(index_pages);
 
         // Add a new key and child_id that will not cause the internal node to split
         let new_tag_hash = hash_tag("NewTag");
@@ -2564,7 +2596,8 @@ mod tests {
         assert!(split_result.is_none());
 
         // Get the page and verify it has 5 keys and 6 child_ids
-        let page = tag_index.index_pages.get_page(page_id).unwrap();
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        let page = index_pages.get_page(page_id).unwrap();
         let internal = page.node.as_any().downcast_ref::<InternalNode>().unwrap();
         assert_eq!(internal.keys.len(), 5);
         assert_eq!(internal.child_ids.len(), 6);
@@ -2583,13 +2616,14 @@ mod tests {
         assert_eq!(internal.child_ids[new_key_index + 1], new_child_id);
 
         // Flush changes to disk
-        tag_index.index_pages.flush().unwrap();
+        index_pages.flush().unwrap();
 
         // Create another instance of TagIndex
-        let mut tag_index2 = TagIndex::new(&test_path, 4096).unwrap();
+        let tag_index2 = TagIndex::new(&test_path, 4096).unwrap();
 
         // Get the page and verify it still has 5 keys and 6 child_ids
-        let page2 = tag_index2.index_pages.get_page(page_id).unwrap();
+        let mut index_pages = tag_index2.index_pages.borrow_mut();
+        let page2 = index_pages.get_page(page_id).unwrap();
         let internal2 = page2.node.as_any().downcast_ref::<InternalNode>().unwrap();
         assert_eq!(internal2.keys.len(), 5);
         assert_eq!(internal2.child_ids.len(), 6);
@@ -2661,7 +2695,9 @@ mod tests {
         let mut tag_index = TagIndex::new(&test_path, serialized_size).unwrap();
 
         // Add the page to the index
-        tag_index.index_pages.add_page(internal_page);
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        index_pages.add_page(internal_page);
+        drop(index_pages);
 
         // Add a new key and child_id that will cause the internal node to split
         let new_tag_hash = hash_tag("NewTag");
@@ -2678,7 +2714,8 @@ mod tests {
 
         // Check the original page
         {
-            let original_page = tag_index.index_pages.get_page(page_id).unwrap();
+            let mut index_pages = tag_index.index_pages.borrow_mut();
+            let original_page = index_pages.get_page(page_id).unwrap();
             let original_internal = original_page.node.as_any().downcast_ref::<InternalNode>().unwrap();
 
             // Verify it has the correct number of keys and child_ids
@@ -2698,7 +2735,8 @@ mod tests {
 
         // Check the new page
         {
-            let new_page = tag_index.index_pages.get_page(new_page_id).unwrap();
+            let mut index_pages = tag_index.index_pages.borrow_mut();
+            let new_page = index_pages.get_page(new_page_id).unwrap();
             let new_internal = new_page.node.as_any().downcast_ref::<InternalNode>().unwrap();
 
             // Verify it has the correct number of keys and child_ids
@@ -2718,13 +2756,15 @@ mod tests {
 
         // Verify that either the new key is in one of the nodes, or the new key is the same as the promoted key
         let new_key_in_original = {
-            let original_page = tag_index.index_pages.get_page(page_id).unwrap();
+            let mut index_pages = tag_index.index_pages.borrow_mut();
+            let original_page = index_pages.get_page(page_id).unwrap();
             let original_internal = original_page.node.as_any().downcast_ref::<InternalNode>().unwrap();
             original_internal.keys.contains(&new_key)
         };
 
         let new_key_in_new = {
-            let new_page = tag_index.index_pages.get_page(new_page_id).unwrap();
+            let mut index_pages = tag_index.index_pages.borrow_mut();
+            let new_page = index_pages.get_page(new_page_id).unwrap();
             let new_internal = new_page.node.as_any().downcast_ref::<InternalNode>().unwrap();
             new_internal.keys.contains(&new_key)
         };
@@ -2764,7 +2804,9 @@ mod tests {
         };
 
         // Add the page to the index
-        tag_index.index_pages.add_page(leaf_page);
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        index_pages.add_page(leaf_page);
+        drop(index_pages);
 
         // Create a tag hash for testing
         let tag_hash = hash_tag("TestTag");
@@ -2786,11 +2828,13 @@ mod tests {
 
 
         // Get the page and verify it has 1 key and value
-        let page = tag_index.index_pages.get_page(page_id).unwrap();
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        let page = index_pages.get_page(page_id).unwrap();
         let leaf = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
         assert_eq!(leaf.keys.len(), 1);
         assert_eq!(leaf.values.len(), 1);
         assert_eq!(leaf.values[0].len(), 100);
+        drop(index_pages);
 
         // Add one more position to the tag
         let new_position = 100;
@@ -2800,7 +2844,8 @@ mod tests {
         assert!(split_result.is_none());
 
         // Get the page again and verify that the tag now has a PageID reference instead of positions
-        let page = tag_index.index_pages.get_page(page_id).unwrap();
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        let page = index_pages.get_page(page_id).unwrap();
         let leaf = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
         assert_eq!(leaf.keys.len(), 1);
         assert_eq!(leaf.values.len(), 1);
@@ -2810,7 +2855,7 @@ mod tests {
         let tag_leaf_page_id = PageID((-leaf.values[0][0]) as u32);
 
         // Get the TagLeafNode page
-        let tag_leaf_page = tag_index.index_pages.get_page(tag_leaf_page_id).unwrap();
+        let tag_leaf_page = index_pages.get_page(tag_leaf_page_id).unwrap();
         let tag_leaf_node = tag_leaf_page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
 
         // Verify that the TagLeafNode has 101 positions
@@ -2825,13 +2870,15 @@ mod tests {
         assert_eq!(tag_leaf_node.next_leaf_id, None);
 
         // Flush changes to disk
-        tag_index.index_pages.flush().unwrap();
+        index_pages.flush().unwrap();
 
         // Create another instance of TagIndex
-        let mut tag_index2 = TagIndex::new(&test_path, 4096).unwrap();
+        let tag_index2 = TagIndex::new(&test_path, 4096).unwrap();
 
         // Get the page and verify it still has 1 key and value
-        let page2 = tag_index2.index_pages.get_page(page_id).unwrap();
+        let mut index_pages2 = tag_index2.index_pages.borrow_mut();
+        
+        let page2 = index_pages2.get_page(page_id).unwrap();
         let leaf2 = page2.node.as_any().downcast_ref::<LeafNode>().unwrap();
         assert_eq!(leaf2.keys.len(), 1);
         assert_eq!(leaf2.values.len(), 1);
@@ -2842,7 +2889,7 @@ mod tests {
         assert_eq!(tag_leaf_page_id, tag_leaf_page_id2);
 
         // Get the TagLeafNode page
-        let tag_leaf_page2 = tag_index2.index_pages.get_page(tag_leaf_page_id2).unwrap();
+        let tag_leaf_page2 = index_pages2.get_page(tag_leaf_page_id2).unwrap();
         let tag_leaf_node2 = tag_leaf_page2.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
 
         // Verify that the TagLeafNode still has 101 positions
@@ -2875,7 +2922,8 @@ mod tests {
         };
 
         // Allocate a page ID for the TagLeafNode
-        let tag_leaf_page_id = tag_index.index_pages.alloc_page_id();
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        let tag_leaf_page_id = index_pages.alloc_page_id();
 
         // Create an IndexPage with the TagLeafNode
         let tag_leaf_page = IndexPage {
@@ -2884,7 +2932,8 @@ mod tests {
         };
 
         // Add the page to the index
-        tag_index.index_pages.add_page(tag_leaf_page);
+        index_pages.add_page(tag_leaf_page);
+        drop(index_pages);
 
         // Add a new Position that is greater than the last existing position
         let new_position = 4000;
@@ -2894,10 +2943,12 @@ mod tests {
         assert!(result.is_none(), "Position should have been appended without splitting");
 
         // Get the page and verify it now has 4 positions
-        let page = tag_index.index_pages.get_page(tag_leaf_page_id).unwrap();
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        let page = index_pages.get_page(tag_leaf_page_id).unwrap();
         let tag_leaf = page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
         assert_eq!(tag_leaf.positions.len(), 4);
         assert_eq!(tag_leaf.positions[3], new_position);
+        drop(index_pages);
 
         // Try to add a Position that is less than the last existing position
         let duplicate_position = 3000;
@@ -2907,10 +2958,12 @@ mod tests {
         assert!(result.is_none(), "Position should not have been appended");
 
         // Get the page and verify it still has 4 positions
-        let page = tag_index.index_pages.get_page(tag_leaf_page_id).unwrap();
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        let page = index_pages.get_page(tag_leaf_page_id).unwrap();
         let tag_leaf = page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
         assert_eq!(tag_leaf.positions.len(), 4);
-
+        drop(index_pages);
+        
         // Try to add a Position that is equal to the last existing position
         let equal_position = 4000;
         let result = tag_index.append_tag_leaf_position(tag_leaf_page_id, equal_position);
@@ -2919,18 +2972,20 @@ mod tests {
         assert!(result.is_none(), "Position should not have been appended");
 
         // Get the page and verify it still has 4 positions
-        let page = tag_index.index_pages.get_page(tag_leaf_page_id).unwrap();
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        let page = index_pages.get_page(tag_leaf_page_id).unwrap();
         let tag_leaf = page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
         assert_eq!(tag_leaf.positions.len(), 4);
 
         // Flush changes to disk
-        tag_index.index_pages.flush().unwrap();
+        index_pages.flush().unwrap();
 
         // Create another instance of TagIndex
-        let mut tag_index2 = TagIndex::new(&test_path, 4096).unwrap();
+        let tag_index2 = TagIndex::new(&test_path, 4096).unwrap();
 
         // Get the page and verify it still has 4 positions
-        let page2 = tag_index2.index_pages.get_page(tag_leaf_page_id).unwrap();
+        let mut index_pages2 = tag_index2.index_pages.borrow_mut();
+        let page2 = index_pages2.get_page(tag_leaf_page_id).unwrap();
         let tag_leaf2 = page2.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
         assert_eq!(tag_leaf2.positions.len(), 4);
         assert_eq!(tag_leaf2.positions[0], 1000);
@@ -2966,7 +3021,8 @@ mod tests {
         let mut tag_index = TagIndex::new(&test_path, serialized_size).unwrap();
 
         // Allocate a page ID for the TagLeafNode
-        let tag_leaf_page_id = tag_index.index_pages.alloc_page_id();
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        let tag_leaf_page_id = index_pages.alloc_page_id();
 
         // Create an IndexPage with the TagLeafNode
         let tag_leaf_page = IndexPage {
@@ -2975,7 +3031,8 @@ mod tests {
         };
 
         // Add the page to the index
-        tag_index.index_pages.add_page(tag_leaf_page);
+        index_pages.add_page(tag_leaf_page);
+        drop(index_pages);
 
         // Add a new Position that will cause the node to split
         let new_position = 100;
@@ -2991,7 +3048,8 @@ mod tests {
         assert_eq!(first_position, new_position);
 
         // Get the original page and verify it still has 100 positions
-        let page = tag_index.index_pages.get_page(tag_leaf_page_id).unwrap();
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        let page = index_pages.get_page(tag_leaf_page_id).unwrap();
         let tag_leaf = page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
         assert_eq!(tag_leaf.positions.len(), 100);
 
@@ -2999,7 +3057,7 @@ mod tests {
         assert_eq!(tag_leaf.next_leaf_id, Some(new_page_id));
 
         // Get the new page and verify it has the new position
-        let new_page = tag_index.index_pages.get_page(new_page_id).unwrap();
+        let new_page = index_pages.get_page(new_page_id).unwrap();
         let new_tag_leaf = new_page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
         assert_eq!(new_tag_leaf.positions.len(), 1);
         assert_eq!(new_tag_leaf.positions[0], new_position);
@@ -3008,13 +3066,14 @@ mod tests {
         assert_eq!(new_tag_leaf.next_leaf_id, None);
 
         // Flush changes to disk
-        tag_index.index_pages.flush().unwrap();
+        index_pages.flush().unwrap();
 
         // Create another instance of TagIndex
-        let mut tag_index2 = TagIndex::new(&test_path, serialized_size).unwrap();
+        let tag_index2 = TagIndex::new(&test_path, serialized_size).unwrap();
 
         // Get the original page and verify it still has 100 positions
-        let page2 = tag_index2.index_pages.get_page(tag_leaf_page_id).unwrap();
+        let mut index_pages2 = tag_index2.index_pages.borrow_mut();
+        let page2 = index_pages2.get_page(tag_leaf_page_id).unwrap();
         let tag_leaf2 = page2.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
         assert_eq!(tag_leaf2.positions.len(), 100);
 
@@ -3022,7 +3081,7 @@ mod tests {
         assert_eq!(tag_leaf2.next_leaf_id, Some(new_page_id));
 
         // Get the new page and verify it still has the new position
-        let new_page2 = tag_index2.index_pages.get_page(new_page_id).unwrap();
+        let new_page2 = index_pages2.get_page(new_page_id).unwrap();
         let new_tag_leaf2 = new_page2.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
         assert_eq!(new_tag_leaf2.positions.len(), 1);
         assert_eq!(new_tag_leaf2.positions[0], new_position);
@@ -3049,7 +3108,8 @@ mod tests {
         };
 
         // Allocate a page ID for the TagInternalNode
-        let tag_internal_page_id = tag_index.index_pages.alloc_page_id();
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        let tag_internal_page_id = index_pages.alloc_page_id();
 
         // Create an IndexPage with the TagInternalNode
         let tag_internal_page = IndexPage {
@@ -3058,7 +3118,8 @@ mod tests {
         };
 
         // Add the page to the index
-        tag_index.index_pages.add_page(tag_internal_page);
+        index_pages.add_page(tag_internal_page);
+        drop(index_pages);
 
         // Add a new Position key and PageID value that won't cause a split
         let new_key = 4000;
@@ -3069,7 +3130,8 @@ mod tests {
         assert!(result.is_none(), "Node should not have been split");
 
         // Get the page and verify it now has 4 keys and 5 child_ids
-        let page = tag_index.index_pages.get_page(tag_internal_page_id).unwrap();
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        let page = index_pages.get_page(tag_internal_page_id).unwrap();
         let tag_internal = page.node.as_any().downcast_ref::<TagInternalNode>().unwrap();
         assert_eq!(tag_internal.keys.len(), 4);
         assert_eq!(tag_internal.child_ids.len(), 5);
@@ -3077,13 +3139,14 @@ mod tests {
         assert_eq!(tag_internal.child_ids[4], new_child_id);
 
         // Flush changes to disk
-        tag_index.index_pages.flush().unwrap();
+        index_pages.flush().unwrap();
 
         // Create another instance of TagIndex
-        let mut tag_index2 = TagIndex::new(&test_path, 4096).unwrap();
+        let tag_index2 = TagIndex::new(&test_path, 4096).unwrap();
 
         // Get the page and verify it still has 4 keys and 5 child_ids
-        let page2 = tag_index2.index_pages.get_page(tag_internal_page_id).unwrap();
+        let mut index_pages2 = tag_index2.index_pages.borrow_mut();
+        let page2 = index_pages2.get_page(tag_internal_page_id).unwrap();
         let tag_internal2 = page2.node.as_any().downcast_ref::<TagInternalNode>().unwrap();
         assert_eq!(tag_internal2.keys.len(), 4);
         assert_eq!(tag_internal2.child_ids.len(), 5);
@@ -3120,7 +3183,8 @@ mod tests {
         let mut tag_index = TagIndex::new(&test_path, serialized_size).unwrap();
 
         // Allocate a page ID for the TagInternalNode
-        let tag_internal_page_id = tag_index.index_pages.alloc_page_id();
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        let tag_internal_page_id = index_pages.alloc_page_id();
 
         // Create an IndexPage with the TagInternalNode
         let tag_internal_page = IndexPage {
@@ -3129,7 +3193,8 @@ mod tests {
         };
 
         // Add the page to the index
-        tag_index.index_pages.add_page(tag_internal_page);
+        index_pages.add_page(tag_internal_page);
+        drop(index_pages);
 
         // Add a new key and child_id that will cause the node to split
         let new_key = 4000;
@@ -3146,7 +3211,8 @@ mod tests {
         assert_eq!(popped_key, 3000);
 
         // Get the original page and verify it has 1 key and 2 child_ids
-        let page = tag_index.index_pages.get_page(tag_internal_page_id).unwrap();
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        let page = index_pages.get_page(tag_internal_page_id).unwrap();
         let tag_internal = page.node.as_any().downcast_ref::<TagInternalNode>().unwrap();
         assert_eq!(tag_internal.keys.len(), 2);
         assert_eq!(tag_internal.child_ids.len(), 3);
@@ -3157,7 +3223,7 @@ mod tests {
         assert_eq!(tag_internal.child_ids[2], PageID(30));
 
         // Get the new page and verify it has 1 key and 2 child_ids
-        let new_page = tag_index.index_pages.get_page(new_page_id).unwrap();
+        let new_page = index_pages.get_page(new_page_id).unwrap();
         let new_tag_internal = new_page.node.as_any().downcast_ref::<TagInternalNode>().unwrap();
         assert_eq!(new_tag_internal.keys.len(), 1);
         assert_eq!(new_tag_internal.child_ids.len(), 2);
@@ -3166,13 +3232,14 @@ mod tests {
         assert_eq!(new_tag_internal.child_ids[1], PageID(50));
 
         // Flush changes to disk
-        tag_index.index_pages.flush().unwrap();
+        index_pages.flush().unwrap();
 
         // Create another instance of TagIndex
-        let mut tag_index2 = TagIndex::new(&test_path, serialized_size).unwrap();
+        let tag_index2 = TagIndex::new(&test_path, serialized_size).unwrap();
 
         // Get the original page and verify it still has 1 key and 2 child_ids
-        let page2 = tag_index2.index_pages.get_page(tag_internal_page_id).unwrap();
+        let mut index_pages2 = tag_index2.index_pages.borrow_mut();
+        let page2 = index_pages2.get_page(tag_internal_page_id).unwrap();
         let tag_internal2 = page2.node.as_any().downcast_ref::<TagInternalNode>().unwrap();
         assert_eq!(tag_internal2.keys.len(), 2);
         assert_eq!(tag_internal2.child_ids.len(), 3);
@@ -3183,7 +3250,7 @@ mod tests {
         assert_eq!(tag_internal2.child_ids[2], PageID(30));
 
         // Get the new page and verify it still has 1 key and 2 child_ids
-        let new_page2 = tag_index2.index_pages.get_page(new_page_id).unwrap();
+        let new_page2 = index_pages2.get_page(new_page_id).unwrap();
         let new_tag_internal2 = new_page2.node.as_any().downcast_ref::<TagInternalNode>().unwrap();
         assert_eq!(new_tag_internal2.keys.len(), 1);
         assert_eq!(new_tag_internal2.child_ids.len(), 2);
@@ -3209,11 +3276,12 @@ mod tests {
         tag_index.insert(tag, position).unwrap();
 
         // Get the root page ID from the header page
-        let header_node = tag_index.index_pages.header_node();
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        let header_node = index_pages.header_node();
         let root_page_id = header_node.root_page_id;
 
         // Get the root page
-        let root_page = tag_index.index_pages.get_page(root_page_id).unwrap();
+        let root_page = index_pages.get_page(root_page_id).unwrap();
 
         // Verify that the root page is a LeafNode
         assert_eq!(root_page.node.node_type_byte(), LEAF_NODE_TYPE);
@@ -3236,6 +3304,7 @@ mod tests {
         // Verify that the value contains the position
         assert_eq!(leaf_node.values[0].len(), 1);
         assert_eq!(leaf_node.values[0][0], position);
+        drop(index_pages);
 
         // Use the lookup method to find the position for the tag
         let positions = tag_index.lookup(tag).unwrap();
@@ -3248,13 +3317,15 @@ mod tests {
         assert_eq!(positions.len(), 0);
 
         // Flush changes to disk
-        tag_index.index_pages.flush().unwrap();
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        index_pages.flush().unwrap();
 
         // Create another instance of TagIndex
-        let mut tag_index2 = TagIndex::new(&test_path, 4096).unwrap();
+        let tag_index2 = TagIndex::new(&test_path, 4096).unwrap();
 
         // Get the root page again
-        let root_page2 = tag_index2.index_pages.get_page(root_page_id).unwrap();
+        let mut index_pages2 = tag_index2.index_pages.borrow_mut();
+        let root_page2 = index_pages2.get_page(root_page_id).unwrap();
 
         // Verify that the root page is still a LeafNode
         assert_eq!(root_page2.node.node_type_byte(), LEAF_NODE_TYPE);
@@ -3272,6 +3343,7 @@ mod tests {
         // Verify that the value still contains the position
         assert_eq!(leaf_node2.values[0].len(), 1);
         assert_eq!(leaf_node2.values[0][0], position);
+        drop(index_pages2);
 
         // Use the lookup method to find the position for the tag after reopening
         let positions = tag_index2.lookup(tag).unwrap();
@@ -3351,12 +3423,15 @@ mod tests {
         }
 
         // Get the root page ID from the header page
-        let header_node = tag_index.index_pages.header_node();
+        let index_pages = tag_index.index_pages.borrow();
+        let header_node = index_pages.header_node();
         let root_page_id = header_node.root_page_id;
+        drop(index_pages);
 
         // First, check that the root is an InternalNode and get child page IDs
         let (left_child_id, right_child_id) = {
-            let root_page = tag_index.index_pages.get_page(root_page_id).unwrap();
+            let mut index_pages = tag_index.index_pages.borrow_mut();
+            let root_page = index_pages.get_page(root_page_id).unwrap();
             assert_eq!(root_page.node.node_type_byte(), INTERNAL_NODE_TYPE, "Root node should be an InternalNode");
 
             // Get the child page IDs
@@ -3370,7 +3445,8 @@ mod tests {
 
         // Check that the left child is a LeafNode and collect its keys and values
         let left_keys_values = {
-            let left_child_page = tag_index.index_pages.get_page(left_child_id).unwrap();
+            let mut index_pages = tag_index.index_pages.borrow_mut();
+            let left_child_page = index_pages.get_page(left_child_id).unwrap();
             assert_eq!(left_child_page.node.node_type_byte(), LEAF_NODE_TYPE, "Left child should be a LeafNode");
 
             let left_leaf = left_child_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
@@ -3381,7 +3457,8 @@ mod tests {
 
         // Check that the right child is a LeafNode and collect its keys and values
         let right_keys_values = {
-            let right_child_page = tag_index.index_pages.get_page(right_child_id).unwrap();
+            let mut index_pages = tag_index.index_pages.borrow_mut();
+            let right_child_page = index_pages.get_page(right_child_id).unwrap();
             assert_eq!(right_child_page.node.node_type_byte(), LEAF_NODE_TYPE, "Right child should be a LeafNode");
 
             let right_leaf = right_child_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
@@ -3454,13 +3531,15 @@ mod tests {
         assert!(positions_after_last.is_empty(), "Should return no positions when 'after' is greater than the tag's position");
 
         // Flush changes to disk
-        tag_index.index_pages.flush().unwrap();
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        index_pages.flush().unwrap();
 
         // Create another instance of TagIndex
-        let mut tag_index2 = TagIndex::new(&test_path, page_size).unwrap();
+        let tag_index2 = TagIndex::new(&test_path, page_size).unwrap();
 
         // Get the root page again
-        let root_page2 = tag_index2.index_pages.get_page(root_page_id).unwrap();
+        let mut index_pages2 = tag_index2.index_pages.borrow_mut();
+        let root_page2 = index_pages2.get_page(root_page_id).unwrap();
 
         // Verify that the root page is still an InternalNode
         assert_eq!(root_page2.node.node_type_byte(), INTERNAL_NODE_TYPE);
@@ -3473,6 +3552,7 @@ mod tests {
 
         // Verify that the InternalNode still has two child PageIDs
         assert_eq!(internal_node2.child_ids.len(), 2);
+        drop(index_pages2);
 
         // Check lookup after reopening
         for (tag, position) in &inserted_tags {
@@ -3545,10 +3625,11 @@ mod tests {
         assert!(positions_after_last.is_empty(), "Should return no positions when 'after' is greater than the tag's position");
 
         // Flush changes to disk
-        tag_index.index_pages.flush().unwrap();
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        index_pages.flush().unwrap();
 
         // Create another instance of TagIndex
-        let mut tag_index2 = TagIndex::new(&test_path, page_size).unwrap();
+        let tag_index2 = TagIndex::new(&test_path, page_size).unwrap();
 
         // Check lookup after reopening
         for (tag, position) in &inserted_tags {
@@ -3581,11 +3662,12 @@ mod tests {
         }
 
         // Get the root page ID from the header page
-        let header_node = tag_index.index_pages.header_node();
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        let header_node = index_pages.header_node();
         let root_page_id = header_node.root_page_id;
 
         // Get the root page
-        let root_page = tag_index.index_pages.get_page(root_page_id).unwrap();
+        let root_page = index_pages.get_page(root_page_id).unwrap();
 
         // Verify that the root page is a LeafNode
         assert_eq!(root_page.node.node_type_byte(), LEAF_NODE_TYPE, "Root node should be a LeafNode");
@@ -3607,6 +3689,7 @@ mod tests {
 
         // Verify that the value has 100 positions
         assert_eq!(leaf_node.values[0].len(), 100, "Value should have 100 elements");
+        drop(index_pages);
 
         // Now insert 11 more positions to trigger the creation of a TagLeafNode
         for i in 101..112 {
@@ -3616,11 +3699,12 @@ mod tests {
         }
 
         // Get the root page ID from the header page
-        let header_node = tag_index.index_pages.header_node();
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        let header_node = index_pages.header_node();
         let root_page_id = header_node.root_page_id;
 
         // Get the root page
-        let root_page = tag_index.index_pages.get_page(root_page_id).unwrap();
+        let root_page = index_pages.get_page(root_page_id).unwrap();
 
         // Verify that the root page is a LeafNode
         assert_eq!(root_page.node.node_type_byte(), LEAF_NODE_TYPE, "Root node should be a LeafNode");
@@ -3646,7 +3730,7 @@ mod tests {
 
         // Get the TagLeafNode page
         let tag_leaf_page_id = PageID((-leaf_node.values[0][0]) as u32);
-        let tag_leaf_page = tag_index.index_pages.get_page(tag_leaf_page_id).unwrap();
+        let tag_leaf_page = index_pages.get_page(tag_leaf_page_id).unwrap();
         let tag_leaf_node = tag_leaf_page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
 
         // Verify that the TagLeafNode has 111 positions
@@ -3656,6 +3740,7 @@ mod tests {
         for i in 0..111 {
             assert_eq!(tag_leaf_node.positions[i], {i+1} as i64, "Position at index {} should be {}", i, i);
         }
+        drop(index_pages);
 
         // Use lookup() to verify all 111 positions are returned correctly
         let positions = tag_index.lookup(tag).unwrap();
@@ -3665,10 +3750,11 @@ mod tests {
         }
 
         // Flush changes to disk
-        tag_index.index_pages.flush().unwrap();
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        index_pages.flush().unwrap();
 
         // Create a new TagIndex instance
-        let mut tag_index2 = TagIndex::new(&test_path, 4096).unwrap();
+        let tag_index2 = TagIndex::new(&test_path, 4096).unwrap();
 
         // Use lookup() to verify all 111 positions are still returned correctly after reopening
         let positions2 = tag_index2.lookup(tag).unwrap();
@@ -3678,7 +3764,8 @@ mod tests {
         }
 
         // Get the root page again
-        let root_page2 = tag_index2.index_pages.get_page(root_page_id).unwrap();
+        let mut index_pages2 = tag_index2.index_pages.borrow_mut();
+        let root_page2 = index_pages2.get_page(root_page_id).unwrap();
 
         // Verify that the root page is still a LeafNode
         assert_eq!(root_page2.node.node_type_byte(), LEAF_NODE_TYPE, "Root node should still be a LeafNode after reopening");
@@ -3700,7 +3787,7 @@ mod tests {
         // Get the TagLeafNode page again
         let tag_leaf_page_id2 = PageID((-leaf_node2.values[0][0]) as u32);
         assert_eq!(tag_leaf_page_id, tag_leaf_page_id2, "TagLeafNode PageID should be the same after reopening");
-        let tag_leaf_page2 = tag_index2.index_pages.get_page(tag_leaf_page_id2).unwrap();
+        let tag_leaf_page2 = index_pages2.get_page(tag_leaf_page_id2).unwrap();
         let tag_leaf_node2 = tag_leaf_page2.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
 
         // Verify that the TagLeafNode still has 111 positions
@@ -3758,11 +3845,12 @@ mod tests {
         }
 
         // Get the root page ID from the header page
-        let header_node = tag_index.index_pages.header_node();
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        let header_node = index_pages.header_node();
         let root_page_id = header_node.root_page_id;
 
         // Get the root page
-        let root_page = tag_index.index_pages.get_page(root_page_id).unwrap();
+        let root_page = index_pages.get_page(root_page_id).unwrap();
 
         // Verify that the root page is a LeafNode
         assert_eq!(root_page.node.node_type_byte(), LEAF_NODE_TYPE, "Root node should be a LeafNode");
@@ -3790,7 +3878,7 @@ mod tests {
         let page_id = PageID((-leaf_node.values[0][0]) as u32);
 
         // Get the page
-        let page = tag_index.index_pages.get_page(page_id).unwrap();
+        let page = index_pages.get_page(page_id).unwrap();
 
         // Verify that the page is a TagInternalNode
         assert_eq!(page.node.node_type_byte(), TAG_INTERNAL_NODE_TYPE, "Page should be a TagInternalNode");
@@ -3803,6 +3891,7 @@ mod tests {
 
         // Verify that the TagInternalNode has at least two child IDs
         assert!(tag_internal_node.child_ids.len() >= 2, "TagInternalNode should have at least two child IDs");
+        drop(index_pages);
 
         // Use lookup() to verify all 150 positions are returned correctly
         let positions = tag_index.lookup(tag).unwrap();
@@ -3833,10 +3922,11 @@ mod tests {
         assert_eq!(positions_after_end.len(), 0, "Should return no positions when 'after' is beyond the end");
 
         // Flush changes to disk
-        tag_index.index_pages.flush().unwrap();
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        index_pages.flush().unwrap();
 
         // Create another instance of TagIndex
-        let mut tag_index2 = TagIndex::new(&test_path, page_size).unwrap();
+        let tag_index2 = TagIndex::new(&test_path, page_size).unwrap();
 
         // Use lookup() to verify all 201 positions are still returned correctly
         let positions = tag_index2.lookup(tag).unwrap();
@@ -3885,11 +3975,12 @@ mod tests {
         }
         //
         // Get the root page ID from the header page
-        let header_node = tag_index.index_pages.header_node();
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        let header_node = index_pages.header_node();
         let root_page_id = header_node.root_page_id;
 
         // Get the root page
-        let root_page = tag_index.index_pages.get_page(root_page_id).unwrap();
+        let root_page = index_pages.get_page(root_page_id).unwrap();
 
         // Verify that the root page is a LeafNode
         assert_eq!(root_page.node.node_type_byte(), LEAF_NODE_TYPE, "Root node should be a LeafNode");
@@ -3917,7 +4008,7 @@ mod tests {
         let page_id = PageID((-leaf_node.values[0][0]) as u32);
 
         // Get the page
-        let page = tag_index.index_pages.get_page(page_id).unwrap();
+        let page = index_pages.get_page(page_id).unwrap();
 
         // Verify that the page is a TagInternalNode
         assert_eq!(page.node.node_type_byte(), TAG_INTERNAL_NODE_TYPE, "Page should be a TagInternalNode");
@@ -3931,9 +4022,10 @@ mod tests {
         let first_child_id = tag_internal_node.child_ids[0];
 
         // Verify that the child page is a TagInternalNode
-        let page = tag_index.index_pages.get_page(first_child_id).unwrap();
+        let page = index_pages.get_page(first_child_id).unwrap();
         // Verify that the child page is a TagInternalNode
         assert_eq!(page.node.node_type_byte(), TAG_INTERNAL_NODE_TYPE, "Page should be a TagInternalNode");
+        drop(index_pages);
 
         // Use lookup() to verify all 9000 positions are returned correctly
         let result = tag_index.lookup(tag).unwrap();
@@ -3964,10 +4056,11 @@ mod tests {
         assert_eq!(positions_after_end.len(), 0, "Should return no positions when 'after' is beyond the end");
 
         // Flush changes to disk
-        tag_index.index_pages.flush().unwrap();
+        let mut index_pages = tag_index.index_pages.borrow_mut();
+        index_pages.flush().unwrap();
 
         // Create another instance of TagIndex
-        let mut tag_index2 = TagIndex::new(&test_path, page_size).unwrap();
+        let tag_index2 = TagIndex::new(&test_path, page_size).unwrap();
 
         // Use lookup() to verify all 9000 positions are still returned correctly
         let result2 = tag_index2.lookup(tag).unwrap();

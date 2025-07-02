@@ -343,7 +343,9 @@ impl TransactionManager {
 
         // Flush the indexes
         self.position_idx.index_pages.flush().map_err(TransactionError::Io)?;
-        self.tags_idx.index_pages.flush().map_err(TransactionError::Io)?;
+        let mut tag_index_pages = self.tags_idx.index_pages.borrow_mut();
+        tag_index_pages.flush().map_err(TransactionError::Io)?;
+        drop(tag_index_pages);
 
         // Update the checkpoint
         let mut checkpoint = CheckpointFile::new(&self.path).map_err(TransactionError::Io)?;
@@ -403,7 +405,8 @@ impl TransactionManager {
         }
 
         self.position_idx.index_pages.flush().map_err(TransactionError::Io)?;
-        self.tags_idx.index_pages.flush().map_err(TransactionError::Io)?;
+        let mut tags_index_pages = self.tags_idx.index_pages.borrow_mut();
+        tags_index_pages.flush().map_err(TransactionError::Io)?;
 
         Ok(())
     }

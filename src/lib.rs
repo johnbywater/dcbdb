@@ -33,6 +33,9 @@ pub mod transactions;
 // Export the EventStore module
 pub mod event_store;
 
+// Export the Store module
+pub mod store;
+
 #[cfg(test)]
 mod tests {
     #[test]

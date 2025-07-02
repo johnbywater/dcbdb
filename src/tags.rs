@@ -1287,10 +1287,13 @@ impl TagIndex {
                     return Ok(self.lookup_tag_tree(tag_tree_root_id, after)?);
                 } else {
                     // Positions are stored directly in the leaf node
-                    let mut positions = leaf_node.values[index].clone();
-                    // Filter positions based on the 'after' parameter
-                    positions.retain(|&pos| pos > after);
-                    return Ok(positions);
+                    let positions = leaf_node.values[index].clone();
+                    // Use binary search to find where to start filtering
+                    let start_idx = match positions.binary_search(&after) {
+                        Ok(idx) => idx + 1,      // Found exact match, start from next
+                        Err(idx) => idx,         // Not found, start from insertion point
+                    };
+                    return Ok(positions[start_idx..].to_vec());
                 }
             }
             Err(_) => {
@@ -1366,7 +1369,7 @@ impl TagIndex {
         };
 
         // Only take positions from start_idx onwards
-        positions.extend(tag_leaf_node.positions[start_idx..].iter().cloned());
+        positions.extend_from_slice(&tag_leaf_node.positions[start_idx..]);
 
         // Follow the next_leaf_id chain
         let mut next_leaf_id = tag_leaf_node.next_leaf_id;
@@ -1383,7 +1386,7 @@ impl TagIndex {
             let leaf_node = leaf_page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
             // Since we're past the first leaf node, we know all positions in subsequent nodes
             // are greater than 'after', so we can just extend with all positions
-            positions.extend(leaf_node.positions.clone());
+            positions.extend_from_slice(&leaf_node.positions);
 
             // Move to the next leaf node
             next_leaf_id = leaf_node.next_leaf_id;
@@ -3640,7 +3643,7 @@ mod tests {
             tag_index.insert(tag, position).unwrap();
             inserted_positions.push(position);
         }
-
+        //
         // Get the root page ID from the header page
         let header_node = tag_index.index_pages.header_node();
         let root_page_id = header_node.root_page_id;
@@ -3692,7 +3695,7 @@ mod tests {
         // Verify that the child page is a TagInternalNode
         assert_eq!(page.node.node_type_byte(), TAG_INTERNAL_NODE_TYPE, "Page should be a TagInternalNode");
 
-        // Use lookup() to verify all 500 positions are returned correctly
+        // Use lookup() to verify all 9000 positions are returned correctly
         let result = tag_index.lookup(tag).unwrap();
         assert_eq!(result.len(), 9000, "lookup() should return 500 positions");
         for i in 0..9000 {
@@ -3725,7 +3728,7 @@ mod tests {
 
         // Create another instance of TagIndex
         let mut tag_index2 = TagIndex::new(&test_path, page_size).unwrap();
-
+        
         // Use lookup() to verify all 9000 positions are still returned correctly
         let result2 = tag_index2.lookup(tag).unwrap();
         assert_eq!(result2.len(), 9000, "lookup() should return 500 positions after reopening");

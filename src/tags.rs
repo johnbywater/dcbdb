@@ -1345,72 +1345,68 @@ impl TagIndex {
     /// # Returns
     /// * `std::io::Result<Vec<Position>>` - All positions in the tag B+tree that are greater than the given position
     pub fn lookup_tag_tree(&mut self, root_page_id: PageID, after: Option<Position>) -> std::io::Result<Vec<Position>> {
-        // Get the root page
-        let page = self.index_pages.get_page(root_page_id)?;
+        // Start with the root page ID
+        let mut current_page_id = root_page_id;
 
-        // Check if the root is a TagLeafNode or a TagInternalNode
-        if page.node.node_type_byte() == TAG_LEAF_NODE_TYPE {
-            // Root is a TagLeafNode, return all positions
-            let tag_leaf_node = page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
+        // Traverse down the tree until we find a leaf node
+        loop {
+            let page = self.index_pages.get_page(current_page_id)?;
 
-            let mut positions = tag_leaf_node.positions.clone();
-            // println!("Found {} positions page {}", positions.len(), page.page_id);
+            if page.node.node_type_byte() == TAG_LEAF_NODE_TYPE {
+                // Found a leaf node, break out of the loop
+                break;
+            } else if page.node.node_type_byte() == TAG_INTERNAL_NODE_TYPE {
+                // Internal node, move to the leftmost child
+                let tag_internal_node = page.node.as_any().downcast_ref::<TagInternalNode>().unwrap();
 
-            // If there's a next leaf node, get positions from it too
-            let mut next_leaf_id = tag_leaf_node.next_leaf_id;
-            while let Some(leaf_id) = next_leaf_id {
-                let leaf_page = self.index_pages.get_page(leaf_id)?;
-                let leaf_node = leaf_page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
-                positions.extend(leaf_node.positions.clone());
-                next_leaf_id = leaf_node.next_leaf_id;
-            }
-
-            // Filter positions based on the 'after' parameter
-            if let Some(after_pos) = after {
-                positions.retain(|&pos| pos > after_pos);
-            }
-
-            Ok(positions)
-        } else if page.node.node_type_byte() == TAG_INTERNAL_NODE_TYPE {
-            // Root is a TagInternalNode, traverse to find the leftmost leaf node
-            let tag_internal_node = page.node.as_any().downcast_ref::<TagInternalNode>().unwrap();
-
-            // Start with the leftmost child
-            if tag_internal_node.child_ids.is_empty() {
-                return Ok(Vec::new());
-            }
-
-            // Get the leftmost leaf node
-            let leftmost_child_id = tag_internal_node.child_ids[0];
-            let leftmost_page = self.index_pages.get_page(leftmost_child_id)?;
-
-            // If the leftmost child is a TagLeafNode, we can start collecting positions from there
-            if leftmost_page.node.node_type_byte() == TAG_LEAF_NODE_TYPE {
-                let tag_leaf_node = leftmost_page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
-
-                let mut positions = tag_leaf_node.positions.clone();
-
-                // Follow the next_leaf_id chain to collect all positions
-                let mut next_leaf_id = tag_leaf_node.next_leaf_id;
-                while let Some(leaf_id) = next_leaf_id {
-                    let leaf_page = self.index_pages.get_page(leaf_id)?;
-                    let leaf_node = leaf_page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
-                    positions.extend(leaf_node.positions.clone());
-                    next_leaf_id = leaf_node.next_leaf_id;
+                if tag_internal_node.child_ids.is_empty() {
+                    return Ok(Vec::new());
                 }
 
-                return Ok(positions);
+                current_page_id = tag_internal_node.child_ids[0];
             } else {
-                // If the leftmost child is a TagInternalNode, recursively get positions from it
-                return self.lookup_tag_tree(leftmost_child_id, after);
+                // Invalid node type
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Invalid node type",
+                ));
             }
-        } else {
-            // Invalid node type
-            Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Invalid node type",
-            ))
         }
+
+        // Now current_page_id points to a leaf node
+        // Collect positions from the leaf node and follow the next_leaf_id chain
+        let mut positions = Vec::new();
+
+        // Start with the first leaf node
+        let page = self.index_pages.get_page(current_page_id)?;
+        let tag_leaf_node = page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
+        positions.extend(tag_leaf_node.positions.clone());
+
+        // Follow the next_leaf_id chain
+        let mut next_leaf_id = tag_leaf_node.next_leaf_id;
+        while let Some(leaf_id) = next_leaf_id {
+            let leaf_page = self.index_pages.get_page(leaf_id)?;
+
+            if leaf_page.node.node_type_byte() != TAG_LEAF_NODE_TYPE {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Expected leaf node",
+                ));
+            }
+
+            let leaf_node = leaf_page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
+            positions.extend(leaf_node.positions.clone());
+
+            // Move to the next leaf node
+            next_leaf_id = leaf_node.next_leaf_id;
+        }
+
+        // Filter positions based on the 'after' parameter
+        if let Some(after_pos) = after {
+            positions.retain(|&pos| pos > after_pos);
+        }
+
+        Ok(positions)
     }
 }
 

@@ -38,6 +38,40 @@ impl EventStore {
         })
     }
 
+    /// Helper method to create an iterator of (position, tag, query item indices)
+    fn _position_tag_qiid<'a>(
+        &'a self,
+        tag: &'a str,
+        tag_qiids: &'a HashMap<String, Vec<usize>>,
+        after: Option<Position>,
+    ) -> impl Iterator<Item = (Position, String, Vec<usize>)> + 'a {
+        let qiids = tag_qiids.get(tag).cloned().unwrap_or_default();
+        let tag_owned = tag.to_string();
+
+        let mut tm = self.transaction_manager.lock().unwrap();
+        let after_pos = after.unwrap_or(0);
+
+        // We need to drop the mutex guard before returning the iterator
+        // So we collect the positions into a Vec first
+        let positions = match tm.lookup_positions_for_tag_after_iter(tag, after_pos) {
+            Ok(iter) => {
+                let mut positions = Vec::new();
+                for pos_result in iter {
+                    if let Ok(pos) = pos_result {
+                        positions.push(pos);
+                    }
+                }
+                positions
+            },
+            Err(_) => Vec::new(),
+        };
+
+        // Now return an iterator that yields (position, tag, qiids)
+        positions.into_iter().map(move |position| {
+            (position, tag_owned.clone(), qiids.clone())
+        })
+    }
+
     /// Checks if an event matches a query item
     fn event_matches_query_item(event: &DCBEvent, query_item: &DCBQueryItem) -> bool {
         // If query_item.types is empty, any event type matches
@@ -59,18 +93,11 @@ impl DCBEventStoreAPI for EventStore {
         after: Option<i64>,
         limit: Option<usize>,
     ) -> Result<(Vec<DCBSequencedEvent>, Option<i64>)> {
-        let mut result = Vec::new();
+        let mut result: Vec<DCBSequencedEvent> = Vec::new();
         let mut head: Option<i64> = None;
 
         // Special case for limit 0
         if let Some(0) = limit {
-            // Get the last issued position from the transaction manager
-            let tm = self.transaction_manager.lock().unwrap();
-            let last_issued_position = tm.get_last_issued_position();
-            // If last_issued_position is 0, there are no events, so return None
-            if last_issued_position == 0 {
-                return Ok((Vec::new(), None));
-            }
             return Ok((Vec::new(), None));
         }
 
@@ -97,109 +124,138 @@ impl DCBEventStoreAPI for EventStore {
             let all_items_have_tags = !q.items.is_empty() && q.items.iter().all(|item| !item.tags.is_empty());
 
             if all_items_have_tags {
-                // Use the optimized path with tag indexes
-                let mut positions = Vec::new();
+                // Invert the query items
+                let mut qis: HashMap<usize, &DCBQueryItem> = HashMap::new();
+                let mut tag_qiis: HashMap<String, Vec<usize>> = HashMap::new();
+                let mut qi_tags: Vec<std::collections::HashSet<String>> = Vec::new();
+                let mut qi_types: Vec<std::collections::HashSet<String>> = Vec::new();
+                let mut qi_type_hashes: Vec<std::collections::HashSet<Vec<u8>>> = Vec::new();
 
-                // For each query item, get positions from tag index
-                for item in &q.items {
-                    // For each tag in the query item, get positions
-                    let mut item_positions = Vec::new();
+                for (qiid, item) in q.items.iter().enumerate() {
+                    qis.insert(qiid, item);
 
+                    // Create sets of tags and types for this query item
+                    let tags_set: std::collections::HashSet<String> = item.tags.iter().cloned().collect();
+                    qi_tags.push(tags_set);
+
+                    let types_set: std::collections::HashSet<String> = item.types.iter().cloned().collect();
+                    qi_types.push(types_set);
+
+                    // Create set of type hashes for this query item
+                    let type_hashes_set: std::collections::HashSet<Vec<u8>> = item.types.iter()
+                        .map(|t| crate::positions::hash_type(t))
+                        .collect();
+                    qi_type_hashes.push(type_hashes_set);
+
+                    // Associate each tag with this query item's ordinal
                     for tag in &item.tags {
-                        // Get positions for this tag
-                        let tag_positions = if let Some(after_pos) = after_position {
-                            let iter = tm.lookup_positions_for_tag_after_iter(tag, after_pos).map_err(|e| EventStoreError::Io(e.into()))?;
-                            let mut positions = Vec::new();
-                            for pos_result in iter {
-                                positions.push(pos_result.map_err(|e| EventStoreError::Io(e.into()))?);
-                            }
-                            positions
-                        } else {
-                            let iter = tm.lookup_positions_for_tag_iter(tag).map_err(|e| EventStoreError::Io(e.into()))?;
-                            let mut positions = Vec::new();
-                            for pos_result in iter {
-                                positions.push(pos_result.map_err(|e| EventStoreError::Io(e.into()))?);
-                            }
-                            positions
-                        };
+                        tag_qiis.entry(tag.clone()).or_default().push(qiid);
+                    }
+                }
 
-                        // If this is the first tag, use its positions
-                        if item_positions.is_empty() {
-                            item_positions = tag_positions;
-                        } else {
-                            // Otherwise, keep only positions that are in both lists
-                            item_positions.retain(|pos| tag_positions.contains(pos));
+                // Create iterators for each tag and merge them
+                let mut tag_iterators = Vec::new();
+                for tag in tag_qiis.keys() {
+                    tag_iterators.push(self._position_tag_qiid(tag, &tag_qiis, after_position));
+                }
+
+                // Merge the iterators and group by position
+                let mut positions_with_tags = Vec::new();
+
+                // Collect all (position, tag, qiids) tuples
+                let mut all_tuples = Vec::new();
+                for iter in tag_iterators {
+                    all_tuples.extend(iter);
+                }
+
+                // Sort by position to prepare for grouping
+                all_tuples.sort_by_key(|(pos, _, _)| *pos);
+
+                // Group by position
+                let mut current_position = None;
+                let mut current_tags = std::collections::HashSet::new();
+                let mut current_qiis = std::collections::HashSet::new();
+
+                for (position, tag, qiids) in all_tuples {
+                    if current_position.is_none() || current_position.unwrap() != position {
+                        // Save the previous group if it exists
+                        if let Some(pos) = current_position {
+                            positions_with_tags.push((pos, current_tags, current_qiis));
+                            current_tags = std::collections::HashSet::new();
+                            current_qiis = std::collections::HashSet::new();
                         }
+                        current_position = Some(position);
+                    }
 
-                        // If no positions match all tags so far, we can break early
-                        if item_positions.is_empty() {
+                    // Add tag and qiids to the current group
+                    current_tags.insert(tag);
+                    for qii in qiids {
+                        current_qiis.insert(qii);
+                    }
+                }
+
+                // Add the last group if it exists
+                if let Some(pos) = current_position {
+                    positions_with_tags.push((pos, current_tags, current_qiis));
+                }
+
+                // Filter for tag-matching query items
+                let mut positions_matching_tags = Vec::new();
+                for (position, tags, qiis) in positions_with_tags {
+                    let matching_qiis: std::collections::HashSet<usize> = qiis.into_iter()
+                        .filter(|&qii| {
+                            // Check if all tags in the query item are in the position's tags
+                            qi_tags[qii].is_subset(&tags)
+                        })
+                        .collect();
+
+                    if !matching_qiis.is_empty() {
+                        // Get the position index record
+                        let position_records = tm.scan_positions(Some(position - 1)).map_err(|e| EventStoreError::Io(e.into()))?;
+                        for (pos, record) in position_records {
+                            if pos == position {
+                                positions_matching_tags.push((position, record, matching_qiis));
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Filter for type-matching query items
+                let mut positions_and_idx_records = Vec::new();
+                for (position, position_idx_record, qiis) in positions_matching_tags {
+                    let type_matches = qiis.iter().any(|&qii| {
+                        qi_type_hashes[qii].is_empty() || qi_type_hashes[qii].contains(&position_idx_record.type_hash)
+                    });
+
+                    if type_matches {
+                        positions_and_idx_records.push((position, position_idx_record));
+                    }
+                }
+
+                // Read events at the remaining positions
+                for (position, idx_record) in positions_and_idx_records {
+                    if let Some(limit) = limit {
+                        if result.len() >= limit {
+                            if limit > 0 {
+                                head = Some(result.last().unwrap().position as i64);
+                            }
                             break;
                         }
                     }
 
-                    // Add positions from this query item to the overall list
-                    positions.extend(item_positions);
-                }
+                    match tm.read_event_at_position_with_record(position, Some(idx_record)) {
+                        Ok(event) => {
+                            // Double-check that the event matches the query
+                            let matches = q.items.iter().any(|item| Self::event_matches_query_item(&event.event, item));
 
-                // Deduplicate positions
-                positions.sort_unstable();
-                positions.dedup();
-
-                // Get all position records
-                let position_records = tm.scan_positions(after_position).map_err(|e| EventStoreError::Io(e.into()))?;
-
-                // Create a map of position to type hash for quick lookup
-                let mut position_to_type_hash = HashMap::new();
-                for (pos, record) in position_records {
-                    position_to_type_hash.insert(pos, record.type_hash);
-                }
-
-                // For each position, check if the event type matches and read the event
-                for position in positions {
-                    // Skip positions that are not in the position index
-                    if let Some(type_hash) = position_to_type_hash.get(&position) {
-                        // Check if any query item matches this event type
-                        let type_matches = q.items.iter().any(|item| {
-                            // If item has no types, it matches any type
-                            if item.types.is_empty() {
-                                true
-                            } else {
-                                // Otherwise, check if any type in the item matches
-                                item.types.iter().any(|t| {
-                                    let t_hash = crate::positions::hash_type(t);
-                                    t_hash == *type_hash
-                                })
+                            if matches {
+                                result.push(event);
                             }
-                        });
-
-                        // If the type matches, read the event
-                        if type_matches {
-                            match tm.read_event_at_position(position) {
-                                Ok(event) => {
-                                    // Double-check that the event matches the query
-                                    // This is needed because the type hash might have collisions
-                                    let matches = q.items.iter().any(|item| Self::event_matches_query_item(&event.event, item));
-
-                                    if matches {
-                                        result.push(event);
-
-                                        // Apply limit if specified
-                                        if let Some(limit) = limit {
-                                            if result.len() >= limit {
-                                                // If we've reached the limit, set the head to the position of the last event in the result
-                                                if limit > 0 {
-                                                    head = Some(result.last().unwrap().position as i64);
-                                                }
-                                                break;
-                                            }
-                                        }
-                                    }
-                                },
-                                Err(_) => {
-                                    // Skip this event if we can't read it
-                                    continue;
-                                }
-                            }
+                        },
+                        Err(_) => {
+                            // Skip this event if we can't read it
+                            continue;
                         }
                     }
                 }

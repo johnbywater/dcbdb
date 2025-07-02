@@ -24,6 +24,9 @@ pub mod indexpages;
 // Export the Tags module
 pub mod tags;
 
+// Export the Checkpoint module
+pub mod checkpoint;
+
 // Export the EventStore module
 pub mod event_store;
 

@@ -214,11 +214,7 @@ impl TransactionManager {
             txn_id,
             position: last_position,
         };
-
-        // Flush and checkpoint one last time
-        self.flush_and_checkpoint()?;
-
-
+        
         Ok(())
     }
 
@@ -416,9 +412,6 @@ impl TransactionManager {
 
     /// Close the transaction manager
     pub fn close(&mut self) -> std::io::Result<()> {
-        // Flush and checkpoint one last time
-        self.flush_and_checkpoint()?;
-
         Ok(())
     }
 }

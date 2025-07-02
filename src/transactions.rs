@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc};
 use std::time::{Duration, Instant};
 
 use crate::api::{Event, DCBSequencedEvent};
@@ -33,7 +32,6 @@ pub struct TransactionManager {
     last_issued_position: Position,
     last_committed: LastCommittedTxnPosition,
     last_checkpoint_time: Instant,
-    stopping: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl TransactionManager {
@@ -107,7 +105,6 @@ impl TransactionManager {
             last_issued_position: 0,
             last_committed: LastCommittedTxnPosition { txn_id: 0, position: 0 },
             last_checkpoint_time: Instant::now(),
-            stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
 
         // If either index doesn't exist or is invalid, rebuild both from segment files
@@ -430,9 +427,6 @@ impl TransactionManager {
 
     /// Close the transaction manager
     pub fn close(&mut self) -> std::io::Result<()> {
-        // Stop the flush and checkpoint thread
-        self.stopping.store(true, std::sync::atomic::Ordering::Relaxed);
-
         // Flush and checkpoint one last time
         self.flush_and_checkpoint()?;
 

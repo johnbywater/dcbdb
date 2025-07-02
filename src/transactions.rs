@@ -509,6 +509,11 @@ impl TransactionManager {
     pub fn scan_positions(&mut self, after: Option<Position>) -> Result<Vec<(Position, PositionIndexRecord)>> {
         self.position_idx.scan(after).map_err(TransactionError::Io)
     }
+
+    /// Get the last issued position
+    pub fn get_last_issued_position(&self) -> Position {
+        self.last_issued_position
+    }
 }
 
 impl Drop for TransactionManager {

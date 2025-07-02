@@ -64,6 +64,13 @@ impl DCBEventStoreAPI for EventStore {
 
         // Special case for limit 0
         if let Some(0) = limit {
+            // Get the last issued position from the transaction manager
+            let tm = self.transaction_manager.lock().unwrap();
+            let last_issued_position = tm.get_last_issued_position();
+            // If last_issued_position is 0, there are no events, so return None
+            if last_issued_position == 0 {
+                return Ok((Vec::new(), None));
+            }
             return Ok((Vec::new(), None));
         }
 
@@ -72,6 +79,17 @@ impl DCBEventStoreAPI for EventStore {
 
         // Lock the transaction manager
         let mut tm = self.transaction_manager.lock().unwrap();
+
+        // Check if there are any events
+        let last_issued_position = tm.get_last_issued_position();
+        if last_issued_position == 0 {
+            return Ok((Vec::new(), None));
+        }
+
+        // If limit is None, set the head to the last_issued_position
+        if limit.is_none() {
+            head = Some(last_issued_position as i64);
+        }
 
         // Check if we can use the optimized path with tag indexes
         if let Some(ref q) = query {

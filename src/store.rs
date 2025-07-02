@@ -104,11 +104,12 @@ impl DCBEventStoreAPI for EventStore {
         // Convert i64 to Position (u64)
         let after_position = after.map(|pos| pos as Position);
 
-        // Lock the transaction manager
-        let mut tm = self.transaction_manager.lock().unwrap();
+        // Get the last issued position and check if there are any events
+        let last_issued_position = {
+            let tm = self.transaction_manager.lock().unwrap();
+            tm.get_last_issued_position()
+        };
 
-        // Check if there are any events
-        let last_issued_position = tm.get_last_issued_position();
         if last_issued_position == 0 {
             return Ok((Vec::new(), None));
         }
@@ -201,6 +202,10 @@ impl DCBEventStoreAPI for EventStore {
 
                 // Filter for tag-matching query items
                 let mut positions_matching_tags = Vec::new();
+
+                // Lock the transaction manager for scanning positions
+                let mut tm = self.transaction_manager.lock().unwrap();
+
                 for (position, tags, qiis) in positions_with_tags {
                     let matching_qiis: std::collections::HashSet<usize> = qiis.into_iter()
                         .filter(|&qii| {
@@ -269,6 +274,7 @@ impl DCBEventStoreAPI for EventStore {
 
         // Fall back to a sequential scan to match query items without tags.
         // Use scan() on PositionIndex to get all positions and position index records
+        let mut tm = self.transaction_manager.lock().unwrap();
         let position_records = tm.scan_positions(after_position).map_err(|e| EventStoreError::Io(e.into()))?;
 
         // Process each position and position index record

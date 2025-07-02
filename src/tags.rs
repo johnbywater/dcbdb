@@ -1321,14 +1321,24 @@ impl TagIndex {
                 // Found a leaf node, break out of the loop
                 break;
             } else if page.node.node_type_byte() == TAG_INTERNAL_NODE_TYPE {
-                // Internal node, move to the leftmost child
+                // Internal node, find the appropriate child based on the 'after' parameter
                 let tag_internal_node = page.node.as_any().downcast_ref::<TagInternalNode>().unwrap();
 
                 if tag_internal_node.child_ids.is_empty() {
                     return Ok(Vec::new());
                 }
 
-                current_page_id = tag_internal_node.child_ids[0];
+                // Find the index of the first key greater than the 'after' parameter using binary search
+                let index = match tag_internal_node.keys.binary_search(&after) {
+                    // If 'after' is found, use the child at that index + 1
+                    Ok(idx) => idx + 1,
+                    // If 'after' is not found, Err(idx) gives the index where it would be inserted
+                    // This is the index of the first key greater than 'after'
+                    Err(idx) => idx,
+                };
+
+                // Use the child at the found index
+                current_page_id = tag_internal_node.child_ids[index];
             } else {
                 // Invalid node type
                 return Err(std::io::Error::new(

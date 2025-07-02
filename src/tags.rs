@@ -3042,6 +3042,40 @@ mod tests {
             assert!(positions.contains(position), "Position {} not found for tag {} using lookup", position, tag);
         }
 
+        // Test lookup_with_after with a value in the middle of the first leaf node
+        let first_leaf_middle_tag = &inserted_tags[50].0;  // Tag in the middle of first leaf node
+        let first_leaf_middle_pos = inserted_tags[50].1;  // Position for this tag
+
+        // Test with a position less than the tag's position - should return the tag's position
+        let positions_before = tag_index.lookup_with_after(first_leaf_middle_tag, first_leaf_middle_pos - 1).unwrap();
+        assert_eq!(positions_before.len(), 1, "Should return one position when 'after' is less than the tag's position");
+        assert_eq!(positions_before[0], first_leaf_middle_pos, "Should return the tag's position");
+
+        // Test with the exact position - should return no positions
+        let positions_exact = tag_index.lookup_with_after(first_leaf_middle_tag, first_leaf_middle_pos).unwrap();
+        assert!(positions_exact.is_empty(), "Should return no positions when 'after' equals the tag's position");
+
+        // Test lookup_with_after with a value in the middle of the last leaf node
+        let last_leaf_middle_tag = &inserted_tags[200].0;  // Tag in the middle of last leaf node
+        let last_leaf_middle_pos = inserted_tags[200].1;  // Position for this tag
+
+        // Test with a position less than the tag's position - should return the tag's position
+        let positions_before_last = tag_index.lookup_with_after(last_leaf_middle_tag, last_leaf_middle_pos - 1).unwrap();
+        assert_eq!(positions_before_last.len(), 1, "Should return one position when 'after' is less than the tag's position");
+        assert_eq!(positions_before_last[0], last_leaf_middle_pos, "Should return the tag's position");
+
+        // Test with the exact position - should return no positions
+        let positions_exact_last = tag_index.lookup_with_after(last_leaf_middle_tag, last_leaf_middle_pos).unwrap();
+        assert!(positions_exact_last.is_empty(), "Should return no positions when 'after' equals the tag's position");
+
+        // Test lookup_with_after with a value greater than the last inserted position
+        let last_tag = &inserted_tags[249].0;  // Last tag
+        let last_pos = inserted_tags[249].1;  // Position for the last tag
+
+        // Test with a position greater than the tag's position - should return no positions
+        let positions_after_last = tag_index.lookup_with_after(last_tag, last_pos + 100).unwrap();
+        assert!(positions_after_last.is_empty(), "Should return no positions when 'after' is greater than the tag's position");
+
         // Flush changes to disk
         tag_index.index_pages.flush().unwrap();
 

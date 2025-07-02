@@ -3607,9 +3607,140 @@ mod tests {
 
         // Use lookup() to verify all 201 positions are still returned correctly
         let positions = tag_index2.lookup(tag).unwrap();
-        assert_eq!(positions.len(), 150, "lookup() should return 201 positions after reopening");
+        assert_eq!(positions.len(), 150, "lookup() should return 150 positions after reopening");
         for i in 0..150 {
             assert!(positions.contains(&({i+1} as i64)), "lookup() should return position {} after reopening", i);
+        }
+    }
+
+    #[test]
+    fn test_insert_lookup_split_tag_internal_node() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+
+        // Append the filename to the directory path
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Create a TagLeafNode with many positions to calculate its size
+        let mut positions = Vec::new();
+        for i in 1..101 {
+            positions.push(i as i64);
+        }
+
+        let tag_leaf_node = TagLeafNode {
+            positions,
+            next_leaf_id: None,
+        };
+
+        // Calculate the serialized size of the TagLeafNode
+        let serialized_size = tag_leaf_node.calc_serialized_page_size();
+
+        // Create a new TagIndex instance with a page size that can just fit the current TagLeafNode
+        // This will ensure that adding more positions will cause a split
+        let page_size = serialized_size + 100;
+        let mut tag_index = TagIndex::new(&test_path, page_size).unwrap();
+
+        // Insert a tag with enough positions to create a TagLeafNode and then a TagInternalNode
+        let tag = "test-tag";
+        let mut inserted_positions = Vec::new();
+
+        // Now insert 9000 more positions to trigger splitting the TagInternalNode
+        for i in 1..9001 {
+            let position = i as i64;
+            tag_index.insert(tag, position).unwrap();
+            inserted_positions.push(position);
+        }
+
+        // Get the root page ID from the header page
+        let header_node = tag_index.index_pages.header_node();
+        let root_page_id = header_node.root_page_id;
+
+        // Get the root page
+        let root_page = tag_index.index_pages.get_page(root_page_id).unwrap();
+
+        // Verify that the root page is a LeafNode
+        assert_eq!(root_page.node.node_type_byte(), LEAF_NODE_TYPE, "Root node should be a LeafNode");
+
+        // Downcast the node to a LeafNode
+        let leaf_node = root_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+
+        // Verify that the LeafNode has one key
+        assert_eq!(leaf_node.keys.len(), 1, "LeafNode should have one key");
+        assert_eq!(leaf_node.values.len(), 1, "LeafNode should have one value");
+
+        // Hash the tag to get the expected key
+        let tag_hash = hash_tag(tag);
+        let mut expected_key = [0u8; TAG_HASH_LEN];
+        expected_key.copy_from_slice(&tag_hash[..TAG_HASH_LEN]);
+
+        // Verify that the key matches the expected key
+        assert_eq!(leaf_node.keys[0], expected_key, "Key should match the hashed tag");
+
+        // Verify that the value is a PageID (a single negative value)
+        assert_eq!(leaf_node.values[0].len(), 1, "Value should have one element");
+        assert!(leaf_node.values[0][0] < 0, "Value should be a negative number (PageID)");
+
+        // Get the page ID from the LeafNode value
+        let page_id = PageID((-leaf_node.values[0][0]) as u32);
+
+        // Get the page
+        let page = tag_index.index_pages.get_page(page_id).unwrap();
+
+        // Verify that the page is a TagInternalNode
+        assert_eq!(page.node.node_type_byte(), TAG_INTERNAL_NODE_TYPE, "Page should be a TagInternalNode");
+
+        // Downcast the node to a TagInternalNode
+        let tag_internal_node = page.node.as_any().downcast_ref::<TagInternalNode>().unwrap();
+
+        // Verify that the TagInternalNode has multiple child IDs
+        assert!(tag_internal_node.child_ids.len() > 1, "TagInternalNode should have multiple child IDs after splitting");
+
+        let first_child_id = tag_internal_node.child_ids[0];
+
+        // Verify that the child page is a TagInternalNode
+        let page = tag_index.index_pages.get_page(first_child_id).unwrap();
+        // Verify that the child page is a TagInternalNode
+        assert_eq!(page.node.node_type_byte(), TAG_INTERNAL_NODE_TYPE, "Page should be a TagInternalNode");
+        
+        // Use lookup() to verify all 500 positions are returned correctly
+        let result = tag_index.lookup(tag).unwrap();
+        assert_eq!(result.len(), 9000, "lookup() should return 500 positions");
+        for i in 0..9000 {
+            assert!(result.contains(&({i+1} as i64)), "lookup() should return position {}", i);
+        }
+
+        // Test lookup_with_after with a value in the middle of the first leaf node
+        let first_leaf_middle_pos: Position = 100; // Position in the middle of first leaf node
+        let positions_middle = tag_index.lookup_with_after(tag, first_leaf_middle_pos).unwrap();
+        assert_eq!(positions_middle.len(), 8900, "Should return 400 positions when 'after' is in the middle");
+        for i in 101..9001 {
+            assert!(positions_middle.contains(&(i as i64)), "lookup_with_after should return position {}", i);
+        }
+
+        // Test lookup_with_after with a value in the middle of the range
+        let middle_pos: Position = 4500; // Position in the middle of the range
+        let positions_middle_range = tag_index.lookup_with_after(tag, middle_pos).unwrap();
+        assert_eq!(positions_middle_range.len(), 4500, "Should return 4500 positions when 'after' is in the middle of the range");
+        for i in 4501..9001 {
+            assert!(positions_middle_range.contains(&(i as i64)), "lookup_with_after should return position {}", i);
+        }
+
+        // Test lookup_with_after with a value greater than the last inserted position
+        let after_end: Position = 9001; // After the last position
+        let positions_after_end = tag_index.lookup_with_after(tag, after_end).unwrap();
+        assert_eq!(positions_after_end.len(), 0, "Should return no positions when 'after' is beyond the end");
+
+        // Flush changes to disk
+        tag_index.index_pages.flush().unwrap();
+
+        // Create another instance of TagIndex
+        let mut tag_index2 = TagIndex::new(&test_path, page_size).unwrap();
+
+        // Use lookup() to verify all 9000 positions are still returned correctly
+        let result2 = tag_index2.lookup(tag).unwrap();
+        assert_eq!(result2.len(), 9000, "lookup() should return 500 positions after reopening");
+        for i in 0..9000 {
+            assert!(result2.contains(&({i+1} as i64)), "lookup() should return position {} after reopening", i);
         }
     }
 }

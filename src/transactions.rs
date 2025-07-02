@@ -401,20 +401,17 @@ impl TransactionManager {
         // Get the segment from the segment manager
         let mut segment = self.segment_manager.get_segment(position_index_record.segment as u32)
             .map_err(|e| {
-                eprintln!("Position index record: {:?}", position_index_record);
                 TransactionError::Segment(e)
             })?;
 
         // Get the position and event blob from the segment
         let (recorded_position, event, _) = segment.get_event_record(position_index_record.offset as u64)
             .map_err(|e| {
-                eprintln!("Position index record: {:?}", position_index_record);
                 TransactionError::Segment(e)
             })?;
 
         // Check the recorded event position is the one we asked for
         if recorded_position != position {
-            eprintln!("Position index record: {:?}", position_index_record);
             return Err(TransactionError::InvalidPosition {
                 expected: position,
                 found: recorded_position,

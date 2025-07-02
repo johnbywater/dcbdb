@@ -1,6 +1,7 @@
 use std::path::{Path};
 use std::sync::Mutex;
 use std::collections::HashMap;
+use itertools::Itertools;
 
 use crate::api::{DCBEvent, DCBEventStoreAPI, DCBQuery, DCBQueryItem, DCBSequencedEvent, DCBAppendCondition, EventStoreError, Result};
 use crate::transactions::TransactionManager;
@@ -235,15 +236,6 @@ impl DCBEventStoreAPI for EventStore {
 
                 // Read events at the remaining positions
                 for (position, idx_record) in positions_and_idx_records {
-                    if let Some(limit) = limit {
-                        if result.len() >= limit {
-                            if limit > 0 {
-                                head = Some(result.last().unwrap().position as i64);
-                            }
-                            break;
-                        }
-                    }
-
                     match tm.read_event_at_position_with_record(position, Some(idx_record)) {
                         Ok(event) => {
                             // Double-check that the event matches the query
@@ -260,6 +252,26 @@ impl DCBEventStoreAPI for EventStore {
                     }
                 }
 
+                
+                // Apply limit using itertools functionality
+                let mut events_iter: Box<dyn Iterator<Item = DCBSequencedEvent>> = Box::new(result.into_iter());
+
+                if let Some(limit) = limit {
+                    // Get only a limited number of events
+                    events_iter = Box::new(events_iter.take(limit).into_iter());
+                }
+                
+                result = events_iter.collect_vec();
+
+                if limit.is_some() {
+                    if !result.is_empty() {
+                        // Set head to the position of the last event in the limited result
+                        head = Some(result.last().unwrap().position as i64);
+                    } else {
+                        head = None;
+                    }
+                }
+                
                 return Ok((result, head));
             }
         }
@@ -290,17 +302,6 @@ impl DCBEventStoreAPI for EventStore {
 
                     if matches {
                         result.push(event);
-
-                        // Apply limit if specified
-                        if let Some(limit) = limit {
-                            if result.len() >= limit {
-                                // If we've reached the limit, set the head to the position of the last event in the result
-                                if limit > 0 {
-                                    head = Some(result.last().unwrap().position as i64);
-                                }
-                                break;
-                            }
-                        }
                     }
                 },
                 Err(_) => {
@@ -308,6 +309,21 @@ impl DCBEventStoreAPI for EventStore {
                     continue;
                 }
             }
+        }
+
+        // Apply limit using itertools functionality
+        if let Some(limit) = limit {
+            // Get only the limited number of events
+            let limited_result = result.into_iter().take(limit).collect_vec();
+
+            if !limited_result.is_empty() {
+                // Set head to the position of the last event in the limited result
+                head = Some(limited_result.last().unwrap().position as i64);
+            } else {
+                head = None;
+            }
+
+            result = limited_result;
         }
 
         Ok((result, head))

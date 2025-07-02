@@ -175,6 +175,11 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
     assert_eq!(event2.data, result[0].event.data);
     assert_eq!(Some(2), head);
 
+    // Read all after 10, limit 10, expect zero events.
+    let (result, head) = event_store.read(None, Some(10), Some(10)).unwrap();
+    assert_eq!(0, result.len());
+    assert_eq!(None, head);
+
     // Read type1 after 1, expect no events.
     let (result, head) = event_store.read(Some(query_type1.clone()), Some(1), None).unwrap();
     assert_eq!(0, result.len());
@@ -184,6 +189,11 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
     let (result, head) = event_store.read(Some(query_tag_x.clone()), Some(1), None).unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(3), head);
+
+    // Read tagX after 1, limit 1 expect no events.
+    let (result, head) = event_store.read(Some(query_tag_x.clone()), Some(1), Some(1)).unwrap();
+    assert_eq!(0, result.len());
+    assert_eq!(None, head);
 
     // Read type1 and tagX after 1, expect no events.
     let (result, head) = event_store.read(Some(query_type1_tag_x.clone()), Some(1), None).unwrap();

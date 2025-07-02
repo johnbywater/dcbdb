@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 # Add dependencies as needed for your new project
 crc32fast = "1.3.2"
+itertools = "0.12.0"
 lru = "0.15.0"
 rmp-serde = "1.1.2"
 serde = { version = "1.0.188", features = ["derive"] }

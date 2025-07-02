@@ -61,6 +61,19 @@ pub enum SegmentError {
 /// Result type for segment operations
 pub type SegmentResult<T> = Result<T, SegmentError>;
 
+/// Implement From<SegmentError> for std::io::Error
+impl From<SegmentError> for std::io::Error {
+    fn from(error: SegmentError) -> Self {
+        match error {
+            SegmentError::Io(io_error) => io_error,
+            SegmentError::NotEnoughData(msg) => std::io::Error::new(std::io::ErrorKind::UnexpectedEof, msg),
+            SegmentError::SegmentNotFound(path) => std::io::Error::new(std::io::ErrorKind::NotFound, format!("Segment not found: {:?}", path)),
+            SegmentError::DatabaseCorrupted(msg) => std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Database corrupted: {}", msg)),
+            SegmentError::Serialization(msg) => std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Serialization error: {}", msg)),
+        }
+    }
+}
+
 /// File-based implementation of Segment
 pub struct Segment {
     number: u32,
@@ -429,16 +442,38 @@ pub fn deserialize_dcb_event(data: &[u8]) -> SegmentResult<(Position, DCBEvent)>
 
 /// Read an event record from a file
 pub fn read_event_record(file: &mut File, offset: u64) -> SegmentResult<(Position, DCBEvent, usize)> {
-    file.seek(SeekFrom::Start(offset))?;
+    // Get file path for better error messages
+    let file_path = match file.metadata() {
+        Ok(metadata) => {
+            if let Ok(path) = std::env::current_dir() {
+                path.join(format!("unknown_file_{}", metadata.len()))
+            } else {
+                PathBuf::from(format!("unknown_file_{}", metadata.len()))
+            }
+        },
+        Err(_) => PathBuf::from("unknown_file"),
+    };
+
+    // Seek to the offset
+    if let Err(e) = file.seek(SeekFrom::Start(offset)) {
+        return Err(SegmentError::Io(io::Error::new(
+            e.kind(),
+            format!("Failed to seek to offset {} in file {:?}: {}", offset, file_path, e)
+        )));
+    }
 
     // Read CRC and length
     let mut crc_len_bytes = [0u8; EVENT_CRC_LEN_SIZE];
     match file.read_exact(&mut crc_len_bytes) {
         Ok(_) => {}
         Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
-            return Err(SegmentError::NotEnoughData("Not enough data for event crc and blob length".to_string()));
+            let msg = format!("Not enough data for event crc and blob length at offset {} in file {:?}", offset, file_path);
+            return Err(SegmentError::NotEnoughData(msg));
         }
-        Err(e) => return Err(SegmentError::Io(e)),
+        Err(e) => {
+            let msg = format!("Failed to read crc and length at offset {} in file {:?}: {}", offset, file_path, e);
+            return Err(SegmentError::Io(io::Error::new(e.kind(), msg)));
+        }
     }
 
     let crc = u32::from_le_bytes([crc_len_bytes[0], crc_len_bytes[1], crc_len_bytes[2], crc_len_bytes[3]]);
@@ -449,9 +484,13 @@ pub fn read_event_record(file: &mut File, offset: u64) -> SegmentResult<(Positio
     match file.read_exact(&mut blob) {
         Ok(_) => {}
         Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
-            return Err(SegmentError::NotEnoughData("Not enough data for blob".to_string()));
+            let msg = format!("Not enough data for blob (expected {} bytes) at offset {} in file {:?}", blob_len, offset + EVENT_CRC_LEN_SIZE as u64, file_path);
+            return Err(SegmentError::NotEnoughData(msg));
         }
-        Err(e) => return Err(SegmentError::Io(e)),
+        Err(e) => {
+            let msg = format!("Failed to read blob (size {}) at offset {} in file {:?}: {}", blob_len, offset + EVENT_CRC_LEN_SIZE as u64, file_path, e);
+            return Err(SegmentError::Io(io::Error::new(e.kind(), msg)));
+        }
     }
 
     // Check CRC

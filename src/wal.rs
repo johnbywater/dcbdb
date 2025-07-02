@@ -55,6 +55,20 @@ pub enum WalError {
 /// Result type for WAL operations
 pub type WalResult<T> = Result<T, WalError>;
 
+/// Implement From<WalError> for std::io::Error
+impl From<WalError> for std::io::Error {
+    fn from(error: WalError) -> Self {
+        match error {
+            WalError::Io(io_error) => io_error,
+            WalError::EventTooLarge => std::io::Error::new(std::io::ErrorKind::InvalidInput, "Event too large"),
+            WalError::InvalidRecord(msg) => std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Invalid record: {}", msg)),
+            WalError::InvalidMagic => std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid magic number"),
+            WalError::InvalidChecksum => std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid checksum"),
+            WalError::Serialization(msg) => std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Serialization error: {}", msg)),
+        }
+    }
+}
+
 /// Record header structure
 #[repr(C)]
 struct RecordHeader {

@@ -1,12 +1,62 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::io;
+
+use thiserror::Error;
 
 use crate::api::{DCBEvent, DCBSequencedEvent};
 use crate::checkpoint::CheckpointFile;
 use crate::positions::{PositionIndex, PositionIndexRecord, hash_type};
-use crate::segments::{SegmentManager};
+use crate::segments::{SegmentManager, SegmentError};
 use crate::tags::TagIndex;
-use crate::wal::{Position, TransactionWAL, pack_dcb_event_with_crc};
+use crate::wal::{Position, TransactionWAL, pack_dcb_event_with_crc, WalError};
+
+/// Error types for transaction operations
+#[derive(Debug, Error)]
+pub enum TransactionError {
+    #[error("IO error: {0}")]
+    Io(#[from] io::Error),
+
+    #[error("Segment error: {0}")]
+    Segment(#[from] SegmentError),
+
+    #[error("WAL error: {0}")]
+    Wal(#[from] WalError),
+
+    #[error("Transaction not found: {0}")]
+    TransactionNotFound(u64),
+
+    #[error("Position not found: {0}")]
+    PositionNotFound(Position),
+
+    #[error("Invalid position: expected {expected}, found {found}")]
+    InvalidPosition { expected: Position, found: Position },
+
+    #[error("Serialization error: {0}")]
+    Serialization(String),
+}
+
+/// Result type for transaction operations
+pub type Result<T> = std::result::Result<T, TransactionError>;
+
+/// Implement From<TransactionError> for std::io::Error
+impl From<TransactionError> for std::io::Error {
+    fn from(error: TransactionError) -> Self {
+        match error {
+            TransactionError::Io(io_error) => io_error,
+            TransactionError::Segment(segment_error) => segment_error.into(),
+            TransactionError::Wal(wal_error) => wal_error.into(),
+            TransactionError::TransactionNotFound(txn_id) => 
+                std::io::Error::new(std::io::ErrorKind::NotFound, format!("Transaction not found: {}", txn_id)),
+            TransactionError::PositionNotFound(position) => 
+                std::io::Error::new(std::io::ErrorKind::NotFound, format!("Position not found: {}", position)),
+            TransactionError::InvalidPosition { expected, found } => 
+                std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Invalid position: expected {}, found {}", expected, found)),
+            TransactionError::Serialization(msg) => 
+                std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Serialization error: {}", msg)),
+        }
+    }
+}
 
 /// Represents the last committed transaction position
 #[derive(Debug, Clone, Copy)]
@@ -40,7 +90,7 @@ impl TransactionManager {
         path: P,
         max_segment_size: Option<usize>,
         cache_size: Option<usize>,
-    ) -> std::io::Result<Self> {
+    ) -> Result<Self> {
         let path_buf = path.as_ref().to_path_buf();
         std::fs::create_dir_all(&path_buf)?;
 
@@ -51,17 +101,17 @@ impl TransactionManager {
         // Initialize the WAL
         let wal = match TransactionWAL::new(&path_buf) {
             Ok(wal) => wal,
-            Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to create WAL: {}", e))),
+            Err(e) => return Err(TransactionError::Wal(e)),
         };
 
         // Initialize the segment manager and recover position
         let mut segment_manager = match SegmentManager::new(&path_buf, max_segment_size) {
             Ok(sm) => sm,
-            Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to create segment manager: {}", e))),
+            Err(e) => return Err(TransactionError::Segment(e)),
         };
 
         if let Err(e) = segment_manager.recover_position(checkpoint.segment_number as u32, checkpoint.segment_offset) {
-            return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to recover position: {}", e)));
+            return Err(TransactionError::Segment(e));
         }
 
         // Check if index files exist
@@ -115,7 +165,7 @@ impl TransactionManager {
         // Restore committed events from the WAL
         let committed_transactions = match tm.wal.read_committed_transactions() {
             Ok(txns) => txns,
-            Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to read committed transactions: {}", e))),
+            Err(e) => return Err(TransactionError::Wal(e)),
         };
 
         for (txn_id, payloads) in committed_transactions {
@@ -144,11 +194,11 @@ impl TransactionManager {
     }
 
     /// Begin a new transaction
-    pub fn begin(&mut self) -> std::io::Result<u64> {
+    pub fn begin(&mut self) -> Result<u64> {
         let txn_id = self.issue_txn_id();
 
         if let Err(e) = self.wal.begin_transaction(txn_id) {
-            return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to begin transaction: {}", e)));
+            return Err(TransactionError::Wal(e));
         }
 
         self.uncommitted.insert(txn_id, Vec::new());
@@ -173,37 +223,31 @@ impl TransactionManager {
         &mut self,
         txn_id: u64,
         event: DCBEvent,
-    ) -> std::io::Result<Position> {
+    ) -> Result<Position> {
         let position = self.issue_position();
         let payload = pack_dcb_event_with_crc(position, event.clone());
 
         if let Err(e) = self.wal.write_event(txn_id, &payload) {
-            return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to write event: {}", e)));
+            return Err(TransactionError::Wal(e));
         }
 
         if let Some(events) = self.uncommitted.get_mut(&txn_id) {
             events.push((position, event, payload));
         } else {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("Transaction {} not found", txn_id),
-            ));
+            return Err(TransactionError::TransactionNotFound(txn_id));
         }
 
         Ok(position)
     }
 
     /// Commit a transaction
-    pub fn commit(&mut self, txn_id: u64) -> std::io::Result<()> {
+    pub fn commit(&mut self, txn_id: u64) -> Result<()> {
         if let Err(e) = self.wal.commit_transaction(txn_id) {
-            return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to commit transaction: {}", e)));
+            return Err(TransactionError::Wal(e));
         }
 
         let committed = self.uncommitted.remove(&txn_id).ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("Transaction {} not found", txn_id),
-            )
+            TransactionError::TransactionNotFound(txn_id)
         })?;
 
         self.push_to_segment_and_indexes(&committed)?;
@@ -225,7 +269,7 @@ impl TransactionManager {
         segment_number: u32,
         offset: u64,
         event: &DCBEvent,
-    ) -> std::io::Result<()> {
+    ) -> Result<()> {
         // Add to position index
         self.position_idx.insert(
             position,
@@ -234,11 +278,11 @@ impl TransactionManager {
                 offset: offset as i32,
                 type_hash: hash_type(&event.event_type),
             },
-        )?;
+        ).map_err(TransactionError::Io)?;
 
         // Add to tags index
         for tag in &event.tags {
-            self.tags_idx.insert(tag, position)?;
+            self.tags_idx.insert(tag, position).map_err(TransactionError::Io)?;
         }
 
         Ok(())
@@ -248,12 +292,12 @@ impl TransactionManager {
     fn push_to_segment_and_indexes(
         &mut self,
         committed: &[(Position, DCBEvent, Vec<u8>)],
-    ) -> std::io::Result<()> {
+    ) -> Result<()> {
         let payloads: Vec<Vec<u8>> = committed.iter().map(|(_, _, payload)| payload.clone()).collect();
 
         let segment_numbers_and_offsets = match self.segment_manager.add_payloads(&payloads) {
             Ok(nos) => nos,
-            Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to add payloads: {}", e))),
+            Err(e) => return Err(TransactionError::Segment(e)),
         };
 
         for (i, (position, event, _)) in committed.iter().enumerate() {
@@ -267,7 +311,7 @@ impl TransactionManager {
     }
 
     /// Flush and checkpoint
-    pub fn flush_and_checkpoint(&mut self) -> std::io::Result<()> {
+    pub fn flush_and_checkpoint(&mut self) -> Result<()> {
         let last_committed = self.last_committed;
         let checkpoint_txn_id = self.checkpoint.txn_id;
 
@@ -277,15 +321,15 @@ impl TransactionManager {
 
         // Flush the segment manager
         if let Err(e) = self.segment_manager.flush() {
-            return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to flush segment manager: {}", e)));
+            return Err(TransactionError::Segment(e));
         }
 
         // Flush the indexes
-        self.position_idx.index_pages.flush()?;
-        self.tags_idx.index_pages.flush()?;
+        self.position_idx.index_pages.flush().map_err(TransactionError::Io)?;
+        self.tags_idx.index_pages.flush().map_err(TransactionError::Io)?;
 
         // Update the checkpoint
-        let mut checkpoint = CheckpointFile::new(&self.path)?;
+        let mut checkpoint = CheckpointFile::new(&self.path).map_err(TransactionError::Io)?;
         checkpoint.txn_id = last_committed.txn_id;
         checkpoint.position = last_committed.position;
 
@@ -298,32 +342,26 @@ impl TransactionManager {
         // This is a simplification and might not be accurate
         checkpoint.wal_commit_offset = 0;
 
-        checkpoint.write_checkpoint()?;
+        checkpoint.write_checkpoint().map_err(TransactionError::Io)?;
 
         // We can't call wal.cut_before_offset directly, so we use truncate_wal_before_checkpoint
         if let Err(e) = self.wal.truncate_wal_before_checkpoint(last_committed.txn_id) {
-            return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to truncate WAL: {}", e)));
+            return Err(TransactionError::Wal(e));
         }
 
         Ok(())
     }
 
     /// Build the position and tags indexes by scanning all segment files
-    fn build_index(&mut self) -> std::io::Result<()> {
+    fn build_index(&mut self) -> Result<()> {
         for segment_result in self.segment_manager.segments() {
-            let mut segment = match segment_result {
-                Ok(s) => s,
-                Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to get segment: {}", e))),
-            };
+            let mut segment = segment_result.map_err(TransactionError::Segment)?;
 
             // Store the segment number before iterating
             let segment_number = segment.number() as i32;
 
             for record_result in segment.iter_event_records() {
-                let (position, event, offset) = match record_result {
-                    Ok(r) => r,
-                    Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to get event record: {}", e))),
-                };
+                let (position, event, offset) = record_result.map_err(TransactionError::Segment)?;
 
                 // Add to position index
                 self.position_idx.insert(
@@ -333,51 +371,54 @@ impl TransactionManager {
                         offset: offset as i32,
                         type_hash: hash_type(&event.event_type),
                     },
-                )?;
+                ).map_err(TransactionError::Io)?;
 
                 // Add to tags index
                 for tag in &event.tags {
-                    self.tags_idx.insert(tag, position)?;
+                    self.tags_idx.insert(tag, position).map_err(TransactionError::Io)?;
                 }
             }
         }
 
-        self.position_idx.index_pages.flush()?;
-        self.tags_idx.index_pages.flush()?;
+        self.position_idx.index_pages.flush().map_err(TransactionError::Io)?;
+        self.tags_idx.index_pages.flush().map_err(TransactionError::Io)?;
 
         Ok(())
     }
+
 
     /// Read an event at a specific position
     pub fn read_event_at_position(
         &mut self,
         position: Position,
-    ) -> std::io::Result<DCBSequencedEvent> {
+    ) -> Result<DCBSequencedEvent> {
         // Get the segment number and offset from the index
-        let position_index_record = self.position_idx.lookup(position)?
-            .ok_or_else(|| std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("Event at position {} not found", position),
-            ))?;
+        let position_index_record = self.position_idx.lookup(position).map_err(TransactionError::Io)?
+            .ok_or_else(|| {
+                TransactionError::PositionNotFound(position)
+            })?;
 
         // Get the segment from the segment manager
-        let mut segment = match self.segment_manager.get_segment(position_index_record.segment as u32) {
-            Ok(s) => s,
-            Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to get segment: {}", e))),
-        };
+        let mut segment = self.segment_manager.get_segment(position_index_record.segment as u32)
+            .map_err(|e| {
+                eprintln!("Position index record: {:?}", position_index_record);
+                TransactionError::Segment(e)
+            })?;
 
         // Get the position and event blob from the segment
-        let (recorded_position, event, _) = match segment.get_event_record(position_index_record.offset as u64) {
-            Ok(r) => r,
-            Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to get event record: {}", e))),
-        };
+        let (recorded_position, event, _) = segment.get_event_record(position_index_record.offset as u64)
+            .map_err(|e| {
+                eprintln!("Position index record: {:?}", position_index_record);
+                TransactionError::Segment(e)
+            })?;
 
         // Check the recorded event position is the one we asked for
         if recorded_position != position {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Expected event at position {}, but found {}", position, recorded_position),
-            ));
+            eprintln!("Position index record: {:?}", position_index_record);
+            return Err(TransactionError::InvalidPosition {
+                expected: position,
+                found: recorded_position,
+            });
         }
 
         // Construct a sequenced event object
@@ -390,15 +431,15 @@ impl TransactionManager {
     }
 
     /// Deserialize a DCB event from a byte array
-    fn deserialize_dcb_event(&self, data: &[u8]) -> std::io::Result<(Position, DCBEvent)> {
+    fn deserialize_dcb_event(&self, data: &[u8]) -> Result<(Position, DCBEvent)> {
         use rmp_serde::decode;
         use crate::wal::DCBEventWithPosition;
 
         let event_with_pos: DCBEventWithPosition = decode::from_slice(data)
-            .map_err(|e| std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Failed to deserialize event: {}", e)
-            ))?;
+            .map_err(|e| {
+                let err_msg = format!("Failed to deserialize event: {}", e);
+                TransactionError::Serialization(err_msg)
+            })?;
 
         let position = event_with_pos.position;
         let event = DCBEvent {
@@ -411,7 +452,7 @@ impl TransactionManager {
     }
 
     /// Close the transaction manager
-    pub fn close(&mut self) -> std::io::Result<()> {
+    pub fn close(&mut self) -> Result<()> {
         Ok(())
     }
 }
@@ -623,8 +664,6 @@ mod tests {
 
             let _ = tm.append_event(txn_id, event.clone())?;
             tm.commit(txn_id)?;
-
-            // Don't flush and checkpoint, so the events are only in the WAL
         }
 
         // Create a new transaction manager, which should recover from the WAL

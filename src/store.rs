@@ -161,7 +161,6 @@ impl DCBEventStoreAPI for EventStore {
                 }
 
                 // Merge the iterators and group by position
-                let mut positions_with_tags = Vec::new();
 
                 // Collect all (position, tag, qiids) tuples
                 let mut all_tuples = Vec::new();
@@ -172,33 +171,92 @@ impl DCBEventStoreAPI for EventStore {
                 // Sort by position to prepare for grouping
                 all_tuples.sort_by_key(|(pos, _, _)| *pos);
 
-                // Group by position
-                let mut current_position = None;
-                let mut current_tags = std::collections::HashSet::new();
-                let mut current_qiis = std::collections::HashSet::new();
+                // Group by position using an iterator
+                let all_tuples_iter = all_tuples.into_iter();
 
-                for (position, tag, qiids) in all_tuples {
-                    if current_position.is_none() || current_position.unwrap() != position {
-                        // Save the previous group if it exists
-                        if let Some(pos) = current_position {
-                            positions_with_tags.push((pos, current_tags, current_qiis));
-                            current_tags = std::collections::HashSet::new();
-                            current_qiis = std::collections::HashSet::new();
+                // Iterator that groups tuples by position
+                struct GroupByPositionIterator<I> 
+                where 
+                    I: Iterator<Item = (Position, String, Vec<usize>)>
+                {
+                    all_tuples_iter: I,
+                    current_position: Option<Position>,
+                    current_tags: std::collections::HashSet<String>,
+                    current_qiis: std::collections::HashSet<usize>,
+                    finished: bool,
+                }
+
+                impl<I> GroupByPositionIterator<I> 
+                where 
+                    I: Iterator<Item = (Position, String, Vec<usize>)>
+                {
+                    fn new(iter: I) -> Self {
+                        Self {
+                            all_tuples_iter: iter,
+                            current_position: None,
+                            current_tags: std::collections::HashSet::new(),
+                            current_qiis: std::collections::HashSet::new(),
+                            finished: false,
                         }
-                        current_position = Some(position);
-                    }
-
-                    // Add tag and qiids to the current group
-                    current_tags.insert(tag);
-                    for qii in qiids {
-                        current_qiis.insert(qii);
                     }
                 }
 
-                // Add the last group if it exists
-                if let Some(pos) = current_position {
-                    positions_with_tags.push((pos, current_tags, current_qiis));
+                impl<I> Iterator for GroupByPositionIterator<I> 
+                where 
+                    I: Iterator<Item = (Position, String, Vec<usize>)>
+                {
+                    type Item = (Position, std::collections::HashSet<String>, std::collections::HashSet<usize>);
+
+                    fn next(&mut self) -> Option<Self::Item> {
+                        // If we've already processed the last group, return None
+                        if self.finished {
+                            return None;
+                        }
+
+                        while let Some((position, tag, qiids)) = self.all_tuples_iter.next() {
+                            if self.current_position.is_none() {
+                                // First tuple, initialize the current group
+                                self.current_position = Some(position);
+                            } else if self.current_position.unwrap() != position {
+                                // Position changed, return the current group
+                                let result_position = self.current_position.unwrap();
+                                let result_tags = std::mem::take(&mut self.current_tags);
+                                let result_qiis = std::mem::take(&mut self.current_qiis);
+
+                                // Start a new group with the current tuple
+                                self.current_position = Some(position);
+                                self.current_tags.insert(tag);
+                                for qii in qiids {
+                                    self.current_qiis.insert(qii);
+                                }
+
+                                return Some((result_position, result_tags, result_qiis));
+                            }
+
+                            // Add to the current group
+                            self.current_tags.insert(tag);
+                            for qii in qiids {
+                                self.current_qiis.insert(qii);
+                            }
+                        }
+
+                        // No more tuples, return the last group if it exists
+                        if let Some(pos) = self.current_position.take() {
+                            self.finished = true;
+                            let result_tags = std::mem::take(&mut self.current_tags);
+                            let result_qiis = std::mem::take(&mut self.current_qiis);
+                            return Some((pos, result_tags, result_qiis));
+                        }
+
+                        None
+                    }
                 }
+
+                // Create and use the group by position iterator
+                let group_by_position_iter = GroupByPositionIterator::new(all_tuples_iter);
+
+                // Collect the grouped positions
+                let positions_with_tags: Vec<_> = group_by_position_iter.collect();
 
                 // Filter for tag-matching query items using an iterator
                 let positions_with_tags_iter = positions_with_tags.into_iter();

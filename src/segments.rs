@@ -12,7 +12,7 @@ use rmp_serde::decode;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::api::Event;
+use crate::api::DCBEvent;
 use crate::wal::{calc_crc, pack_dcb_event_with_crc, Position};
 
 /// Event with position for serialization
@@ -24,8 +24,8 @@ struct DCBEventWithPosition {
     tags: Vec<String>,
 }
 
-impl From<(Position, Event)> for DCBEventWithPosition {
-    fn from((position, event): (Position, Event)) -> Self {
+impl From<(Position, DCBEvent)> for DCBEventWithPosition {
+    fn from((position, event): (Position, DCBEvent)) -> Self {
         Self {
             position,
             type_: event.event_type,
@@ -153,7 +153,7 @@ impl Segment {
     }
 
     /// Iterate over event records in the segment
-    pub fn iter_event_records(&mut self) -> impl Iterator<Item = SegmentResult<(Position, Event, u64)>> + '_ {
+    pub fn iter_event_records(&mut self) -> impl Iterator<Item = SegmentResult<(Position, DCBEvent, u64)>> + '_ {
         EventRecordIterator {
             segment: self,
             offset: 0,
@@ -161,7 +161,7 @@ impl Segment {
     }
 
     /// Get an event record at the given offset
-    pub fn get_event_record(&mut self, offset: u64) -> SegmentResult<(Position, Event, usize)> {
+    pub fn get_event_record(&mut self, offset: u64) -> SegmentResult<(Position, DCBEvent, usize)> {
         read_event_record(&mut self.file, offset)
     }
 
@@ -187,7 +187,7 @@ struct EventRecordIterator<'a> {
 }
 
 impl<'a> Iterator for EventRecordIterator<'a> {
-    type Item = SegmentResult<(Position, Event, u64)>;
+    type Item = SegmentResult<(Position, DCBEvent, u64)>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.segment.get_event_record(self.offset) {
@@ -413,12 +413,12 @@ impl<'a> Iterator for SegmentIterator<'a> {
 }
 
 /// Deserialize a DCB event from bytes
-pub fn deserialize_dcb_event(data: &[u8]) -> SegmentResult<(Position, Event)> {
+pub fn deserialize_dcb_event(data: &[u8]) -> SegmentResult<(Position, DCBEvent)> {
     let event_with_pos: DCBEventWithPosition = decode::from_slice(data)
         .map_err(|e| SegmentError::Serialization(e.to_string()))?;
 
     let position = event_with_pos.position;
-    let event = Event {
+    let event = DCBEvent {
         event_type: event_with_pos.type_,
         data: event_with_pos.data,
         tags: event_with_pos.tags,
@@ -428,7 +428,7 @@ pub fn deserialize_dcb_event(data: &[u8]) -> SegmentResult<(Position, Event)> {
 }
 
 /// Read an event record from a file
-pub fn read_event_record(file: &mut File, offset: u64) -> SegmentResult<(Position, Event, usize)> {
+pub fn read_event_record(file: &mut File, offset: u64) -> SegmentResult<(Position, DCBEvent, usize)> {
     file.seek(SeekFrom::Start(offset))?;
 
     // Read CRC and length
@@ -475,7 +475,7 @@ pub fn check_crc(blob: &[u8], crc: u32) -> SegmentResult<()> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
-    use crate::api::Event;
+    use crate::api::DCBEvent;
 
     #[test]
     fn test_segment_initialization() {
@@ -595,7 +595,7 @@ mod tests {
 
         // Create a test event
         let position = 42;
-        let event = Event {
+        let event = DCBEvent {
             event_type: "test_event".to_string(),
             data: br#"{"msg": "hello"}"#.to_vec(),
             tags: Vec::new(),
@@ -627,17 +627,17 @@ mod tests {
 
         // Create test events
         let events = vec![
-            (1, Event {
+            (1, DCBEvent {
                 event_type: "event1".to_string(),
                 data: br#"{"msg": "hello"}"#.to_vec(),
                 tags: Vec::new(),
             }),
-            (2, Event {
+            (2, DCBEvent {
                 event_type: "event2".to_string(),
                 data: br#"{"msg": "world"}"#.to_vec(),
                 tags: Vec::new(),
             }),
-            (3, Event {
+            (3, DCBEvent {
                 event_type: "event3".to_string(),
                 data: br#"{"msg": "!"}"#.to_vec(),
                 tags: Vec::new(),
@@ -653,7 +653,7 @@ mod tests {
         segment.flush().unwrap();
 
         // Iterate through records
-        let retrieved_records: Vec<(Position, Event, u64)> = segment
+        let retrieved_records: Vec<(Position, DCBEvent, u64)> = segment
             .iter_event_records()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
@@ -799,7 +799,7 @@ mod tests {
     fn test_deserialize_dcb_event() {
         // Create a test event
         let position = 42;
-        let event = Event {
+        let event = DCBEvent {
             event_type: "test_event".to_string(),
             data: br#"{"msg": "hello"}"#.to_vec(),
             tags: vec!["tag1".to_string(), "tag2".to_string()],
@@ -833,7 +833,7 @@ mod tests {
 
         // Create a test event
         let position = 42;
-        let event = Event {
+        let event = DCBEvent {
             event_type: "test_event".to_string(),
             data: br#"{"msg": "hello"}"#.to_vec(),
             tags: vec!["tag1".to_string(), "tag2".to_string()],

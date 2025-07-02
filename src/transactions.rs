@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use crate::api::{Event, DCBSequencedEvent};
+use crate::api::{DCBEvent, DCBSequencedEvent};
 use crate::checkpoint::CheckpointFile;
 use crate::positions::{PositionIndex, PositionIndexRecord, hash_type};
 use crate::segments::{SegmentManager};
@@ -20,7 +20,7 @@ pub struct LastCommittedTxnPosition {
 pub struct TransactionManager {
     path: PathBuf,
     checkpoint_interval: Duration,
-    uncommitted: HashMap<u64, Vec<(Position, Event, Vec<u8>)>>,
+    uncommitted: HashMap<u64, Vec<(Position, DCBEvent, Vec<u8>)>>,
 
     checkpoint: CheckpointFile,
     wal: TransactionWAL,
@@ -180,7 +180,7 @@ impl TransactionManager {
     pub fn append_event(
         &mut self,
         txn_id: u64,
-        event: Event,
+        event: DCBEvent,
     ) -> std::io::Result<Position> {
         let position = self.issue_position();
         let payload = pack_dcb_event_with_crc(position, event.clone());
@@ -236,7 +236,7 @@ impl TransactionManager {
         position: Position,
         segment_number: u32,
         offset: u64,
-        event: &Event,
+        event: &DCBEvent,
     ) -> std::io::Result<()> {
         // Add to position index
         self.position_idx.insert(
@@ -259,7 +259,7 @@ impl TransactionManager {
     /// Push committed events to segment and indexes
     fn push_to_segment_and_indexes(
         &mut self,
-        committed: &[(Position, Event, Vec<u8>)],
+        committed: &[(Position, DCBEvent, Vec<u8>)],
     ) -> std::io::Result<()> {
         let payloads: Vec<Vec<u8>> = committed.iter().map(|(_, _, payload)| payload.clone()).collect();
 
@@ -405,7 +405,7 @@ impl TransactionManager {
     }
 
     /// Deserialize a DCB event from a byte array
-    fn deserialize_dcb_event(&self, data: &[u8]) -> std::io::Result<(Position, Event)> {
+    fn deserialize_dcb_event(&self, data: &[u8]) -> std::io::Result<(Position, DCBEvent)> {
         use rmp_serde::decode;
         use crate::wal::DCBEventWithPosition;
 
@@ -416,7 +416,7 @@ impl TransactionManager {
             ))?;
 
         let position = event_with_pos.position;
-        let event = Event {
+        let event = DCBEvent {
             event_type: event_with_pos.type_,
             data: event_with_pos.data,
             tags: event_with_pos.tags,
@@ -478,7 +478,7 @@ mod tests {
 
         let txn_id = tm.begin()?;
 
-        let event = Event {
+        let event = DCBEvent {
             event_type: "test_event".to_string(),
             data: vec![1, 2, 3],
             tags: vec!["tag1".to_string(), "tag2".to_string()],
@@ -497,7 +497,7 @@ mod tests {
 
         let txn_id = tm.begin()?;
 
-        let event = Event {
+        let event = DCBEvent {
             event_type: "test_event".to_string(),
             data: vec![1, 2, 3],
             tags: vec!["tag1".to_string(), "tag2".to_string()],
@@ -519,7 +519,7 @@ mod tests {
 
         let txn_id = tm.begin()?;
 
-        let event = Event {
+        let event = DCBEvent {
             event_type: "test_event".to_string(),
             data: vec![1, 2, 3],
             tags: vec!["tag1".to_string(), "tag2".to_string()],
@@ -545,7 +545,7 @@ mod tests {
         // First transaction
         let txn_id1 = tm.begin()?;
 
-        let event1 = Event {
+        let event1 = DCBEvent {
             event_type: "event1".to_string(),
             data: vec![1, 2, 3],
             tags: vec!["tag1".to_string(), "tag2".to_string()],
@@ -557,7 +557,7 @@ mod tests {
         // Second transaction
         let txn_id2 = tm.begin()?;
 
-        let event2 = Event {
+        let event2 = DCBEvent {
             event_type: "event2".to_string(),
             data: vec![4, 5, 6],
             tags: vec!["tag2".to_string(), "tag3".to_string()],
@@ -585,7 +585,7 @@ mod tests {
 
         let txn_id = tm.begin()?;
 
-        let event = Event {
+        let event = DCBEvent {
             event_type: "test_event".to_string(),
             data: vec![1, 2, 3],
             tags: vec!["tag1".to_string(), "tag2".to_string()],
@@ -615,7 +615,7 @@ mod tests {
 
             let txn_id = tm.begin()?;
 
-            let event = Event {
+            let event = DCBEvent {
                 event_type: "test_event".to_string(),
                 data: vec![1, 2, 3],
                 tags: vec!["tag1".to_string(), "tag2".to_string()],
@@ -654,13 +654,13 @@ mod tests {
 
             let txn_id = tm.begin()?;
 
-            let event1 = Event {
+            let event1 = DCBEvent {
                 event_type: "event1".to_string(),
                 data: vec![1, 2, 3],
                 tags: vec!["tag1".to_string(), "tag2".to_string()],
             };
 
-            let event2 = Event {
+            let event2 = DCBEvent {
                 event_type: "event2".to_string(),
                 data: vec![4, 5, 6],
                 tags: vec!["tag2".to_string(), "tag3".to_string()],
@@ -688,6 +688,9 @@ mod tests {
         let read_event2 = tm2.read_event_at_position(2)?;
         assert_eq!(read_event2.position, 2);
         assert_eq!(read_event2.event.event_type, "event2");
+        
+        let positions = tm2.tags_idx.lookup("tag2")?;
+        assert_eq!(positions, vec![1, 2]);
 
         Ok(())
     }

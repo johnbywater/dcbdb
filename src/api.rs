@@ -33,7 +33,7 @@ pub struct DCBAppendCondition {
 
 /// Represents an event in the event store
 #[derive(Debug, Clone)]
-pub struct Event {
+pub struct DCBEvent {
     /// Type of the event
     pub event_type: String,
     /// Binary data associated with the event
@@ -46,7 +46,7 @@ pub struct Event {
 #[derive(Debug, Clone)]
 pub struct DCBSequencedEvent {
     /// The event
-    pub event: Event,
+    pub event: DCBEvent,
     /// Position of the event in the sequence
     pub position: i64,
 }
@@ -76,7 +76,7 @@ pub trait DCBEventStoreAPI {
     /// Appends given events to the event store, unless the condition fails
     ///
     /// Returns the position of the last appended event
-    fn append(&self, events: Vec<Event>, condition: Option<DCBAppendCondition>) -> Result<i64>;
+    fn append(&self, events: Vec<DCBEvent>, condition: Option<DCBAppendCondition>) -> Result<i64>;
 }
 
 // Error types
@@ -137,13 +137,13 @@ mod tests {
     #[test]
     fn test_dcb_read_response() {
         // Create some test events
-        let event1 = Event {
+        let event1 = DCBEvent {
             event_type: "test_event".to_string(),
             data: vec![1, 2, 3],
             tags: vec!["tag1".to_string(), "tag2".to_string()],
         };
 
-        let event2 = Event {
+        let event2 = DCBEvent {
             event_type: "another_event".to_string(),
             data: vec![4, 5, 6],
             tags: vec!["tag2".to_string(), "tag3".to_string()],

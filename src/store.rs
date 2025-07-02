@@ -234,25 +234,75 @@ impl DCBEventStoreAPI for EventStore {
                     }
                 }
 
-                // Read events at the remaining positions
-                for (position, idx_record) in positions_and_idx_records {
-                    match tm.read_event_at_position_with_record(position, Some(idx_record)) {
-                        Ok(event) => {
-                            // Double-check that the event matches the query
-                            let matches = q.items.iter().any(|item| Self::event_matches_query_item(&event.event, item));
+                // Read events at the remaining positions using iterators
+                let positions_and_idx_records_iter = positions_and_idx_records.into_iter();
 
-                            if matches {
-                                result.push(event);
-                            }
-                        },
-                        Err(_) => {
-                            // Skip this event if we can't read it
-                            continue;
+                // Convert positions and index records to DCBSequencedEvent objects
+                struct ReadEventAtPositionIterator<'a> {
+                    tm: &'a mut TransactionManager,
+                    positions_and_idx_records_iter: std::vec::IntoIter<(Position, crate::positions::PositionIndexRecord)>,
+                }
+
+                impl<'a> Iterator for ReadEventAtPositionIterator<'a> {
+                    type Item = Result<DCBSequencedEvent>;
+
+                    fn next(&mut self) -> Option<Self::Item> {
+                        if let Some((position, idx_record)) = self.positions_and_idx_records_iter.next() {
+                            Some(self.tm.read_event_at_position_with_record(position, Some(idx_record))
+                                .map_err(|e| EventStoreError::Io(e.into())))
+                        } else {
+                            None
                         }
                     }
                 }
 
-                
+                // Filter actual events based on query matching (not just type and tag hashes)
+                struct MatchEventsWithQueryItemsIterator<'a> {
+                    events_iter: ReadEventAtPositionIterator<'a>,
+                    query_items: &'a Vec<DCBQueryItem>,
+                }
+
+                impl<'a> Iterator for MatchEventsWithQueryItemsIterator<'a> {
+                    type Item = DCBSequencedEvent;
+
+                    fn next(&mut self) -> Option<Self::Item> {
+                        // Keep iterating until we find a matching event or run out of events
+                        loop {
+                            match self.events_iter.next()? {
+                                Ok(event) => {
+                                    // Check if the event matches the query
+                                    let matches = self.query_items.iter().any(|item| 
+                                        EventStore::event_matches_query_item(&event.event, item)
+                                    );
+
+                                    if matches {
+                                        return Some(event);
+                                    }
+                                    // If no match, continue to next event
+                                },
+                                Err(_) => {
+                                    // Skip this event if we can't read it
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Create and use the iterators
+                let events_iter = ReadEventAtPositionIterator {
+                    tm: &mut tm,
+                    positions_and_idx_records_iter,
+                };
+
+                let filtered_events_iter = MatchEventsWithQueryItemsIterator {
+                    events_iter,
+                    query_items: &q.items,
+                };
+
+                // Collect the filtered events
+                result = filtered_events_iter.collect();
+
                 // Apply limit using itertools functionality
                 let mut events_iter: Box<dyn Iterator<Item = DCBSequencedEvent>> = Box::new(result.into_iter());
 
@@ -260,7 +310,7 @@ impl DCBEventStoreAPI for EventStore {
                     // Get only a limited number of events
                     events_iter = Box::new(events_iter.take(limit).into_iter());
                 }
-                
+
                 result = events_iter.collect_vec();
 
                 if limit.is_some() {
@@ -271,7 +321,7 @@ impl DCBEventStoreAPI for EventStore {
                         head = None;
                     }
                 }
-                
+
                 return Ok((result, head));
             }
         }

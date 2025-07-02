@@ -1240,97 +1240,66 @@ impl TagIndex {
         let header_node = self.index_pages.header_node();
         let root_page_id = header_node.root_page_id;
 
-        // Get the root page
-        let page = self.index_pages.get_page(root_page_id)?;
+        // Find the leaf node that would contain the key
+        let mut current_page_id = root_page_id;
+        loop {
+            let page = self.index_pages.get_page(current_page_id)?;
 
-        // Check if the root page is a leaf node
-        if page.node.node_type_byte() == LEAF_NODE_TYPE {
-            // Downcast the node to a LeafNode
-            let leaf_node = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+            if page.node.node_type_byte() == LEAF_NODE_TYPE {
+                // This is a leaf node, we found it
+                break;
+            } else if page.node.node_type_byte() == INTERNAL_NODE_TYPE {
+                // This is an internal node, find the appropriate child
+                let internal_node = page.node.as_any().downcast_ref::<InternalNode>().unwrap();
 
-            // Use binary search to find the key in the leaf node's keys
-            match leaf_node.keys.binary_search(&key) {
-                Ok(index) => {
-                    // Key found, check if the positions are stored directly or in a TagLeafNode
-                    if leaf_node.values[index].len() == 1 && leaf_node.values[index][0] < 0 {
-                        // Positions are stored in a tag B+tree
-                        let tag_tree_root_id = PageID((-leaf_node.values[index][0]) as u32);
-                        return Ok(self.lookup_tag_tree(tag_tree_root_id, after)?);
-                    } else {
-                        // Positions are stored directly in the leaf node
-                        let mut positions = leaf_node.values[index].clone();
-                        // Filter positions based on the 'after' parameter
-                        positions.retain(|&pos| pos > after);
-                        return Ok(positions);
-                    }
-                }
-                Err(_) => {
-                    // Key not found
-                    return Ok(Vec::new());
-                }
+                // Find the index of the first key greater than the search key using binary search
+                let index = match internal_node.keys.binary_search(&key) {
+                    // If key is found, use the child at that index + 1
+                    Ok(idx) => idx + 1,
+                    // If key is not found, Err(idx) gives the index where it would be inserted
+                    // This is the index of the first key greater than the search key
+                    Err(idx) => idx,
+                };
+
+                // Move to the appropriate child
+                current_page_id = internal_node.child_ids[index];
+            } else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Invalid node type",
+                ));
             }
-        } else if page.node.node_type_byte() == INTERNAL_NODE_TYPE {
-            // If the root is an internal node, we need to traverse the tree to find the leaf node
-            let mut current_page_id = root_page_id;
+        }
 
-            // Traverse the tree until we find a leaf node
-            loop {
-                let page = self.index_pages.get_page(current_page_id)?;
+        // Get the leaf page
+        let leaf_page = self.index_pages.get_page(current_page_id)?;
 
-                if page.node.node_type_byte() == LEAF_NODE_TYPE {
-                    // Found a leaf node, search for the key
-                    let leaf_node = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+        // Downcast the node to a LeafNode
+        let leaf_node = leaf_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
 
-                    // Use binary search to find the key in the leaf node's keys
-                    match leaf_node.keys.binary_search(&key) {
-                        Ok(index) => {
-                            // Key found, check if the positions are stored directly or in a TagLeafNode
-                            if leaf_node.values[index].len() == 1 && leaf_node.values[index][0] < 0 {
-                                // Positions are stored in a tag B+tree
-                                let tag_tree_root_id = PageID((-leaf_node.values[index][0]) as u32);
-                                return Ok(self.lookup_tag_tree(tag_tree_root_id, after)?);
-                            } else {
-                                // Positions are stored directly in the leaf node
-                                let mut positions = leaf_node.values[index].clone();
-                                // Filter positions based on the 'after' parameter
-                                positions.retain(|&pos| pos > after);
-                                return Ok(positions);
-                            }
-                        }
-                        Err(_) => {
-                            // Key not found
-                            return Ok(Vec::new());
-                        }
-                    }
-                } else if page.node.node_type_byte() == INTERNAL_NODE_TYPE {
-                    // Internal node, find the child to follow
-                    let internal_node = page.node.as_any().downcast_ref::<InternalNode>().unwrap();
-
-                    // Find the index of the first key greater than the search key using binary search
-                    let index = match internal_node.keys.binary_search(&key) {
-                        // If key is found, use the child at that index + 1
-                        Ok(idx) => idx + 1,
-                        // If key is not found, Err(idx) gives the index where it would be inserted
-                        // This is the index of the first key greater than the search key
-                        Err(idx) => idx,
-                    };
-
-                    // Use the child at the found index
-                    current_page_id = internal_node.child_ids[index];
+        // Use binary search to find the key in the leaf node's keys
+        match leaf_node.keys.binary_search(&key) {
+            Ok(index) => {
+                // Key found, check if the positions are stored directly or in a TagLeafNode
+                if leaf_node.values[index].len() == 1 && leaf_node.values[index][0] < 0 {
+                    // Positions are stored in a tag B+tree
+                    let tag_tree_root_id = PageID((-leaf_node.values[index][0]) as u32);
+                    return Ok(self.lookup_tag_tree(tag_tree_root_id, after)?);
                 } else {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "Invalid node type",
-                    ));
+                    // Positions are stored directly in the leaf node
+                    let mut positions = leaf_node.values[index].clone();
+                    // Filter positions based on the 'after' parameter
+                    positions.retain(|&pos| pos > after);
+                    return Ok(positions);
                 }
             }
-        } else {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Invalid node type",
-            ));
+            Err(_) => {
+                // Key not found
+                return Ok(Vec::new());
+            }
         }
     }
+
 
     /// Looks up all positions in a tag B+tree that are greater than the given position
     ///
@@ -3701,7 +3670,7 @@ mod tests {
         let page = tag_index.index_pages.get_page(first_child_id).unwrap();
         // Verify that the child page is a TagInternalNode
         assert_eq!(page.node.node_type_byte(), TAG_INTERNAL_NODE_TYPE, "Page should be a TagInternalNode");
-        
+
         // Use lookup() to verify all 500 positions are returned correctly
         let result = tag_index.lookup(tag).unwrap();
         assert_eq!(result.len(), 9000, "lookup() should return 500 positions");

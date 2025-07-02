@@ -214,13 +214,9 @@ impl DCBEventStoreAPI for EventStore {
                         .collect();
 
                     if !matching_qiis.is_empty() {
-                        // Get the position index record
-                        let position_records = tm.scan_positions(Some(position - 1)).map_err(|e| EventStoreError::Io(e.into()))?;
-                        for (pos, record) in position_records {
-                            if pos == position {
-                                positions_matching_tags.push((position, record, matching_qiis));
-                                break;
-                            }
+                        // Get the position index record using lookup instead of scan
+                        if let Some(record) = tm.lookup_position_record(position).map_err(|e| EventStoreError::Io(e.into()))? {
+                            positions_matching_tags.push((position, record, matching_qiis));
                         }
                     }
                 }

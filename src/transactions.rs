@@ -514,6 +514,11 @@ impl TransactionManager {
         self.position_idx.scan(after).map_err(TransactionError::Io)
     }
 
+    /// Lookup a position index record for a specific position
+    pub fn lookup_position_record(&mut self, position: Position) -> Result<Option<PositionIndexRecord>> {
+        self.position_idx.lookup(position).map_err(TransactionError::Io)
+    }
+
     /// Get the last issued position
     pub fn get_last_issued_position(&self) -> Position {
         self.last_issued_position

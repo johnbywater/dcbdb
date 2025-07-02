@@ -260,9 +260,6 @@ impl DCBEventStoreAPI for EventStore {
                     }
                 }
 
-                // Sort the result by position
-                result.sort_by_key(|e| e.position);
-
                 return Ok((result, head));
             }
         }

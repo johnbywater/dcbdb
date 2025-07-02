@@ -214,7 +214,7 @@ impl TransactionManager {
             txn_id,
             position: last_position,
         };
-        
+
         Ok(())
     }
 
@@ -573,16 +573,34 @@ mod tests {
             tags: vec!["tag1".to_string(), "tag2".to_string()],
         };
 
-        let position = tm.append_event(txn_id, event)?;
+        let position = tm.append_event(txn_id, event.clone())?;
         tm.commit(txn_id)?;
 
         tm.flush_and_checkpoint()?;
 
         // Create a new transaction manager to verify checkpoint was written
-        let tm2 = TransactionManager::new(dir.path(), None, None)?;
+        let mut tm2 = TransactionManager::new(dir.path(), None, None)?;
 
         assert_eq!(tm2.checkpoint.txn_id, txn_id);
         assert_eq!(tm2.checkpoint.position, position);
+
+        // Check that tm2's TagIndex correctly returns the position for "tag1" and "tag2"
+        let tag1_positions = tm2.tags_idx.lookup("tag1")?;
+        let tag2_positions = tm2.tags_idx.lookup("tag2")?;
+
+        assert!(tag1_positions.contains(&position), "TagIndex should contain position {} for tag1", position);
+        assert!(tag2_positions.contains(&position), "TagIndex should contain position {} for tag2", position);
+
+        // Check that we can lookup this position in PositionIndex and get the correct record
+        let position_record = tm2.position_idx.lookup(position)?.expect("Position should exist in PositionIndex");
+        assert_eq!(position_record.type_hash, hash_type(&event.event_type), "Type hash in PositionIndex should match event type");
+
+        // Check that read_event_at_position returns an event equal to the one that was appended
+        let read_event = tm2.read_event_at_position(position)?;
+        assert_eq!(read_event.position, position, "Read event position should match appended position");
+        assert_eq!(read_event.event.event_type, event.event_type, "Read event type should match appended event type");
+        assert_eq!(read_event.event.data, event.data, "Read event data should match appended event data");
+        assert_eq!(read_event.event.tags, event.tags, "Read event tags should match appended event tags");
 
         Ok(())
     }
@@ -670,7 +688,7 @@ mod tests {
         let read_event2 = tm2.read_event_at_position(2)?;
         assert_eq!(read_event2.position, 2);
         assert_eq!(read_event2.event.event_type, "event2");
-        
+
         let positions = tm2.tags_idx.lookup("tag2")?;
         assert_eq!(positions, vec![1, 2]);
 

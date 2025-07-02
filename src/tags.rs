@@ -1357,6 +1357,9 @@ impl TagIndex {
         let tag_leaf_node = page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
         positions.extend(tag_leaf_node.positions.clone());
 
+        // Filter positions based on the 'after' parameter
+        positions.retain(|&pos| pos > after);
+
         // Follow the next_leaf_id chain
         let mut next_leaf_id = tag_leaf_node.next_leaf_id;
         while let Some(leaf_id) = next_leaf_id {
@@ -1376,8 +1379,6 @@ impl TagIndex {
             next_leaf_id = leaf_node.next_leaf_id;
         }
 
-        // Filter positions based on the 'after' parameter
-        positions.retain(|&pos| pos > after);
         Ok(positions)
     }
 }

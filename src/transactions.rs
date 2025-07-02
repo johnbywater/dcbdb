@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use crate::api::{DCBEvent, DCBSequencedEvent};
 use crate::checkpoint::CheckpointFile;
@@ -19,7 +18,6 @@ pub struct LastCommittedTxnPosition {
 /// Transaction Manager for managing transactions, segments, and indexes
 pub struct TransactionManager {
     path: PathBuf,
-    checkpoint_interval: Duration,
     uncommitted: HashMap<u64, Vec<(Position, DCBEvent, Vec<u8>)>>,
 
     checkpoint: CheckpointFile,
@@ -31,7 +29,6 @@ pub struct TransactionManager {
     last_issued_txn_id: u64,
     last_issued_position: Position,
     last_committed: LastCommittedTxnPosition,
-    last_checkpoint_time: Instant,
 }
 
 impl TransactionManager {
@@ -43,12 +40,9 @@ impl TransactionManager {
         path: P,
         max_segment_size: Option<usize>,
         cache_size: Option<usize>,
-        checkpoint_interval: Option<Duration>,
     ) -> std::io::Result<Self> {
         let path_buf = path.as_ref().to_path_buf();
         std::fs::create_dir_all(&path_buf)?;
-
-        let checkpoint_interval = checkpoint_interval.unwrap_or(Duration::from_millis(200));
 
         // Read the last checkpoint
         let mut checkpoint = CheckpointFile::new(&path_buf)?;
@@ -92,7 +86,6 @@ impl TransactionManager {
 
         let mut tm = Self {
             path: path_buf,
-            checkpoint_interval,
             uncommitted: HashMap::new(),
 
             checkpoint,
@@ -104,7 +97,6 @@ impl TransactionManager {
             last_issued_txn_id: 0,
             last_issued_position: 0,
             last_committed: LastCommittedTxnPosition { txn_id: 0, position: 0 },
-            last_checkpoint_time: Instant::now(),
         };
 
         // If either index doesn't exist or is invalid, rebuild both from segment files
@@ -317,9 +309,6 @@ impl TransactionManager {
             return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to truncate WAL: {}", e)));
         }
 
-        // Update the last checkpoint time
-        self.last_checkpoint_time = Instant::now();
-
         Ok(())
     }
 
@@ -449,7 +438,7 @@ mod tests {
     #[test]
     fn test_transaction_manager_initialization() -> std::io::Result<()> {
         let dir = tempdir()?;
-        let tm = TransactionManager::new(dir.path(), None, None, None)?;
+        let tm = TransactionManager::new(dir.path(), None, None)?;
 
         assert_eq!(tm.last_issued_txn_id, 0);
         assert_eq!(tm.last_issued_position, 0);
@@ -460,7 +449,7 @@ mod tests {
     #[test]
     fn test_begin_transaction() -> std::io::Result<()> {
         let dir = tempdir()?;
-        let mut tm = TransactionManager::new(dir.path(), None, None, None)?;
+        let mut tm = TransactionManager::new(dir.path(), None, None)?;
 
         let txn_id = tm.begin()?;
         assert_eq!(txn_id, 1);
@@ -474,7 +463,7 @@ mod tests {
     #[test]
     fn test_append_event() -> std::io::Result<()> {
         let dir = tempdir()?;
-        let mut tm = TransactionManager::new(dir.path(), None, None, None)?;
+        let mut tm = TransactionManager::new(dir.path(), None, None)?;
 
         let txn_id = tm.begin()?;
 
@@ -493,7 +482,7 @@ mod tests {
     #[test]
     fn test_commit_transaction() -> std::io::Result<()> {
         let dir = tempdir()?;
-        let mut tm = TransactionManager::new(dir.path(), None, None, None)?;
+        let mut tm = TransactionManager::new(dir.path(), None, None)?;
 
         let txn_id = tm.begin()?;
 
@@ -515,7 +504,7 @@ mod tests {
     #[test]
     fn test_read_event_at_position() -> std::io::Result<()> {
         let dir = tempdir()?;
-        let mut tm = TransactionManager::new(dir.path(), None, None, None)?;
+        let mut tm = TransactionManager::new(dir.path(), None, None)?;
 
         let txn_id = tm.begin()?;
 
@@ -540,7 +529,7 @@ mod tests {
     #[test]
     fn test_multiple_transactions() -> std::io::Result<()> {
         let dir = tempdir()?;
-        let mut tm = TransactionManager::new(dir.path(), None, None, None)?;
+        let mut tm = TransactionManager::new(dir.path(), None, None)?;
 
         // First transaction
         let txn_id1 = tm.begin()?;
@@ -581,7 +570,7 @@ mod tests {
     #[test]
     fn test_flush_and_checkpoint() -> std::io::Result<()> {
         let dir = tempdir()?;
-        let mut tm = TransactionManager::new(dir.path(), None, None, None)?;
+        let mut tm = TransactionManager::new(dir.path(), None, None)?;
 
         let txn_id = tm.begin()?;
 
@@ -597,7 +586,7 @@ mod tests {
         tm.flush_and_checkpoint()?;
 
         // Create a new transaction manager to verify checkpoint was written
-        let tm2 = TransactionManager::new(dir.path(), None, None, None)?;
+        let tm2 = TransactionManager::new(dir.path(), None, None)?;
 
         assert_eq!(tm2.checkpoint.txn_id, txn_id);
         assert_eq!(tm2.checkpoint.position, position);
@@ -611,7 +600,7 @@ mod tests {
 
         // Create a transaction manager and commit some events
         {
-            let mut tm = TransactionManager::new(dir.path(), None, None, None)?;
+            let mut tm = TransactionManager::new(dir.path(), None, None)?;
 
             let txn_id = tm.begin()?;
 
@@ -621,14 +610,14 @@ mod tests {
                 tags: vec!["tag1".to_string(), "tag2".to_string()],
             };
 
-            let position = tm.append_event(txn_id, event.clone())?;
+            let _ = tm.append_event(txn_id, event.clone())?;
             tm.commit(txn_id)?;
 
             // Don't flush and checkpoint, so the events are only in the WAL
         }
 
         // Create a new transaction manager, which should recover from the WAL
-        let mut tm2 = TransactionManager::new(dir.path(), None, None, None)?;
+        let mut tm2 = TransactionManager::new(dir.path(), None, None)?;
 
         assert_eq!(tm2.last_issued_txn_id, 1);
         assert_eq!(tm2.last_issued_position, 1);
@@ -650,7 +639,7 @@ mod tests {
 
         // Create a transaction manager and commit some events
         {
-            let mut tm = TransactionManager::new(dir.path(), None, None, None)?;
+            let mut tm = TransactionManager::new(dir.path(), None, None)?;
 
             let txn_id = tm.begin()?;
 
@@ -678,7 +667,7 @@ mod tests {
         fs::remove_file(dir.path().join(TransactionManager::TAG_INDEX_FILE_NAME))?;
 
         // Create a new transaction manager, which should rebuild the indexes
-        let mut tm2 = TransactionManager::new(dir.path(), None, None, None)?;
+        let mut tm2 = TransactionManager::new(dir.path(), None, None)?;
 
         // Verify the indexes were rebuilt by reading events
         let read_event1 = tm2.read_event_at_position(1)?;

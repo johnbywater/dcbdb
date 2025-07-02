@@ -94,7 +94,7 @@ impl DCBEventStoreAPI for EventStore {
         limit: Option<usize>,
     ) -> Result<(Vec<DCBSequencedEvent>, Option<i64>)> {
         let mut result: Vec<DCBSequencedEvent> = Vec::new();
-        let mut head: Option<i64> = None;
+        let mut head;
 
         // Special case for limit 0
         if let Some(0) = limit {
@@ -114,10 +114,9 @@ impl DCBEventStoreAPI for EventStore {
             return Ok((Vec::new(), None));
         }
 
-        // If limit is None, set the head to the last_issued_position
-        if limit.is_none() {
-            head = Some(last_issued_position as i64);
-        }
+        // Set the head to the last_issued_position by default
+        // It may be overridden later if we hit the limit
+        head = Some(last_issued_position as i64);
 
         // Check if we can use the optimized path with tag indexes
         if let Some(ref q) = query {

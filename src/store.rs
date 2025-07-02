@@ -200,27 +200,59 @@ impl DCBEventStoreAPI for EventStore {
                     positions_with_tags.push((pos, current_tags, current_qiis));
                 }
 
-                // Filter for tag-matching query items
-                let mut positions_matching_tags = Vec::new();
+                // Filter for tag-matching query items using an iterator
+                let positions_with_tags_iter = positions_with_tags.into_iter();
 
                 // Lock the transaction manager for scanning positions
                 let mut tm = self.transaction_manager.lock().unwrap();
 
-                for (position, tags, qiis) in positions_with_tags {
-                    let matching_qiis: std::collections::HashSet<usize> = qiis.into_iter()
-                        .filter(|&qii| {
-                            // Check if all tags in the query item are in the position's tags
-                            qi_tags[qii].is_subset(&tags)
-                        })
-                        .collect();
+                // Iterator that filters positions based on tag matching
+                struct TagMatchingIterator<'a, I> 
+                where 
+                    I: Iterator<Item = (Position, std::collections::HashSet<String>, std::collections::HashSet<usize>)>
+                {
+                    positions_with_tags_iter: I,
+                    qi_tags: &'a Vec<std::collections::HashSet<String>>,
+                    tm: &'a mut TransactionManager,
+                }
 
-                    if !matching_qiis.is_empty() {
-                        // Get the position index record using lookup instead of scan
-                        if let Some(record) = tm.lookup_position_record(position).map_err(|e| EventStoreError::Io(e.into()))? {
-                            positions_matching_tags.push((position, record, matching_qiis));
+                impl<'a, I> Iterator for TagMatchingIterator<'a, I> 
+                where 
+                    I: Iterator<Item = (Position, std::collections::HashSet<String>, std::collections::HashSet<usize>)>
+                {
+                    type Item = (Position, crate::positions::PositionIndexRecord, std::collections::HashSet<usize>);
+
+                    fn next(&mut self) -> Option<Self::Item> {
+                        loop {
+                            let (position, tags, qiis) = self.positions_with_tags_iter.next()?;
+
+                            let matching_qiis: std::collections::HashSet<usize> = qiis.into_iter()
+                                .filter(|&qii| {
+                                    // Check if all tags in the query item are in the position's tags
+                                    self.qi_tags[qii].is_subset(&tags)
+                                })
+                                .collect();
+
+                            if !matching_qiis.is_empty() {
+                                // Get the position index record using lookup instead of scan
+                                if let Ok(Some(record)) = self.tm.lookup_position_record(position).map_err(|e| EventStoreError::Io(e.into())) {
+                                    return Some((position, record, matching_qiis));
+                                }
+                            }
+                            // If no match or error, continue to next position
                         }
                     }
                 }
+
+                // Create and use the tag matching iterator
+                let tag_matching_iter = TagMatchingIterator {
+                    positions_with_tags_iter,
+                    qi_tags: &qi_tags,
+                    tm: &mut tm,
+                };
+
+                // Collect the filtered positions and records
+                let positions_matching_tags: Vec<_> = tag_matching_iter.collect();
 
                 // Filter for type-matching query items using an iterator
                 let positions_matching_tags_iter = positions_matching_tags.into_iter();

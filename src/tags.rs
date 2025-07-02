@@ -1219,7 +1219,7 @@ impl TagIndex {
     /// # Returns
     /// * `std::io::Result<Vec<Position>>` - Ok(positions) if the tag was found, Ok(empty vec) if not found, Err if an error occurred
     pub fn lookup(&mut self, tag: &str) -> std::io::Result<Vec<Position>> {
-        self.lookup_with_after(tag, None)
+        self.lookup_with_after(tag, 0)
     }
 
     /// Looks up a tag in the tag index and returns positions greater than the given position
@@ -1230,7 +1230,7 @@ impl TagIndex {
     ///
     /// # Returns
     /// * `std::io::Result<Vec<Position>>` - Ok(positions) if the tag was found, Ok(empty vec) if not found, Err if an error occurred
-    pub fn lookup_with_after(&mut self, tag: &str, after: Option<Position>) -> std::io::Result<Vec<Position>> {
+    pub fn lookup_with_after(&mut self, tag: &str, after: Position) -> std::io::Result<Vec<Position>> {
         // Hash the tag to get the key
         let tag_hash = hash_tag(tag);
         let mut key = [0u8; TAG_HASH_LEN];
@@ -1260,9 +1260,7 @@ impl TagIndex {
                         // Positions are stored directly in the leaf node
                         let mut positions = leaf_node.values[index].clone();
                         // Filter positions based on the 'after' parameter
-                        if let Some(after_pos) = after {
-                            positions.retain(|&pos| pos > after_pos);
-                        }
+                        positions.retain(|&pos| pos > after);
                         return Ok(positions);
                     }
                 }
@@ -1295,9 +1293,7 @@ impl TagIndex {
                                 // Positions are stored directly in the leaf node
                                 let mut positions = leaf_node.values[index].clone();
                                 // Filter positions based on the 'after' parameter
-                                if let Some(after_pos) = after {
-                                    positions.retain(|&pos| pos > after_pos);
-                                }
+                                positions.retain(|&pos| pos > after);
                                 return Ok(positions);
                             }
                         }
@@ -1344,7 +1340,7 @@ impl TagIndex {
     ///
     /// # Returns
     /// * `std::io::Result<Vec<Position>>` - All positions in the tag B+tree that are greater than the given position
-    pub fn lookup_tag_tree(&mut self, root_page_id: PageID, after: Option<Position>) -> std::io::Result<Vec<Position>> {
+    pub fn lookup_tag_tree(&mut self, root_page_id: PageID, after: Position) -> std::io::Result<Vec<Position>> {
         // Start with the root page ID
         let mut current_page_id = root_page_id;
 
@@ -1402,10 +1398,7 @@ impl TagIndex {
         }
 
         // Filter positions based on the 'after' parameter
-        if let Some(after_pos) = after {
-            positions.retain(|&pos| pos > after_pos);
-        }
-
+        positions.retain(|&pos| pos > after);
         Ok(positions)
     }
 }
@@ -2819,6 +2812,56 @@ mod tests {
     }
 
     #[test]
+    fn test_lookup_with_after() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+
+        // Append the filename to the directory path
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Create a new TagIndex instance
+        let page_size = 4096;
+        let mut tag_index = TagIndex::new(&test_path, page_size).unwrap();
+
+        // Insert multiple positions for a single tag
+        let tag = "test-tag";
+        let mut inserted_positions = Vec::new();
+        for i in 1..11 {
+            let position = i as i64;
+            tag_index.insert(tag, position).unwrap();
+            inserted_positions.push(position);
+        }
+
+        // Test lookup with no 'after' parameter (should return all positions)
+        let all_positions = tag_index.lookup(tag).unwrap();
+        assert_eq!(all_positions.len(), 10);
+        for i in 0..10 {
+            assert!(all_positions.contains(&({i + 1} as i64)));
+        }
+
+        // Test lookup_with_after with 'after' parameter in the middle of the range
+        let after: Position = 5; // After the 5th position
+        let middle_positions = tag_index.lookup_with_after(tag, after).unwrap();
+        assert_eq!(middle_positions.len(), 5); // Should return the last 5 positions
+        for i in 5..10 {
+            assert!(middle_positions.contains(&({i+1} as i64)));
+        }
+
+        // Test lookup_with_after with 'after' parameter at the beginning
+        let after: Position = -1; // Before the first position
+        let start_positions = tag_index.lookup_with_after(tag, after).unwrap();
+        assert_eq!(start_positions.len(), 10); // Should return all positions
+        for i in 0..10 {
+            assert!(start_positions.contains(&({i+1} as i64)));
+        }
+
+        // Test lookup_with_after with 'after' parameter at the end
+        let after: Position = 10; // After the last position
+        let end_positions = tag_index.lookup_with_after(tag, after).unwrap();
+        assert_eq!(end_positions.len(), 0); // Should return no positions
+    }
+
+    #[test]
     fn test_insert_lookup_split_leaf() {
         // Create a temporary directory
         let temp_dir = TempDir::new().expect("Failed to create temporary directory");
@@ -2832,7 +2875,7 @@ mod tests {
 
         // Insert enough tags to cause the leaf node to split
         let mut inserted_tags = Vec::new();
-        for i in 0..20 {
+        for i in 1..21 {
             let tag = format!("tag-{}", i);
             let position = (i * 100) as i64;
             tag_index.insert(&tag, position).unwrap();
@@ -2951,7 +2994,7 @@ mod tests {
 
         // Insert enough tags to cause internal node splitting
         let mut inserted_tags = Vec::new();
-        for i in 0..250 {
+        for i in 1..251 {
             let tag = format!("tag-{}", i);
             let position = (i * 100) as i64;
             tag_index.insert(&tag, position).unwrap();
@@ -2989,7 +3032,7 @@ mod tests {
 
         // Create a TagLeafNode with many positions to calculate its size
         let mut positions = Vec::new();
-        for i in 0..100 {
+        for i in 1..101 {
             positions.push(i as i64);
         }
 
@@ -3011,14 +3054,14 @@ mod tests {
         let mut inserted_positions = Vec::new();
 
         // First, insert 100 positions to create a TagLeafNode
-        for i in 0..100 {
+        for i in 1..101 {
             let position = i as i64;
             tag_index.insert(tag, position).unwrap();
             inserted_positions.push(position);
         }
 
-        // Now insert 101 more positions to trigger splitting the TagLeafNode
-        for i in 100..201 {
+        // Now insert 50 more positions to trigger splitting the TagLeafNode
+        for i in 101..151 {
             let position = i as i64;
             tag_index.insert(tag, position).unwrap();
             inserted_positions.push(position);
@@ -3073,9 +3116,9 @@ mod tests {
 
         // Use lookup() to verify all 201 positions are returned correctly
         let positions = tag_index.lookup(tag).unwrap();
-        assert_eq!(positions.len(), 201, "lookup() should return 201 positions");
-        for i in 0..201 {
-            assert!(positions.contains(&(i as i64)), "lookup() should return position {}", i);
+        assert_eq!(positions.len(), 150, "lookup() should return 150 positions");
+        for i in 0..150 {
+            assert!(positions.contains(&({i+1} as i64)), "lookup() should return position {}", i);
         }
 
         // Flush changes to disk
@@ -3086,60 +3129,10 @@ mod tests {
 
         // Use lookup() to verify all 201 positions are still returned correctly
         let positions = tag_index2.lookup(tag).unwrap();
-        assert_eq!(positions.len(), 201, "lookup() should return 201 positions after reopening");
-        for i in 0..201 {
-            assert!(positions.contains(&(i as i64)), "lookup() should return position {} after reopening", i);
+        assert_eq!(positions.len(), 150, "lookup() should return 201 positions after reopening");
+        for i in 0..150 {
+            assert!(positions.contains(&({i+1} as i64)), "lookup() should return position {} after reopening", i);
         }
-    }
-
-    #[test]
-    fn test_lookup_with_after() {
-        // Create a temporary directory
-        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
-
-        // Append the filename to the directory path
-        let test_path = temp_dir.path().join("index.dat");
-
-        // Create a new TagIndex instance
-        let page_size = 4096;
-        let mut tag_index = TagIndex::new(&test_path, page_size).unwrap();
-
-        // Insert multiple positions for a single tag
-        let tag = "test-tag";
-        let mut inserted_positions = Vec::new();
-        for i in 0..10 {
-            let position = i as i64;
-            tag_index.insert(tag, position).unwrap();
-            inserted_positions.push(position);
-        }
-
-        // Test lookup with no 'after' parameter (should return all positions)
-        let all_positions = tag_index.lookup(tag).unwrap();
-        assert_eq!(all_positions.len(), 10);
-        for i in 0..10 {
-            assert!(all_positions.contains(&(i as i64)));
-        }
-
-        // Test lookup_with_after with 'after' parameter in the middle of the range
-        let after_pos: Position = 4; // After the 5th position
-        let middle_positions = tag_index.lookup_with_after(tag, Some(after_pos)).unwrap();
-        assert_eq!(middle_positions.len(), 5); // Should return the last 5 positions
-        for i in 5..10 {
-            assert!(middle_positions.contains(&(i as i64)));
-        }
-
-        // Test lookup_with_after with 'after' parameter at the beginning
-        let after_start: Position = -1; // Before the first position
-        let start_positions = tag_index.lookup_with_after(tag, Some(after_start)).unwrap();
-        assert_eq!(start_positions.len(), 10); // Should return all positions
-        for i in 0..10 {
-            assert!(start_positions.contains(&(i as i64)));
-        }
-
-        // Test lookup_with_after with 'after' parameter at the end
-        let after_end: Position = 9; // After the last position
-        let end_positions = tag_index.lookup_with_after(tag, Some(after_end)).unwrap();
-        assert_eq!(end_positions.len(), 0); // Should return no positions
     }
 
     #[test]
@@ -3158,7 +3151,7 @@ mod tests {
         let mut inserted_positions = Vec::new();
 
         // First, insert 100 positions
-        for i in 0..100 {
+        for i in 1..101 {
             let position = i as i64;
             tag_index.insert(tag, position).unwrap();
             inserted_positions.push(position);
@@ -3193,7 +3186,7 @@ mod tests {
         assert_eq!(leaf_node.values[0].len(), 100, "Value should have 100 elements");
 
         // Now insert 11 more positions to trigger the creation of a TagLeafNode
-        for i in 100..111 {
+        for i in 101..112 {
             let position = i as i64;
             tag_index.insert(tag, position).unwrap();
             inserted_positions.push(position);
@@ -3238,13 +3231,13 @@ mod tests {
 
         // Verify that the positions are correct
         for i in 0..111 {
-            assert_eq!(tag_leaf_node.positions[i], i as i64, "Position at index {} should be {}", i, i);
+            assert_eq!(tag_leaf_node.positions[i], {i+1} as i64, "Position at index {} should be {}", i, i);
         }
 
         // Use lookup() to verify all 111 positions are returned correctly
         let positions = tag_index.lookup(tag).unwrap();
         assert_eq!(positions.len(), 111, "lookup() should return 111 positions");
-        for i in 0..111 {
+        for i in 1..112 {
             assert!(positions.contains(&(i as i64)), "lookup() should return position {}", i);
         }
 
@@ -3257,7 +3250,7 @@ mod tests {
         // Use lookup() to verify all 111 positions are still returned correctly after reopening
         let positions2 = tag_index2.lookup(tag).unwrap();
         assert_eq!(positions2.len(), 111, "lookup() should return 111 positions after reopening");
-        for i in 0..111 {
+        for i in 1..112 {
             assert!(positions2.contains(&(i as i64)), "lookup() should return position {} after reopening", i);
         }
 
@@ -3292,7 +3285,7 @@ mod tests {
 
         // Verify that the positions are still correct
         for i in 0..111 {
-            assert_eq!(tag_leaf_node2.positions[i], i as i64, "Position at index {} should still be {} after reopening", i, i);
+            assert_eq!(tag_leaf_node2.positions[i], {i + 1} as i64, "Position at index {} should still be {} after reopening", i, i);
         }
     }
 

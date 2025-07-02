@@ -222,17 +222,48 @@ impl DCBEventStoreAPI for EventStore {
                     }
                 }
 
-                // Filter for type-matching query items
-                let mut positions_and_idx_records = Vec::new();
-                for (position, position_idx_record, qiis) in positions_matching_tags {
-                    let type_matches = qiis.iter().any(|&qii| {
-                        qi_type_hashes[qii].is_empty() || qi_type_hashes[qii].contains(&position_idx_record.type_hash)
-                    });
+                // Filter for type-matching query items using an iterator
+                let positions_matching_tags_iter = positions_matching_tags.into_iter();
 
-                    if type_matches {
-                        positions_and_idx_records.push((position, position_idx_record));
+                // Iterator that filters positions based on type matching
+                struct TypeMatchingIterator<'a, I> 
+                where 
+                    I: Iterator<Item = (Position, crate::positions::PositionIndexRecord, std::collections::HashSet<usize>)>
+                {
+                    positions_matching_tags_iter: I,
+                    qi_type_hashes: &'a Vec<std::collections::HashSet<Vec<u8>>>,
+                }
+
+                impl<'a, I> Iterator for TypeMatchingIterator<'a, I> 
+                where 
+                    I: Iterator<Item = (Position, crate::positions::PositionIndexRecord, std::collections::HashSet<usize>)>
+                {
+                    type Item = (Position, crate::positions::PositionIndexRecord);
+
+                    fn next(&mut self) -> Option<Self::Item> {
+                        loop {
+                            let (position, position_idx_record, qiis) = self.positions_matching_tags_iter.next()?;
+
+                            let type_matches = qiis.iter().any(|&qii| {
+                                self.qi_type_hashes[qii].is_empty() || self.qi_type_hashes[qii].contains(&position_idx_record.type_hash)
+                            });
+
+                            if type_matches {
+                                return Some((position, position_idx_record));
+                            }
+                            // If no match, continue to next position
+                        }
                     }
                 }
+
+                // Create and use the type matching iterator
+                let type_matching_iter = TypeMatchingIterator {
+                    positions_matching_tags_iter,
+                    qi_type_hashes: &qi_type_hashes,
+                };
+
+                // Collect the filtered positions and records
+                let positions_and_idx_records: Vec<_> = type_matching_iter.collect();
 
                 // Read events at the remaining positions using iterators
                 let positions_and_idx_records_iter = positions_and_idx_records.into_iter();

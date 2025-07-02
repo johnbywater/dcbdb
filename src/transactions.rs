@@ -583,11 +583,11 @@ mod tests {
         assert_eq!(read_event.event.event_type, event.event_type);
         assert_eq!(read_event.event.data, event.data);
         assert_eq!(read_event.event.tags, event.tags);
-        
+
         tm.flush_and_checkpoint()?;
 
         let mut tm = TransactionManager::new(dir.path(), None, None)?;
-        
+
         let positions = tm.tags_idx.lookup("tag1")?;
         assert_eq!(positions.len(), 1);
         assert_eq!(positions[0], position);

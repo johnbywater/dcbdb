@@ -1211,7 +1211,7 @@ impl TagIndex {
         }
     }
 
-    /// Looks up a tag in the tag index and returns an iterator of positions
+    /// Looks up a tag in the tag index and returns all positions
     ///
     /// # Arguments
     /// * `tag` - The tag to look up
@@ -1219,6 +1219,18 @@ impl TagIndex {
     /// # Returns
     /// * `std::io::Result<Vec<Position>>` - Ok(positions) if the tag was found, Ok(empty vec) if not found, Err if an error occurred
     pub fn lookup(&mut self, tag: &str) -> std::io::Result<Vec<Position>> {
+        self.lookup_with_after(tag, None)
+    }
+
+    /// Looks up a tag in the tag index and returns positions greater than the given position
+    ///
+    /// # Arguments
+    /// * `tag` - The tag to look up
+    /// * `after` - Optional position to start from (exclusive). If None, returns all positions.
+    ///
+    /// # Returns
+    /// * `std::io::Result<Vec<Position>>` - Ok(positions) if the tag was found, Ok(empty vec) if not found, Err if an error occurred
+    pub fn lookup_with_after(&mut self, tag: &str, after: Option<Position>) -> std::io::Result<Vec<Position>> {
         // Hash the tag to get the key
         let tag_hash = hash_tag(tag);
         let mut key = [0u8; TAG_HASH_LEN];
@@ -1243,10 +1255,15 @@ impl TagIndex {
                     if leaf_node.values[index].len() == 1 && leaf_node.values[index][0] < 0 {
                         // Positions are stored in a tag B+tree
                         let tag_tree_root_id = PageID((-leaf_node.values[index][0]) as u32);
-                        return Ok(self.lookup_tag_tree(tag_tree_root_id)?);
+                        return Ok(self.lookup_tag_tree(tag_tree_root_id, after)?);
                     } else {
                         // Positions are stored directly in the leaf node
-                        return Ok(leaf_node.values[index].clone());
+                        let mut positions = leaf_node.values[index].clone();
+                        // Filter positions based on the 'after' parameter
+                        if let Some(after_pos) = after {
+                            positions.retain(|&pos| pos > after_pos);
+                        }
+                        return Ok(positions);
                     }
                 }
                 Err(_) => {
@@ -1273,10 +1290,15 @@ impl TagIndex {
                             if leaf_node.values[index].len() == 1 && leaf_node.values[index][0] < 0 {
                                 // Positions are stored in a tag B+tree
                                 let tag_tree_root_id = PageID((-leaf_node.values[index][0]) as u32);
-                                return Ok(self.lookup_tag_tree(tag_tree_root_id)?);
+                                return Ok(self.lookup_tag_tree(tag_tree_root_id, after)?);
                             } else {
                                 // Positions are stored directly in the leaf node
-                                return Ok(leaf_node.values[index].clone());
+                                let mut positions = leaf_node.values[index].clone();
+                                // Filter positions based on the 'after' parameter
+                                if let Some(after_pos) = after {
+                                    positions.retain(|&pos| pos > after_pos);
+                                }
+                                return Ok(positions);
                             }
                         }
                         Err(_) => {
@@ -1314,14 +1336,15 @@ impl TagIndex {
         }
     }
 
-    /// Looks up all positions in a tag B+tree
+    /// Looks up all positions in a tag B+tree that are greater than the given position
     ///
     /// # Arguments
     /// * `root_page_id` - The PageID of the root page of the tag B+tree
+    /// * `after` - Optional position to start from (exclusive). If None, returns all positions.
     ///
     /// # Returns
-    /// * `std::io::Result<Vec<Position>>` - All positions in the tag B+tree
-    pub fn lookup_tag_tree(&mut self, root_page_id: PageID) -> std::io::Result<Vec<Position>> {
+    /// * `std::io::Result<Vec<Position>>` - All positions in the tag B+tree that are greater than the given position
+    pub fn lookup_tag_tree(&mut self, root_page_id: PageID, after: Option<Position>) -> std::io::Result<Vec<Position>> {
         // Get the root page
         let page = self.index_pages.get_page(root_page_id)?;
 
@@ -1340,6 +1363,11 @@ impl TagIndex {
                 let leaf_node = leaf_page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
                 positions.extend(leaf_node.positions.clone());
                 next_leaf_id = leaf_node.next_leaf_id;
+            }
+
+            // Filter positions based on the 'after' parameter
+            if let Some(after_pos) = after {
+                positions.retain(|&pos| pos > after_pos);
             }
 
             Ok(positions)
@@ -1374,7 +1402,7 @@ impl TagIndex {
                 return Ok(positions);
             } else {
                 // If the leftmost child is a TagInternalNode, recursively get positions from it
-                return self.lookup_tag_tree(leftmost_child_id);
+                return self.lookup_tag_tree(leftmost_child_id, after);
             }
         } else {
             // Invalid node type
@@ -2933,7 +2961,7 @@ mod tests {
             tag_index.insert(&tag, position).unwrap();
             inserted_tags.push((tag, position));
         }
-        
+
         // Check lookup before flush
         for (tag, position) in &inserted_tags {
             let positions = tag_index.lookup(tag).unwrap();
@@ -3066,6 +3094,56 @@ mod tests {
         for i in 0..201 {
             assert!(positions.contains(&(i as i64)), "lookup() should return position {} after reopening", i);
         }
+    }
+
+    #[test]
+    fn test_lookup_with_after() {
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+
+        // Append the filename to the directory path
+        let test_path = temp_dir.path().join("index.dat");
+
+        // Create a new TagIndex instance
+        let page_size = 4096;
+        let mut tag_index = TagIndex::new(&test_path, page_size).unwrap();
+
+        // Insert multiple positions for a single tag
+        let tag = "test-tag";
+        let mut inserted_positions = Vec::new();
+        for i in 0..10 {
+            let position = i as i64;
+            tag_index.insert(tag, position).unwrap();
+            inserted_positions.push(position);
+        }
+
+        // Test lookup with no 'after' parameter (should return all positions)
+        let all_positions = tag_index.lookup(tag).unwrap();
+        assert_eq!(all_positions.len(), 10);
+        for i in 0..10 {
+            assert!(all_positions.contains(&(i as i64)));
+        }
+
+        // Test lookup_with_after with 'after' parameter in the middle of the range
+        let after_pos: Position = 4; // After the 5th position
+        let middle_positions = tag_index.lookup_with_after(tag, Some(after_pos)).unwrap();
+        assert_eq!(middle_positions.len(), 5); // Should return the last 5 positions
+        for i in 5..10 {
+            assert!(middle_positions.contains(&(i as i64)));
+        }
+
+        // Test lookup_with_after with 'after' parameter at the beginning
+        let after_start: Position = -1; // Before the first position
+        let start_positions = tag_index.lookup_with_after(tag, Some(after_start)).unwrap();
+        assert_eq!(start_positions.len(), 10); // Should return all positions
+        for i in 0..10 {
+            assert!(start_positions.contains(&(i as i64)));
+        }
+
+        // Test lookup_with_after with 'after' parameter at the end
+        let after_end: Position = 9; // After the last position
+        let end_positions = tag_index.lookup_with_after(tag, Some(after_end)).unwrap();
+        assert_eq!(end_positions.len(), 0); // Should return no positions
     }
 
     #[test]

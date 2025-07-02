@@ -108,9 +108,19 @@ impl DCBEventStoreAPI for EventStore {
                     for tag in &item.tags {
                         // Get positions for this tag
                         let tag_positions = if let Some(after_pos) = after_position {
-                            tm.lookup_positions_for_tag_after(tag, after_pos).map_err(|e| EventStoreError::Io(e.into()))?
+                            let iter = tm.lookup_positions_for_tag_after_iter(tag, after_pos).map_err(|e| EventStoreError::Io(e.into()))?;
+                            let mut positions = Vec::new();
+                            for pos_result in iter {
+                                positions.push(pos_result.map_err(|e| EventStoreError::Io(e.into()))?);
+                            }
+                            positions
                         } else {
-                            tm.lookup_positions_for_tag(tag).map_err(|e| EventStoreError::Io(e.into()))?
+                            let iter = tm.lookup_positions_for_tag_iter(tag).map_err(|e| EventStoreError::Io(e.into()))?;
+                            let mut positions = Vec::new();
+                            for pos_result in iter {
+                                positions.push(pos_result.map_err(|e| EventStoreError::Io(e.into()))?);
+                            }
+                            positions
                         };
 
                         // If this is the first tag, use its positions

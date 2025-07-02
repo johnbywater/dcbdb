@@ -5,6 +5,210 @@ use std::any::Any;
 use crate::pagedfile::{PageID, PAGE_ID_SIZE};
 use crate::wal::{Position, POSITION_SIZE};
 use crate::indexpages::{IndexPages, Node, IndexPage, HeaderNode};
+use std::io;
+
+/// An iterator over positions in a direct position list
+pub struct DirectPositionIterator {
+    positions: Vec<Position>,
+    current_index: usize,
+}
+
+impl DirectPositionIterator {
+    /// Creates a new DirectPositionIterator
+    pub fn new(positions: Vec<Position>, after: Position) -> Self {
+        // Find the index of the first position greater than 'after'
+        let start_idx = match positions.binary_search(&after) {
+            Ok(idx) => idx + 1, // Found exact match, start from next
+            Err(idx) => idx,    // Not found, start from insertion point
+        };
+
+        Self {
+            positions,
+            current_index: start_idx,
+        }
+    }
+}
+
+impl Iterator for DirectPositionIterator {
+    type Item = io::Result<Position>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current_index < self.positions.len() {
+            let position = self.positions[self.current_index];
+            self.current_index += 1;
+            Some(Ok(position))
+        } else {
+            None
+        }
+    }
+}
+
+/// An iterator over positions in a tag B+tree
+pub struct TagTreePositionIterator<'a> {
+    tag_index: &'a mut TagIndex,
+    current_page_id: Option<PageID>,
+    current_positions: Vec<Position>,
+    current_index: usize,
+    after: Position,
+    first_node: bool,
+}
+
+impl<'a> TagTreePositionIterator<'a> {
+    /// Creates a new TagTreePositionIterator
+    pub fn new(tag_index: &'a mut TagIndex, root_page_id: PageID, after: Position) -> Self {
+        Self {
+            tag_index,
+            current_page_id: Some(root_page_id),
+            current_positions: Vec::new(),
+            current_index: 0,
+            after,
+            first_node: true,
+        }
+    }
+
+    /// Finds the leaf node that would contain positions greater than 'after'
+    fn find_first_leaf_node(&mut self) -> io::Result<()> {
+        let mut current_page_id = match self.current_page_id {
+            Some(id) => id,
+            None => return Ok(()),
+        };
+
+        // Traverse down the tree until we find a leaf node
+        loop {
+            let page = self.tag_index.index_pages.get_page(current_page_id)?;
+
+            if page.node.node_type_byte() == TAG_LEAF_NODE_TYPE {
+                // Found a leaf node
+                self.current_page_id = Some(current_page_id);
+                return Ok(());
+            } else if page.node.node_type_byte() == TAG_INTERNAL_NODE_TYPE {
+                // Internal node, find the appropriate child based on the 'after' parameter
+                let tag_internal_node = page.node.as_any().downcast_ref::<TagInternalNode>().unwrap();
+
+                if tag_internal_node.child_ids.is_empty() {
+                    self.current_page_id = None;
+                    return Ok(());
+                }
+
+                // Find the index of the first key greater than the 'after' parameter using binary search
+                let index = match tag_internal_node.keys.binary_search(&self.after) {
+                    // If 'after' is found, use the child at that index + 1
+                    Ok(idx) => idx + 1,
+                    // If 'after' is not found, Err(idx) gives the index where it would be inserted
+                    // This is the index of the first key greater than 'after'
+                    Err(idx) => idx,
+                };
+
+                // Use the child at the found index
+                current_page_id = tag_internal_node.child_ids[index];
+            } else {
+                // Invalid node type
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Invalid node type",
+                ));
+            }
+        }
+    }
+
+    /// Loads the next leaf node and its positions
+    fn load_next_leaf_node(&mut self) -> io::Result<bool> {
+        // If this is the first node, find it first
+        if self.first_node {
+            self.find_first_leaf_node()?;
+            self.first_node = false;
+        }
+
+        // If there's no current page, we're done
+        let current_page_id = match self.current_page_id {
+            Some(id) => id,
+            None => return Ok(false),
+        };
+
+        // Get the leaf node
+        let page = self.tag_index.index_pages.get_page(current_page_id)?;
+
+        if page.node.node_type_byte() != TAG_LEAF_NODE_TYPE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Expected leaf node",
+            ));
+        }
+
+        let leaf_node = page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
+
+        // If this is the first leaf node, filter positions greater than 'after'
+        if self.current_positions.is_empty() {
+            // Use binary search to find the index of the first position greater than 'after'
+            let start_idx = match leaf_node.positions.binary_search(&self.after) {
+                // If 'after' is found, start from the next position
+                Ok(idx) => idx + 1,
+                // If 'after' is not found, Err(idx) gives the index where it would be inserted
+                // This is the index of the first position greater than 'after'
+                Err(idx) => idx,
+            };
+
+            // Only take positions from start_idx onwards
+            self.current_positions = leaf_node.positions[start_idx..].to_vec();
+        } else {
+            // For subsequent nodes, take all positions
+            self.current_positions = leaf_node.positions.clone();
+        }
+
+        // Reset the index
+        self.current_index = 0;
+
+        // Move to the next leaf node
+        self.current_page_id = leaf_node.next_leaf_id;
+
+        // Return true if we loaded positions
+        Ok(!self.current_positions.is_empty())
+    }
+}
+
+impl<'a> Iterator for TagTreePositionIterator<'a> {
+    type Item = io::Result<Position>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // If we've exhausted the current positions, try to load more
+        if self.current_index >= self.current_positions.len() {
+            match self.load_next_leaf_node() {
+                Ok(true) => {}, // Loaded more positions
+                Ok(false) => return None, // No more positions
+                Err(e) => return Some(Err(e)), // Error loading positions
+            }
+        }
+
+        // If we still have no positions, we're done
+        if self.current_positions.is_empty() {
+            return None;
+        }
+
+        // Return the next position
+        let position = self.current_positions[self.current_index];
+        self.current_index += 1;
+        Some(Ok(position))
+    }
+}
+
+/// An iterator over positions for a tag
+pub enum TagPositionIterator<'a> {
+    /// Positions stored directly in a leaf node
+    Direct(DirectPositionIterator),
+    /// Positions stored in a tag B+tree
+    TagTree(TagTreePositionIterator<'a>),
+}
+
+impl<'a> Iterator for TagPositionIterator<'a> {
+    type Item = io::Result<Position>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            TagPositionIterator::Direct(iter) => iter.next(),
+            TagPositionIterator::TagTree(iter) => iter.next(),
+        }
+    }
+}
 
 
 // Hash a tag string to a fixed-length byte array
@@ -1211,6 +1415,17 @@ impl TagIndex {
         }
     }
 
+    /// Looks up a tag in the tag index and returns an iterator over all positions
+    ///
+    /// # Arguments
+    /// * `tag` - The tag to look up
+    ///
+    /// # Returns
+    /// * `std::io::Result<TagPositionIterator>` - An iterator over positions if the tag was found, empty iterator if not found, Err if an error occurred
+    pub fn lookup_iter<'a>(&'a mut self, tag: &str) -> std::io::Result<TagPositionIterator<'a>> {
+        self.lookup_with_after_iter(tag, 0)
+    }
+
     /// Looks up a tag in the tag index and returns all positions
     ///
     /// # Arguments
@@ -1219,18 +1434,27 @@ impl TagIndex {
     /// # Returns
     /// * `std::io::Result<Vec<Position>>` - Ok(positions) if the tag was found, Ok(empty vec) if not found, Err if an error occurred
     pub fn lookup(&mut self, tag: &str) -> std::io::Result<Vec<Position>> {
-        self.lookup_with_after(tag, 0)
+        // Get an iterator over positions
+        let iter = self.lookup_iter(tag)?;
+
+        // Collect the positions into a Vec
+        let mut positions = Vec::new();
+        for result in iter {
+            positions.push(result?);
+        }
+
+        Ok(positions)
     }
 
-    /// Looks up a tag in the tag index and returns positions greater than the given position
+    /// Looks up a tag in the tag index and returns an iterator over positions greater than the given position
     ///
     /// # Arguments
     /// * `tag` - The tag to look up
-    /// * `after` - Optional position to start from (exclusive). If None, returns all positions.
+    /// * `after` - Position to start from (exclusive)
     ///
     /// # Returns
-    /// * `std::io::Result<Vec<Position>>` - Ok(positions) if the tag was found, Ok(empty vec) if not found, Err if an error occurred
-    pub fn lookup_with_after(&mut self, tag: &str, after: Position) -> std::io::Result<Vec<Position>> {
+    /// * `std::io::Result<TagPositionIterator>` - An iterator over positions if the tag was found, empty iterator if not found, Err if an error occurred
+    pub fn lookup_with_after_iter<'a>(&'a mut self, tag: &str, after: Position) -> std::io::Result<TagPositionIterator<'a>> {
         // Hash the tag to get the key
         let tag_hash = hash_tag(tag);
         let mut key = [0u8; TAG_HASH_LEN];
@@ -1284,23 +1508,39 @@ impl TagIndex {
                 if leaf_node.values[index].len() == 1 && leaf_node.values[index][0] < 0 {
                     // Positions are stored in a tag B+tree
                     let tag_tree_root_id = PageID((-leaf_node.values[index][0]) as u32);
-                    return Ok(self.lookup_tag_tree(tag_tree_root_id, after)?);
+                    Ok(TagPositionIterator::TagTree(TagTreePositionIterator::new(self, tag_tree_root_id, after)))
                 } else {
                     // Positions are stored directly in the leaf node
                     let positions = leaf_node.values[index].clone();
-                    // Use binary search to find where to start filtering
-                    let start_idx = match positions.binary_search(&after) {
-                        Ok(idx) => idx + 1,      // Found exact match, start from next
-                        Err(idx) => idx,         // Not found, start from insertion point
-                    };
-                    return Ok(positions[start_idx..].to_vec());
+                    Ok(TagPositionIterator::Direct(DirectPositionIterator::new(positions, after)))
                 }
             }
             Err(_) => {
                 // Key not found
-                return Ok(Vec::new());
+                Ok(TagPositionIterator::Direct(DirectPositionIterator::new(Vec::new(), after)))
             }
         }
+    }
+
+    /// Looks up a tag in the tag index and returns positions greater than the given position
+    ///
+    /// # Arguments
+    /// * `tag` - The tag to look up
+    /// * `after` - Optional position to start from (exclusive). If None, returns all positions.
+    ///
+    /// # Returns
+    /// * `std::io::Result<Vec<Position>>` - Ok(positions) if the tag was found, Ok(empty vec) if not found, Err if an error occurred
+    pub fn lookup_with_after(&mut self, tag: &str, after: Position) -> std::io::Result<Vec<Position>> {
+        // Get an iterator over positions
+        let iter = self.lookup_with_after_iter(tag, after)?;
+
+        // Collect the positions into a Vec
+        let mut positions = Vec::new();
+        for result in iter {
+            positions.push(result?);
+        }
+
+        Ok(positions)
     }
 
 
@@ -3728,7 +3968,7 @@ mod tests {
 
         // Create another instance of TagIndex
         let mut tag_index2 = TagIndex::new(&test_path, page_size).unwrap();
-        
+
         // Use lookup() to verify all 9000 positions are still returned correctly
         let result2 = tag_index2.lookup(tag).unwrap();
         assert_eq!(result2.len(), 9000, "lookup() should return 500 positions after reopening");

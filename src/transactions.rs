@@ -495,14 +495,18 @@ impl TransactionManager {
         Ok(())
     }
 
-    /// Lookup positions for a tag
-    pub fn lookup_positions_for_tag(&mut self, tag: &str) -> Result<Vec<Position>> {
-        self.tags_idx.lookup(tag).map_err(TransactionError::Io)
+    /// Lookup positions for a tag and return an iterator
+    pub fn lookup_positions_for_tag_iter<'a>(&'a mut self, tag: &str) -> Result<impl Iterator<Item = Result<Position>> + 'a> {
+        self.tags_idx.lookup_iter(tag)
+            .map_err(TransactionError::Io)
+            .map(|iter| iter.map(|res| res.map_err(TransactionError::Io)))
     }
 
-    /// Lookup positions for a tag after a specific position
-    pub fn lookup_positions_for_tag_after(&mut self, tag: &str, after: Position) -> Result<Vec<Position>> {
-        self.tags_idx.lookup_with_after(tag, after).map_err(TransactionError::Io)
+    /// Lookup positions for a tag after a specific position and return an iterator
+    pub fn lookup_positions_for_tag_after_iter<'a>(&'a mut self, tag: &str, after: Position) -> Result<impl Iterator<Item = Result<Position>> + 'a> {
+        self.tags_idx.lookup_with_after_iter(tag, after)
+            .map_err(TransactionError::Io)
+            .map(|iter| iter.map(|res| res.map_err(TransactionError::Io)))
     }
 
     /// Scan positions and get their type hashes

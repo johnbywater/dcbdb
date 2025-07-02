@@ -31,7 +31,7 @@ pub enum PagedFileError {
 
 /// A paged file structure that manages file access
 pub struct PagedFile {
-    path: PathBuf,
+    pub path: PathBuf,
     pub new: bool,
     file: File,
     pub page_size: usize,

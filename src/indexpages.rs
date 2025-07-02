@@ -1,6 +1,6 @@
 use std::path::Path;
 use std::collections::HashMap;
-use crate::pagedfile::{PagedFile, PAGE_SIZE, PageID, PagedFileError};
+use crate::pagedfile::{PagedFile, PageID, PagedFileError};
 use lru::LruCache;
 use crate::wal::calc_crc;
 use std::any::Any;
@@ -552,6 +552,7 @@ impl IndexPages {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+    use crate::pagedfile::{PAGE_SIZE};
 
     #[test]
     fn test_index_pages_creation() {

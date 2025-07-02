@@ -409,21 +409,33 @@ impl TransactionManager {
     }
 
 
-    /// Read an event at a specific position
+    /// Read an event at a specific position (backward compatibility wrapper)
     pub fn read_event_at_position(
         &mut self,
         position: Position,
+    ) -> Result<DCBSequencedEvent> {
+        self.read_event_at_position_with_record(position, None)
+    }
+
+    /// Read an event at a specific position with an optional position index record
+    pub fn read_event_at_position_with_record(
+        &mut self,
+        position: Position,
+        position_index_record: Option<PositionIndexRecord>,
     ) -> Result<DCBSequencedEvent> {
         // Check if the event is in the cache
         if let Some(event) = self.cache.get(&position) {
             return Ok(event.clone());
         }
 
-        // Get the segment number and offset from the index
-        let position_index_record = self.position_idx.lookup(position).map_err(TransactionError::Io)?
-            .ok_or_else(|| {
-                TransactionError::PositionNotFound(position)
-            })?;
+        // Get the segment number and offset from the index if not provided
+        let position_index_record = match position_index_record {
+            Some(record) => record,
+            None => self.position_idx.lookup(position).map_err(TransactionError::Io)?
+                .ok_or_else(|| {
+                    TransactionError::PositionNotFound(position)
+                })?,
+        };
 
         // Get the segment from the segment manager
         let mut segment = self.segment_manager.get_segment(position_index_record.segment as u32)
@@ -481,6 +493,21 @@ impl TransactionManager {
     /// Close the transaction manager
     pub fn close(&mut self) -> Result<()> {
         Ok(())
+    }
+
+    /// Lookup positions for a tag
+    pub fn lookup_positions_for_tag(&mut self, tag: &str) -> Result<Vec<Position>> {
+        self.tags_idx.lookup(tag).map_err(TransactionError::Io)
+    }
+
+    /// Lookup positions for a tag after a specific position
+    pub fn lookup_positions_for_tag_after(&mut self, tag: &str, after: Position) -> Result<Vec<Position>> {
+        self.tags_idx.lookup_with_after(tag, after).map_err(TransactionError::Io)
+    }
+
+    /// Scan positions and get their type hashes
+    pub fn scan_positions(&mut self, after: Option<Position>) -> Result<Vec<(Position, PositionIndexRecord)>> {
+        self.position_idx.scan(after).map_err(TransactionError::Io)
     }
 }
 

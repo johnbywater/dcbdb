@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::api::DCBEvent;
-use crate::wal::{calc_crc, pack_dcb_event_with_crc, Position};
+use crate::wal::{calc_crc, Position};
 
 /// Event with position for serialization
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -515,6 +515,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
     use crate::api::DCBEvent;
+    use crate::wal::{pack_dcb_event_with_crc};
 
     #[test]
     fn test_segment_initialization() {

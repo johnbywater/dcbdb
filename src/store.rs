@@ -1,5 +1,6 @@
-use std::path::{Path, PathBuf};
+use std::path::{Path};
 use std::sync::Mutex;
+use std::collections::HashMap;
 
 use crate::api::{DCBEvent, DCBEventStoreAPI, DCBQuery, DCBQueryItem, DCBSequencedEvent, DCBAppendCondition, EventStoreError, Result};
 use crate::transactions::TransactionManager;
@@ -8,7 +9,6 @@ use crate::wal::Position;
 /// EventStore implements the DCBEventStoreAPI using TransactionManager
 pub struct EventStore {
     transaction_manager: Mutex<TransactionManager>,
-    path: PathBuf,
 }
 
 impl EventStore {
@@ -35,7 +35,6 @@ impl EventStore {
 
         Ok(Self {
             transaction_manager: Mutex::new(transaction_manager),
-            path: path_buf,
         })
     }
 
@@ -74,32 +73,124 @@ impl DCBEventStoreAPI for EventStore {
         // Lock the transaction manager
         let mut tm = self.transaction_manager.lock().unwrap();
 
-        // First, find the highest position in the store
-        let mut current_position = 1;
-        loop {
-            match tm.read_event_at_position(current_position) {
-                Ok(_) => {
-                    head = Some(current_position as i64);
-                    current_position += 1;
-                },
-                Err(_) => {
-                    break;
+        // Check if we can use the optimized path with tag indexes
+        if let Some(ref q) = query {
+            // Check if all query items have tags
+            let all_items_have_tags = !q.items.is_empty() && q.items.iter().all(|item| !item.tags.is_empty());
+
+            if all_items_have_tags {
+                // Use the optimized path with tag indexes
+                let mut positions = Vec::new();
+
+                // For each query item, get positions from tag index
+                for item in &q.items {
+                    // For each tag in the query item, get positions
+                    let mut item_positions = Vec::new();
+
+                    for tag in &item.tags {
+                        // Get positions for this tag
+                        let tag_positions = if let Some(after_pos) = after_position {
+                            tm.lookup_positions_for_tag_after(tag, after_pos).map_err(|e| EventStoreError::Io(e.into()))?
+                        } else {
+                            tm.lookup_positions_for_tag(tag).map_err(|e| EventStoreError::Io(e.into()))?
+                        };
+
+                        // If this is the first tag, use its positions
+                        if item_positions.is_empty() {
+                            item_positions = tag_positions;
+                        } else {
+                            // Otherwise, keep only positions that are in both lists
+                            item_positions.retain(|pos| tag_positions.contains(pos));
+                        }
+
+                        // If no positions match all tags so far, we can break early
+                        if item_positions.is_empty() {
+                            break;
+                        }
+                    }
+
+                    // Add positions from this query item to the overall list
+                    positions.extend(item_positions);
                 }
+
+                // Deduplicate positions
+                positions.sort_unstable();
+                positions.dedup();
+
+                // Get all position records
+                let position_records = tm.scan_positions(after_position).map_err(|e| EventStoreError::Io(e.into()))?;
+
+                // Create a map of position to type hash for quick lookup
+                let mut position_to_type_hash = HashMap::new();
+                for (pos, record) in position_records {
+                    position_to_type_hash.insert(pos, record.type_hash);
+                }
+
+                // For each position, check if the event type matches and read the event
+                for position in positions {
+                    // Skip positions that are not in the position index
+                    if let Some(type_hash) = position_to_type_hash.get(&position) {
+                        // Check if any query item matches this event type
+                        let type_matches = q.items.iter().any(|item| {
+                            // If item has no types, it matches any type
+                            if item.types.is_empty() {
+                                true
+                            } else {
+                                // Otherwise, check if any type in the item matches
+                                item.types.iter().any(|t| {
+                                    let t_hash = crate::positions::hash_type(t);
+                                    t_hash == *type_hash
+                                })
+                            }
+                        });
+
+                        // If the type matches, read the event
+                        if type_matches {
+                            match tm.read_event_at_position(position) {
+                                Ok(event) => {
+                                    // Double-check that the event matches the query
+                                    // This is needed because the type hash might have collisions
+                                    let matches = q.items.iter().any(|item| Self::event_matches_query_item(&event.event, item));
+
+                                    if matches {
+                                        result.push(event);
+
+                                        // Apply limit if specified
+                                        if let Some(limit) = limit {
+                                            if result.len() >= limit {
+                                                // If we've reached the limit, set the head to the position of the last event in the result
+                                                if limit > 0 {
+                                                    head = Some(result.last().unwrap().position as i64);
+                                                }
+                                                break;
+                                            }
+                                        }
+                                    }
+                                },
+                                Err(_) => {
+                                    // Skip this event if we can't read it
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Sort the result by position
+                result.sort_by_key(|e| e.position);
+
+                return Ok((result, head));
             }
         }
 
-        // If there are no events, return empty result
-        if head.is_none() {
-            return Ok((Vec::new(), None));
-        }
+        // Fall back to a sequential scan to match query items without tags.
+        // Use scan() on PositionIndex to get all positions and position index records
+        let position_records = tm.scan_positions(after_position).map_err(|e| EventStoreError::Io(e.into()))?;
 
-        // Start from position 1 (or after+1 if specified)
-        let start_position = after_position.map(|p| p + 1).unwrap_or(1);
-        current_position = start_position;
-
-        // Read events one by one until we hit an error or reach the limit
-        loop {
-            match tm.read_event_at_position(current_position) {
+        // Process each position and position index record
+        for (position, record) in position_records {
+            // Read the event using the position and position index record
+            match tm.read_event_at_position_with_record(position, Some(record)) {
                 Ok(event) => {
                     // Check if the event matches the query
                     let matches = match &query {
@@ -129,13 +220,10 @@ impl DCBEventStoreAPI for EventStore {
                             }
                         }
                     }
-
-                    // Move to the next position
-                    current_position += 1;
                 },
                 Err(_) => {
-                    // We've reached the end of the events
-                    break;
+                    // Skip this event if we can't read it
+                    continue;
                 }
             }
         }

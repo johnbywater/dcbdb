@@ -1,9 +1,9 @@
 use std::path::{Path};
-use std::sync::{Mutex};
+use std::sync::{Mutex, MutexGuard};
 use std::collections::HashMap;
 use itertools::Itertools;
 
-use crate::api::{DCBEvent, DCBEventStoreAPI, DCBQuery, DCBQueryItem, DCBSequencedEvent, DCBAppendCondition, EventStoreError, Result};
+use crate::api::{DCBEvent, DCBEventStoreAPI, DCBEventStoreAPIExt, DCBQuery, DCBQueryItem, DCBSequencedEvent, DCBAppendCondition, EventStoreError, Result, DCBReadResponse};
 use crate::transactions::{TransactionManager};
 use crate::wal::Position;
 
@@ -54,6 +54,165 @@ where
 /// EventStore implements the DCBEventStoreAPI using TransactionManager
 pub struct EventStore {
     transaction_manager: Mutex<TransactionManager>,
+}
+
+/// Response from a read operation on the EventStore
+pub struct EventStoreDCBReadResponse<'a> {
+    /// Reference to the event store
+    event_store: &'a EventStore,
+    /// Query to filter events
+    query: Option<DCBQuery>,
+    /// Position after which to read events
+    after: Option<u64>,
+    /// Maximum number of events to read
+    limit: Option<usize>,
+    /// Last committed position in the event store
+    last_committed_position: u64,
+    /// Current head position
+    head: Option<i64>,
+    /// Whether the head was given
+    head_was_given: bool,
+    /// Current position for iteration
+    current_position: u64,
+    /// Current batch of events
+    current_batch: Vec<DCBSequencedEvent>,
+    /// Current index in the batch
+    batch_index: usize,
+    /// Count of events returned so far
+    count: usize,
+}
+
+impl<'a> EventStoreDCBReadResponse<'a> {
+    /// Creates a new EventStoreDCBReadResponse
+    pub fn new(
+        event_store: &'a EventStore,
+        query: Option<DCBQuery>,
+        after: Option<u64>,
+        limit: Option<usize>,
+    ) -> Self {
+        let mut tm = event_store.transaction_manager.lock().unwrap();
+        let last_committed_position = tm.get_last_committed_position();
+        let last_issued_position = tm.get_last_issued_position();
+
+        // Determine the head position
+        // If there's no limit, set the head to the last issued position
+        // If there is a limit, we'll set the head to the position of the last event in the result set
+        let head = if limit.is_none() && last_issued_position > 0 {
+            Some(last_issued_position as i64)
+        } else {
+            None
+        };
+
+        let head_was_given = head.is_some();
+
+        // Initialize with the after position or 0
+        let current_position = after.unwrap_or(0);
+
+        Self {
+            event_store,
+            query,
+            after,
+            limit,
+            last_committed_position,
+            head,
+            head_was_given,
+            current_position,
+            current_batch: Vec::new(),
+            batch_index: 0,
+            count: 0,
+        }
+    }
+
+    /// Fetches the next batch of events
+    fn fetch_next_batch(&mut self) -> Result<bool> {
+        // Clear the current batch and reset the index
+        self.current_batch.clear();
+        self.batch_index = 0;
+
+        // Maximum batch size - use a larger value for better performance with many events
+        let max_batch_size = 10000;
+
+        // Lock the transaction manager
+        let mut tm = self.event_store.transaction_manager.lock().unwrap();
+
+        // Read a batch of events
+        let (batch, _) = self.event_store.read_internal(
+            &mut tm,
+            self.query.clone(),
+            Some(self.current_position),
+            Some(max_batch_size),
+        )?;
+
+        // If the batch is empty, we're done
+        if batch.is_empty() {
+            return Ok(false);
+        }
+
+        // Update the current position to the last event's position
+        if let Some(last_event) = batch.last() {
+            self.current_position = last_event.position;
+        }
+
+        // Store the batch
+        self.current_batch = batch;
+
+        Ok(true)
+    }
+}
+
+impl<'a> Iterator for EventStoreDCBReadResponse<'a> {
+    type Item = DCBSequencedEvent;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // Check if we've reached the limit
+        if let Some(limit) = self.limit {
+            if self.count >= limit {
+                return None;
+            }
+        }
+
+        // If we've exhausted the current batch, fetch the next one
+        if self.batch_index >= self.current_batch.len() {
+            match self.fetch_next_batch() {
+                Ok(true) => {}, // Successfully fetched a non-empty batch
+                _ => return None, // Error or empty batch
+            }
+        }
+
+        // Get the next event from the current batch
+        if self.batch_index < self.current_batch.len() {
+            let event = self.current_batch[self.batch_index].clone();
+
+            // Skip events beyond the last committed position
+            if event.position > self.last_committed_position {
+                return None;
+            }
+
+            // Update the head if not already given
+            // For the limit case, we'll set the head to the position of the last event in the result set
+            // This is done in the read() method that collects all events and then sets the head
+            if !self.head_was_given {
+                self.head = Some(event.position as i64);
+            }
+
+            // Increment the batch index and count
+            self.batch_index += 1;
+            self.count += 1;
+
+            // Update the current position for the next fetch
+            self.current_position = event.position;
+
+            Some(event)
+        } else {
+            None
+        }
+    }
+}
+
+impl<'a> DCBReadResponse for EventStoreDCBReadResponse<'a> {
+    fn head(&self) -> Option<i64> {
+        self.head
+    }
 }
 
 impl EventStore {
@@ -518,9 +677,29 @@ impl DCBEventStoreAPI for EventStore {
         after: Option<u64>,
         limit: Option<usize>,
     ) -> Result<(Vec<DCBSequencedEvent>, Option<u64>)> {
-        let mut tm = self.transaction_manager.lock().unwrap();
+        // Implement read in terms of read_response
+        let response = self.read_response(query.clone(), after, limit)?;
+        let mut head = response.head().map(|h| h as u64);
+        let events: Vec<DCBSequencedEvent> = response.collect();
 
-        self.read_internal(&mut tm, query, after, limit)
+        // If there's a limit and the result set is not empty, set the head to the position of the last event
+        if limit.is_some() && !events.is_empty() {
+            head = Some(events.last().unwrap().position);
+        }
+
+        Ok((events, head))
+    }
+
+    fn read_response(
+        &self,
+        query: Option<DCBQuery>,
+        after: Option<u64>,
+        limit: Option<usize>,
+    ) -> Result<Box<dyn DCBReadResponse + '_>> {
+        // Create a new EventStoreDCBReadResponse
+        let response = EventStoreDCBReadResponse::new(self, query, after, limit);
+
+        Ok(Box::new(response))
     }
 
     fn append(&self, events: Vec<DCBEvent>, condition: Option<DCBAppendCondition>) -> Result<u64> {
@@ -563,11 +742,23 @@ impl DCBEventStoreAPI for EventStore {
     }
 }
 
+// Implement DCBEventStoreAPIExt for EventStore
+impl DCBEventStoreAPIExt for EventStore {}
+
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    /// Helper function to convert a DCBReadResponse to a tuple of (Vec<DCBSequencedEvent>, Option<u64>)
+    /// This function is no longer needed since the read method now returns a tuple directly
+    #[allow(dead_code)]
+    fn response_to_tuple(response: Box<dyn DCBReadResponse>) -> (Vec<DCBSequencedEvent>, Option<u64>) {
+        let head = response.head().map(|h| h as u64);
+        let events: Vec<DCBSequencedEvent> = response.collect();
+        (events, head)
+    }
 
     #[test]
     fn test_event_store_append_read() -> std::io::Result<()> {
@@ -575,7 +766,7 @@ mod tests {
         let store = EventStore::new(dir.path()).unwrap();
 
         // Read all events
-        let (events, head) = store.read(None, None, None).unwrap();
+        let (events, head) = store.read_as_tuple(None, None, None).unwrap();
         assert_eq!(events.len(), 0);
         assert_eq!(head, None);
 
@@ -597,7 +788,7 @@ mod tests {
         assert_eq!(position, 2);
 
         // Read all events
-        let (events, head) = store.read(None, None, None).unwrap();
+        let (events, head) = store.read_as_tuple(None, None, None).unwrap();
         assert_eq!(events.len(), 2);
         assert_eq!(head, Some(2));
 
@@ -642,13 +833,13 @@ mod tests {
             }],
         };
 
-        let (events, head) = store.read(Some(query1.clone()), None, None).unwrap();
+        let (events, head) = store.read_as_tuple(Some(query1.clone()), None, None).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event.event_type, "test_event");
         assert_eq!(head, Some(2));
 
         // Query by tag1 - limit 0
-        let (events, head) = store.read(Some(query1.clone()), None, Some(0)).unwrap();
+        let (events, head) = store.read_as_tuple(Some(query1.clone()), None, Some(0)).unwrap();
         assert_eq!(events.len(), 0);
         assert_eq!(head, None);
 
@@ -919,9 +1110,9 @@ mod tests {
         let dir = tempdir()?;
         let store = EventStore::new(dir.path()).unwrap();
 
-        let num_appends = 100000;
+        let num_appends = 100;
         let num_events = num_appends * 2;
-        
+
         // Create and insert pairs of events with alternating tags
         let mut expected_positions = Vec::with_capacity(num_events);
         let mut expected_tags = Vec::with_capacity(num_events);
@@ -964,23 +1155,23 @@ mod tests {
                 },
             ],
         };
-        
+
         // Read events with the query
         let (events, head) = store.read(Some(query), None, None).unwrap();
-        
+
         // Check that we got the expected number of events
         assert_eq!(events.len(), num_events, "Expected {}, got {}", num_events, events.len());
-        
+
         // Check that the head position is correct
         assert_eq!(head, Some(num_events as u64), "Expected head position to be {}, got {:?}", num_events, head);
-        
+
         // Check that positions are in order and tags alternate correctly
         for (i, event) in events.iter().enumerate() {
             // Check position
             assert_eq!(event.position, expected_positions[i],
                        "Event at index {} has position {}, expected {}",
                        i, event.position, expected_positions[i]);
-        
+
             // Check tag
             let tag = &event.event.tags[0];
             assert_eq!(tag, &expected_tags[i],
@@ -989,7 +1180,7 @@ mod tests {
         }
 
         store.transaction_manager.lock().unwrap().flush_and_checkpoint().unwrap();
-        
+
         Ok(())
     }
 

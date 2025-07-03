@@ -328,7 +328,7 @@ impl TransactionManager {
     /// Flush and checkpoint
     pub fn flush_and_checkpoint(&mut self) -> Result<()> {
         self.wal.write_flush_and_sync().unwrap();
-        
+
         if self.last_committed.txn_id == self.checkpoint.txn_id {
             return Ok(());
         }
@@ -510,6 +510,11 @@ impl TransactionManager {
     /// Get the last issued position
     pub fn get_last_issued_position(&self) -> Position {
         self.last_issued_position
+    }
+
+    /// Get the last committed position
+    pub fn get_last_committed_position(&self) -> Position {
+        self.last_committed.position
     }
 }
 

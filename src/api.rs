@@ -61,11 +61,10 @@ pub trait DCBReadResponse: Iterator<Item = DCBSequencedEvent> {
 pub trait DCBEventStoreAPI {
     /// Reads events from the store based on the provided query and constraints
     ///
-    /// Returns all events, unless 'after' is given then only those with position
-    /// greater than 'after', and unless any query items are given, then only those
-    /// that match at least one query item. An event matches a query item if its type
-    /// is in the item types or there are no item types, and if all the item tags are
-    /// in the event tags.
+    /// Returns a tuple of (Vec<DCBSequencedEvent>, Option<u64>) containing the matching events
+    /// and the head position.
+    ///
+    /// This method is kept for backward compatibility. New code should use `read_response` instead.
     fn read(
         &self,
         query: Option<DCBQuery>,
@@ -73,10 +72,42 @@ pub trait DCBEventStoreAPI {
         limit: Option<usize>,
     ) -> Result<(Vec<DCBSequencedEvent>, Option<u64>)>;
 
+    /// Reads events from the store based on the provided query and constraints
+    ///
+    /// Returns a DCBReadResponse that provides an iterator over matching events,
+    /// unless 'after' is given then only those with position greater than 'after',
+    /// and unless any query items are given, then only those that match at least one
+    /// query item. An event matches a query item if its type is in the item types or
+    /// there are no item types, and if all the item tags are in the event tags.
+    fn read_response(
+        &self,
+        query: Option<DCBQuery>,
+        after: Option<u64>,
+        limit: Option<usize>,
+    ) -> Result<Box<dyn DCBReadResponse + '_>>;
+
     /// Appends given events to the event store, unless the condition fails
     ///
     /// Returns the position of the last appended event
     fn append(&self, events: Vec<DCBEvent>, condition: Option<DCBAppendCondition>) -> Result<u64>;
+}
+
+/// Extension trait for DCBEventStoreAPI that provides backward compatibility
+/// for the old read method that returned a tuple of (Vec<DCBSequencedEvent>, Option<u64>)
+pub trait DCBEventStoreAPIExt: DCBEventStoreAPI {
+    /// Reads events from the store and returns them as a tuple of (Vec<DCBSequencedEvent>, Option<u64>)
+    fn read_as_tuple(
+        &self,
+        query: Option<DCBQuery>,
+        after: Option<u64>,
+        limit: Option<usize>,
+    ) -> Result<(Vec<DCBSequencedEvent>, Option<u64>)> {
+        let response = self.read_response(query, after, limit)?;
+        let head = response.head().map(|h| h as u64);
+        let events: Vec<DCBSequencedEvent> = response.collect();
+
+        Ok((events, head))
+    }
 }
 
 // Error types

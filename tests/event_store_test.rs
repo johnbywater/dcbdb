@@ -7,7 +7,7 @@ use dcbsd::store::EventStore;
 #[test]
 fn test_direct_event_store() {
     let temp_dir = tempdir().unwrap();
-    let event_store = EventStore::open(temp_dir.path()).unwrap();
+    let event_store = EventStore::new(temp_dir.path()).unwrap();
     run_event_store_test(&event_store);
 }
 

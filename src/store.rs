@@ -57,11 +57,6 @@ pub struct EventStore {
 }
 
 impl EventStore {
-    /// Opens an EventStore at the specified path
-    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-        Self::new_with_options(path, None, None)
-    }
-
     /// Creates a new EventStore with the given path
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         Self::new_with_options(path, None, None)
@@ -307,7 +302,7 @@ impl EventStore {
                                 .collect();
 
                             if !matching_qiis.is_empty() {
-                                // Get the position index record using lookup instead of scan
+                                // Lookup the position index record
                                 if let Ok(Some(record)) = self.tm.lookup_position_record(position).map_err(|e| EventStoreError::Io(e.into())) {
                                     return Some((position, record, matching_qiis));
                                 }
@@ -573,6 +568,11 @@ mod tests {
         let dir = tempdir()?;
         let store = EventStore::new(dir.path()).unwrap();
 
+        // Read all events
+        let (events, head) = store.read(None, None, None).unwrap();
+        assert_eq!(events.len(), 0);
+        assert_eq!(head, None);
+
         // Create some test events
         let event1 = DCBEvent {
             event_type: "test_event".to_string(),
@@ -636,9 +636,37 @@ mod tests {
             }],
         };
 
-        let (events, _) = store.read(Some(query1), None, None).unwrap();
+        let (events, head) = store.read(Some(query1.clone()), None, None).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event.event_type, "test_event");
+        assert_eq!(head, Some(2));
+
+        // Query by tag1 - limit 0
+        let (events, head) = store.read(Some(query1.clone()), None, Some(0)).unwrap();
+        assert_eq!(events.len(), 0);
+        assert_eq!(head, None);
+
+        // Query by tag1 - limit 1
+        let (events, head) = store.read(Some(query1.clone()), None, Some(1)).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event.event_type, "test_event");
+        assert_eq!(head, Some(1));
+
+        // Query by tag1 - after 0
+        let (events, head) = store.read(Some(query1.clone()), Some(0), None).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event.event_type, "test_event");
+        assert_eq!(head, Some(2));
+
+        // Query by tag1 - after 1
+        let (events, head) = store.read(Some(query1.clone()), Some(1), None).unwrap();
+        assert_eq!(events.len(), 0);
+        assert_eq!(head, Some(2));
+
+        // Query by tag1 - after 1, limit 1
+        let (events, head) = store.read(Some(query1.clone()), Some(1), Some(1)).unwrap();
+        assert_eq!(events.len(), 0);
+        assert_eq!(head, None);
 
         // Query by tag2 (should match both events)
         let query2 = DCBQuery {
@@ -651,6 +679,45 @@ mod tests {
         let (events, _) = store.read(Some(query2), None, None).unwrap();
         assert_eq!(events.len(), 2);
 
+        // Query by tag1 or tag3 (should match both events)
+        let query2 = DCBQuery {
+            items: vec![
+                DCBQueryItem {
+                    types: vec![],
+                    tags: vec!["tag1".to_string()],
+                },
+                DCBQueryItem {
+                    types: vec![],
+                    tags: vec!["tag3".to_string()],
+                },
+            ],
+        };
+
+        let (events, _) = store.read(Some(query2), None, None).unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event.event_type, "test_event");
+        assert_eq!(events[1].event.event_type, "another_event");
+        
+        // Query by tag3 or tag1 (should return events in correct order)
+        let query2 = DCBQuery {
+            items: vec![
+                DCBQueryItem {
+                    types: vec![],
+                    tags: vec!["tag3".to_string()],
+                },
+                DCBQueryItem {
+                    types: vec![],
+                    tags: vec!["tag1".to_string()],
+                },
+            ],
+        };
+
+        let (events, _) = store.read(Some(query2), None, None).unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event.event_type, "test_event");
+        assert_eq!(events[1].event.event_type, "another_event");
+        
+
         // Query by tag3
         let query3 = DCBQuery {
             items: vec![DCBQueryItem {
@@ -662,6 +729,18 @@ mod tests {
         let (events, _) = store.read(Some(query3), None, None).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event.event_type, "another_event");
+
+        // Query by tag4
+        let query4 = DCBQuery {
+            items: vec![DCBQueryItem {
+                types: vec![],
+                tags: vec!["tag4".to_string()],
+            }],
+        };
+
+        let (events, head) = store.read(Some(query4), None, None).unwrap();
+        assert_eq!(events.len(), 0);
+        assert_eq!(head, Some(2));
 
         Ok(())
     }
@@ -695,9 +774,36 @@ mod tests {
             }],
         };
 
-        let (events, _) = store.read(Some(query), None, None).unwrap();
+        let (events, _) = store.read(Some(query.clone()), None, None).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event.event_type, "test_event");
+
+        // Query by tag1 - limit 0
+        let (events, head) = store.read(Some(query.clone()), None, Some(0)).unwrap();
+        assert_eq!(events.len(), 0);
+        assert_eq!(head, None);
+
+        // Query by tag1 - limit 1
+        let (events, head) = store.read(Some(query.clone()), None, Some(1)).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event.event_type, "test_event");
+        assert_eq!(head, Some(1));
+
+        // Query by tag1 - after 0
+        let (events, head) = store.read(Some(query.clone()), Some(0), None).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event.event_type, "test_event");
+        assert_eq!(head, Some(2));
+
+        // Query by tag1 - after 1
+        let (events, head) = store.read(Some(query.clone()), Some(1), None).unwrap();
+        assert_eq!(events.len(), 0);
+        assert_eq!(head, Some(2));
+
+        // Query by tag1 - after 1, limit 1
+        let (events, head) = store.read(Some(query.clone()), Some(1), Some(1)).unwrap();
+        assert_eq!(events.len(), 0);
+        assert_eq!(head, None);
 
         Ok(())
     }
@@ -723,7 +829,7 @@ mod tests {
         // Append events
         store.append(vec![event1.clone(), event2.clone()], None).unwrap();
 
-        // Query by type and tag
+        // Query by test_event and tag2
         let query = DCBQuery {
             items: vec![DCBQueryItem {
                 types: vec!["test_event".to_string()],
@@ -734,6 +840,18 @@ mod tests {
         let (events, _) = store.read(Some(query), None, None).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event.event_type, "test_event");
+
+        // Query by non_event and tag2
+        let query = DCBQuery {
+            items: vec![DCBQueryItem {
+                types: vec!["non_event".to_string()],
+                tags: vec!["tag2".to_string()],
+            }],
+        };
+
+        let (events, head) = store.read(Some(query), None, None).unwrap();
+        assert_eq!(events.len(), 0);
+        assert_eq!(head, Some(2));
 
         Ok(())
     }
@@ -789,4 +907,10 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_event_store_with_many_events() -> std::io::Result<()> {
+        Ok(())
+    }
+    
 }

@@ -28,7 +28,7 @@ pub struct DCBAppendCondition {
     /// Query that, if matching any events, will cause the append to fail
     pub fail_if_events_match: DCBQuery,
     /// Position after which to append; if None, append at the end
-    pub after: Option<i64>,
+    pub after: Option<u64>,
 }
 
 /// Represents an event in the event store
@@ -48,7 +48,7 @@ pub struct DCBSequencedEvent {
     /// The event
     pub event: DCBEvent,
     /// Position of the event in the sequence
-    pub position: i64,
+    pub position: u64,
 }
 
 /// Response from a read operation, providing an iterator over sequenced events
@@ -69,14 +69,14 @@ pub trait DCBEventStoreAPI {
     fn read(
         &self,
         query: Option<DCBQuery>,
-        after: Option<i64>,
+        after: Option<u64>,
         limit: Option<usize>,
-    ) -> Result<(Vec<DCBSequencedEvent>, Option<i64>)>;
+    ) -> Result<(Vec<DCBSequencedEvent>, Option<u64>)>;
 
     /// Appends given events to the event store, unless the condition fails
     ///
     /// Returns the position of the last appended event
-    fn append(&self, events: Vec<DCBEvent>, condition: Option<DCBAppendCondition>) -> Result<i64>;
+    fn append(&self, events: Vec<DCBEvent>, condition: Option<DCBAppendCondition>) -> Result<u64>;
 }
 
 // Error types

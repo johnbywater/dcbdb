@@ -27,7 +27,7 @@ const RECORD_EVENT: u32 = 2;
 const RECORD_COMMIT: u32 = 3;
 
 /// Position type for event positions
-pub type Position = i64;
+pub type Position = u64;
 pub const POSITION_SIZE: usize = 8;
 
 /// Error types for WAL operations
@@ -149,7 +149,7 @@ impl From<(Position, DCBEvent)> for DCBEventWithPosition {
 pub struct TransactionWAL {
     file: File,
     buffered: Mutex<Vec<Vec<u8>>>,
-    commit_offset: i64,
+    commit_offset: u64,
 }
 
 impl TransactionWAL {
@@ -177,6 +177,11 @@ impl TransactionWAL {
             buffered: Mutex::new(Vec::new()),
             commit_offset: 0,
         })
+    }
+
+    /// Encode a record with the given type, transaction ID, and payload
+    pub fn commit_offset(&self) -> u64 {
+        self.commit_offset as u64
     }
 
     /// Encode a record with the given type, transaction ID, and payload
@@ -216,12 +221,12 @@ impl TransactionWAL {
             buffered.push(record);
         }
 
-        self.write_flush_and_sync()?;
+        // self.write_flush_and_sync()?;
         Ok(())
     }
 
     /// Write, flush, and sync the buffered records
-    fn write_flush_and_sync(&mut self) -> WalResult<()> {
+    pub fn write_flush_and_sync(&mut self) -> WalResult<()> {
         let buffered = {
             let mut buffered_lock = self.buffered.lock().unwrap();
             let buffered_copy = buffered_lock.clone();
@@ -238,7 +243,7 @@ impl TransactionWAL {
         }
 
         self.flush_and_sync()?;
-        self.commit_offset = self.file.stream_position()? as i64;
+        self.commit_offset = self.file.stream_position()?;
 
         Ok(())
     }
@@ -275,7 +280,7 @@ impl TransactionWAL {
                         RECORD_COMMIT => {
                             if txn_events.contains_key(&txn_id) {
                                 committed_txns.insert(txn_id);
-                                self.commit_offset = self.file.stream_position()? as i64;
+                                self.commit_offset = self.file.stream_position()?;
                             }
                         }
                         _ => {}
@@ -390,7 +395,7 @@ impl TransactionWAL {
     }
 
     /// Cut the WAL file before the given offset
-    fn cut_before_offset(&mut self, cut_offset: u64) -> WalResult<()> {
+    pub fn cut_before_offset(&mut self, cut_offset: u64) -> WalResult<()> {
         self.file.seek(SeekFrom::Start(cut_offset))?;
 
         let mut keep_data = Vec::new();
@@ -401,7 +406,7 @@ impl TransactionWAL {
         self.file.write_all(&keep_data)?;
 
         self.flush_and_sync()?;
-        self.commit_offset = self.file.stream_position()? as i64;
+        self.commit_offset = self.file.stream_position()?;
 
         Ok(())
     }
@@ -546,8 +551,11 @@ mod tests {
         let txn_id = 42;
         wal.write_event(txn_id, br#"{"event_type": "test_event"}"#).unwrap();
 
-        // Commit should clear the buffer
         wal.commit_transaction(txn_id).unwrap();
+
+        // Commit should clear the buffer
+        wal.write_flush_and_sync().unwrap();
+        
         assert!(wal.buffered.lock().unwrap().is_empty());
 
         // Verify file contains the records
@@ -612,6 +620,7 @@ mod tests {
 
         // Commit transaction
         wal.commit_transaction(txn_id).unwrap();
+        wal.write_flush_and_sync().unwrap();
 
         // Buffer should be empty after commit
         assert!(wal.buffered.lock().unwrap().is_empty());
@@ -647,6 +656,7 @@ mod tests {
         wal.write_event(txn_id_1, &payload1).unwrap();
         wal.write_event(txn_id_1, &payload1).unwrap();
         wal.commit_transaction(txn_id_1).unwrap();
+        wal.write_flush_and_sync().unwrap();
 
         // Uncommitted transaction
         let txn_id_2 = 43;
@@ -683,6 +693,7 @@ mod tests {
         let payload = pack_dcb_event_with_crc(1, event);
         wal.write_event(txn_id, &payload).unwrap();
         wal.commit_transaction(txn_id).unwrap();
+        wal.write_flush_and_sync().unwrap();
 
         // Write a partial record manually (simulate crash)
         {
@@ -754,6 +765,8 @@ mod tests {
         wal.begin_transaction(txn_id_3).unwrap();
         wal.write_event(txn_id_3, &payload3).unwrap();
         wal.commit_transaction(txn_id_3).unwrap();
+        
+        wal.write_flush_and_sync().unwrap();
 
         // Truncate before checkpoint
         wal.truncate_wal_before_checkpoint(txn_id_2).unwrap();
@@ -792,6 +805,7 @@ mod tests {
         wal.begin_transaction(txn_id_1).unwrap();
         wal.write_event(txn_id_1, &payload1).unwrap();
         wal.commit_transaction(txn_id_1).unwrap();
+        wal.write_flush_and_sync().unwrap();
 
         // Get the file size after first transaction
         let file_size_after_txn1 = wal.file_size().unwrap();
@@ -801,6 +815,7 @@ mod tests {
         wal.begin_transaction(txn_id_2).unwrap();
         wal.write_event(txn_id_2, &payload2).unwrap();
         wal.commit_transaction(txn_id_2).unwrap();
+        wal.write_flush_and_sync().unwrap();
 
         // Get the file size after second transaction
         let file_size_after_txn2 = wal.file_size().unwrap();

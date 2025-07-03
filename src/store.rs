@@ -95,9 +95,9 @@ impl EventStore {
         &self,
         tm: &mut TransactionManager,
         query: Option<DCBQuery>,
-        after: Option<i64>,
+        after: Option<u64>,
         limit: Option<usize>,
-    ) -> Result<(Vec<DCBSequencedEvent>, Option<i64>)> {
+    ) -> Result<(Vec<DCBSequencedEvent>, Option<u64>)> {
         let mut result: Vec<DCBSequencedEvent> = Vec::new();
         let mut head;
 
@@ -106,7 +106,7 @@ impl EventStore {
             return Ok((Vec::new(), None));
         }
 
-        // Convert i64 to Position (u64)
+        // Convert u64 to Position (u64)
         let after_optional = after.map(|pos| pos as Position);
         let after_position = after.unwrap_or(0);
 
@@ -121,7 +121,7 @@ impl EventStore {
 
         // Set the head to the last_issued_position by default
         // It may be overridden later if we hit the limit
-        head = Some(last_issued_position as i64);
+        head = Some(last_issued_position);
 
         // Check if we can use the optimized path with tag indexes
         if let Some(ref q) = query {
@@ -447,7 +447,7 @@ impl EventStore {
                 if limit.is_some() {
                     if !result.is_empty() {
                         // Set head to the position of the last event in the limited result
-                        head = Some(result.last().unwrap().position as i64);
+                        head = Some(result.last().unwrap().position);
                     } else {
                         head = None;
                     }
@@ -498,7 +498,7 @@ impl EventStore {
 
             if !limited_result.is_empty() {
                 // Set head to the position of the last event in the limited result
-                head = Some(limited_result.last().unwrap().position as i64);
+                head = Some(limited_result.last().unwrap().position);
             } else {
                 head = None;
             }
@@ -515,15 +515,15 @@ impl DCBEventStoreAPI for EventStore {
     fn read(
         &self,
         query: Option<DCBQuery>,
-        after: Option<i64>,
+        after: Option<u64>,
         limit: Option<usize>,
-    ) -> Result<(Vec<DCBSequencedEvent>, Option<i64>)> {
+    ) -> Result<(Vec<DCBSequencedEvent>, Option<u64>)> {
         let mut tm = self.transaction_manager.lock().unwrap();
 
         self.read_internal(&mut tm, query, after, limit)
     }
 
-    fn append(&self, events: Vec<DCBEvent>, condition: Option<DCBAppendCondition>) -> Result<i64> {
+    fn append(&self, events: Vec<DCBEvent>, condition: Option<DCBAppendCondition>) -> Result<u64> {
         // Check condition if provided
         // Lock the transaction manager
         let mut tm = self.transaction_manager.lock().unwrap();
@@ -538,20 +538,26 @@ impl DCBEventStoreAPI for EventStore {
         }
 
         // Begin a transaction
+        // let start = std::time::Instant::now();
         let txn_id = tm.begin().map_err(|e| EventStoreError::Io(e.into()))?;
+        // let duration = start.elapsed();
+        // println!("Transaction begin took: {:?}", duration);
 
         let mut last_position = 0;
 
         // Append each event
         for event in events {
-            last_position = tm.append_event(txn_id, event).map_err(|e| EventStoreError::Io(e.into()))? as i64;
+            // let start = std::time::Instant::now();
+            last_position = tm.append_event(txn_id, event).map_err(|e| EventStoreError::Io(e.into()))?;
+            // let duration = start.elapsed();
+            // println!("Append took: {:?}", duration);
         }
 
         // Commit the transaction
         tm.commit(txn_id).map_err(|e| EventStoreError::Io(e.into()))?;
 
         // Flush and checkpoint
-        tm.flush_and_checkpoint().map_err(|e| EventStoreError::Io(e.into()))?;
+        // tm.flush_and_checkpoint().map_err(|e| EventStoreError::Io(e.into()))?;
 
         Ok(last_position)
     }
@@ -697,7 +703,7 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].event.event_type, "test_event");
         assert_eq!(events[1].event.event_type, "another_event");
-        
+
         // Query by tag3 or tag1 (should return events in correct order)
         let query2 = DCBQuery {
             items: vec![
@@ -716,7 +722,7 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].event.event_type, "test_event");
         assert_eq!(events[1].event.event_type, "another_event");
-        
+
 
         // Query by tag3
         let query3 = DCBQuery {
@@ -910,7 +916,81 @@ mod tests {
 
     #[test]
     fn test_event_store_with_many_events() -> std::io::Result<()> {
+        let dir = tempdir()?;
+        let store = EventStore::new(dir.path()).unwrap();
+
+        let num_appends = 100000;
+        let num_events = num_appends * 2;
+        
+        // Create and insert pairs of events with alternating tags
+        let mut expected_positions = Vec::with_capacity(num_events);
+        let mut expected_tags = Vec::with_capacity(num_events);
+
+        for _ in 0..num_appends {
+            // Create event with tag1
+            let event1 = DCBEvent {
+                event_type: "test_event".to_string(),
+                data: vec![1, 2, 3],
+                tags: vec!["tag1".to_string()],
+            };
+
+            // Create event with tag2
+            let event2 = DCBEvent {
+                event_type: "test_event".to_string(),
+                data: vec![1, 2, 3],
+                tags: vec!["tag2".to_string()],
+            };
+
+            // Append events
+            let position = store.append(vec![event1, event2], None).unwrap();
+
+            // Store expected positions and tags
+            expected_positions.push(position - 1);
+            expected_positions.push(position);
+            expected_tags.push("tag1".to_string());
+            expected_tags.push("tag2".to_string());
+        }
+
+        // Create query to match events with either tag1 or tag2
+        let query = DCBQuery {
+            items: vec![
+                DCBQueryItem {
+                    types: vec![],
+                    tags: vec!["tag1".to_string()],
+                },
+                DCBQueryItem {
+                    types: vec![],
+                    tags: vec!["tag2".to_string()],
+                },
+            ],
+        };
+        
+        // Read events with the query
+        let (events, head) = store.read(Some(query), None, None).unwrap();
+        
+        // Check that we got the expected number of events
+        assert_eq!(events.len(), num_events, "Expected {}, got {}", num_events, events.len());
+        
+        // Check that the head position is correct
+        assert_eq!(head, Some(num_events as u64), "Expected head position to be {}, got {:?}", num_events, head);
+        
+        // Check that positions are in order and tags alternate correctly
+        for (i, event) in events.iter().enumerate() {
+            // Check position
+            assert_eq!(event.position, expected_positions[i],
+                       "Event at index {} has position {}, expected {}",
+                       i, event.position, expected_positions[i]);
+        
+            // Check tag
+            let tag = &event.event.tags[0];
+            assert_eq!(tag, &expected_tags[i],
+                       "Event at index {} has tag {}, expected {}",
+                       i, tag, expected_tags[i]);
+        }
+
+        store.transaction_manager.lock().unwrap().flush_and_checkpoint().unwrap();
+        
         Ok(())
     }
-    
+
 }

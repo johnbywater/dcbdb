@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::{Path};
 use std::io;
 
 use lru::LruCache;
@@ -68,7 +68,6 @@ pub struct LastCommittedTxnPosition {
 
 /// Transaction Manager for managing transactions, segments, and indexes
 pub struct TransactionManager {
-    path: PathBuf,
     uncommitted: HashMap<u64, Vec<(Position, DCBEvent, Vec<u8>)>>,
 
     checkpoint: CheckpointFile,
@@ -116,7 +115,7 @@ impl TransactionManager {
             Err(e) => return Err(TransactionError::Segment(e)),
         };
 
-        if let Err(e) = segment_manager.recover_position(checkpoint.segment_number as u32, checkpoint.segment_offset) {
+        if let Err(e) = segment_manager.recover_position(checkpoint.segment_number, checkpoint.segment_offset) {
             return Err(TransactionError::Segment(e));
         }
 
@@ -143,7 +142,6 @@ impl TransactionManager {
         let cache_capacity = cache_size.unwrap_or(1000);
 
         let mut tm = Self {
-            path: path_buf,
             uncommitted: HashMap::new(),
 
             checkpoint,
@@ -277,7 +275,7 @@ impl TransactionManager {
     fn add_event_to_indexes(
         &mut self,
         position: Position,
-        segment_number: u32,
+        segment_number: u64,
         offset: u64,
         event: &DCBEvent,
     ) -> Result<()> {
@@ -285,8 +283,8 @@ impl TransactionManager {
         self.position_idx.insert(
             position,
             PositionIndexRecord {
-                segment: segment_number as i32,
-                offset: offset as i32,
+                segment: segment_number,
+                offset,
                 type_hash: hash_type(&event.event_type),
             },
         ).map_err(TransactionError::Io)?;
@@ -329,10 +327,9 @@ impl TransactionManager {
 
     /// Flush and checkpoint
     pub fn flush_and_checkpoint(&mut self) -> Result<()> {
-        let last_committed = self.last_committed;
-        let checkpoint_txn_id = self.checkpoint.txn_id;
-
-        if last_committed.txn_id == checkpoint_txn_id {
+        self.wal.write_flush_and_sync().unwrap();
+        
+        if self.last_committed.txn_id == self.checkpoint.txn_id {
             return Ok(());
         }
 
@@ -341,30 +338,25 @@ impl TransactionManager {
             return Err(TransactionError::Segment(e));
         }
 
-        // Flush the indexes
+        // Flush the position index.
         self.position_idx.index_pages.flush().map_err(TransactionError::Io)?;
+
+        // Flush the tag index.
         let mut tag_index_pages = self.tags_idx.index_pages.borrow_mut();
         tag_index_pages.flush().map_err(TransactionError::Io)?;
         drop(tag_index_pages);
 
         // Update the checkpoint
-        let mut checkpoint = CheckpointFile::new(&self.path).map_err(TransactionError::Io)?;
-        checkpoint.txn_id = last_committed.txn_id;
-        checkpoint.position = last_committed.position;
+        self.checkpoint.txn_id = self.last_committed.txn_id;
+        self.checkpoint.position = self.last_committed.position;
+        self.checkpoint.segment_number = self.segment_manager.current_segment.number();
+        self.checkpoint.segment_offset = self.segment_manager.current_segment.write_offset();
+        self.checkpoint.wal_commit_offset = self.wal.commit_offset();
 
-        // We can't access segment_manager.current_segment directly, so we use the first segment
-        // This is a simplification and might not be accurate
-        checkpoint.segment_number = 1;
-        checkpoint.segment_offset = 0;
-
-        // We can't access wal.commit_offset directly, so we use 0
-        // This is a simplification and might not be accurate
-        checkpoint.wal_commit_offset = 0;
-
-        checkpoint.write_checkpoint().map_err(TransactionError::Io)?;
+        self.checkpoint.write_checkpoint().map_err(TransactionError::Io)?;
 
         // We can't call wal.cut_before_offset directly, so we use truncate_wal_before_checkpoint
-        if let Err(e) = self.wal.truncate_wal_before_checkpoint(last_committed.txn_id) {
+        if let Err(e) = self.wal.cut_before_offset(self.checkpoint.wal_commit_offset) {
             return Err(TransactionError::Wal(e));
         }
 
@@ -382,7 +374,7 @@ impl TransactionManager {
             let mut segment = segment_result.map_err(TransactionError::Segment)?;
 
             // Store the segment number before iterating
-            let segment_number = segment.number() as i32;
+            let segment_number = segment.number();
 
             for record_result in segment.iter_event_records() {
                 let (position, event, offset) = record_result.map_err(TransactionError::Segment)?;
@@ -392,7 +384,7 @@ impl TransactionManager {
                     position,
                     PositionIndexRecord {
                         segment: segment_number,
-                        offset: offset as i32,
+                        offset,
                         type_hash: hash_type(&event.event_type),
                     },
                 ).map_err(TransactionError::Io)?;
@@ -441,7 +433,7 @@ impl TransactionManager {
         };
 
         // Get the segment from the segment manager
-        let mut segment = self.segment_manager.get_segment(position_index_record.segment as u32)
+        let mut segment = self.segment_manager.get_segment(position_index_record.segment)
             .map_err(|e| {
                 TransactionError::Segment(e)
             })?;
@@ -767,6 +759,7 @@ mod tests {
 
             let _ = tm.append_event(txn_id, event.clone())?;
             tm.commit(txn_id)?;
+            tm.flush_and_checkpoint().unwrap();
         }
 
         // Create a new transaction manager, which should recover from the WAL

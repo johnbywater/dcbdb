@@ -24,8 +24,8 @@ pub const LEAF_NODE_TYPE: u8 = 3;
 // Position index record
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PositionIndexRecord {
-    pub segment: i32,
-    pub offset: i32,
+    pub segment: u64,
+    pub offset: u64,
     pub type_hash: Vec<u8>,
 }
 const POSITION_INDEX_RECORD_SIZE: usize = 16;
@@ -40,16 +40,14 @@ pub struct LeafNode {
 
 impl LeafNode {
     fn calc_serialized_node_size(&self) -> usize {
-        let keys_len = self.keys.len();
-        let total_size = 4 + 2 + (keys_len * 8) + (keys_len * 16);
-        total_size
+        6 + (self.keys.len() * 32)
     }
 
     /// Serializes the LeafNode to a byte array according to the specified format:
     /// - 4 bytes for the next_leaf_node PageID
-    /// - 4 bytes for the length of the keys
+    /// - 2 bytes for the length of the keys
     /// - 8 bytes for each Position key
-    /// - 16 bytes for each PositionIndexRecord value (4 bytes for segment, 4 bytes for offset, 8 bytes for type_hash)
+    /// - 24 bytes for each PositionIndexRecord value (8 bytes for segment, 8 bytes for offset, 8 bytes for type_hash)
     ///
     /// # Returns
     /// * `Vec<u8>` - The serialized data
@@ -75,12 +73,12 @@ impl LeafNode {
             result.extend_from_slice(&key.to_le_bytes());
         }
 
-        // Serialize each PositionIndexRecord value (16 bytes each)
+        // Serialize each PositionIndexRecord value (24 bytes each)
         for value in &self.values {
-            // Segment (4 bytes)
+            // Segment (8 bytes)
             result.extend_from_slice(&value.segment.to_le_bytes());
 
-            // Offset (4 bytes)
+            // Offset (8 bytes)
             result.extend_from_slice(&value.offset.to_le_bytes());
 
             // Type hash (8 bytes)
@@ -111,14 +109,14 @@ impl LeafNode {
         }
 
         // Extract the next_leaf_id (first 4 bytes)
-        let next_leaf_id = u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]);
+        let next_leaf_id = u32::from_le_bytes(slice[0..4].try_into().unwrap());
         let next_leaf_id = if next_leaf_id == 0 { None } else { Some(PageID(next_leaf_id)) };
 
         // Extract the length of the keys (next 2 bytes)
-        let keys_len = u16::from_le_bytes([slice[4], slice[5]]) as usize;
+        let keys_len = u16::from_le_bytes(slice[4..6].try_into().unwrap()) as usize;
 
         // Calculate the expected size of the slice
-        let expected_size = 6 + (keys_len * 8) + (keys_len * 16);
+        let expected_size = 6 + (keys_len * 8) + (keys_len * 24);
         if slice.len() < expected_size {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -130,32 +128,23 @@ impl LeafNode {
         let mut keys = Vec::with_capacity(keys_len);
         for i in 0..keys_len {
             let start = 6 + (i * 8);
-            let key = i64::from_le_bytes([
-                slice[start], slice[start + 1], slice[start + 2], slice[start + 3],
-                slice[start + 4], slice[start + 5], slice[start + 6], slice[start + 7],
-            ]);
+            let key = u64::from_le_bytes(slice[start..start+8].try_into().unwrap());
             keys.push(key);
         }
 
-        // Extract the PositionIndexRecord values (16 bytes each)
+        // Extract the PositionIndexRecord values (24 bytes each)
         let mut values = Vec::with_capacity(keys_len);
         for i in 0..keys_len {
-            let start = 6 + (keys_len * 8) + (i * 16);
+            let start = 6 + (keys_len * 8) + (i * 24);
 
-            // Extract segment (4 bytes)
-            let segment = i32::from_le_bytes([
-                slice[start], slice[start + 1], slice[start + 2], slice[start + 3],
-            ]);
+            // Extract segment number (8 bytes)
+            let segment = u64::from_le_bytes(slice[start..start+8].try_into().unwrap());
 
-            // Extract offset (4 bytes)
-            let offset = i32::from_le_bytes([
-                slice[start + 4], slice[start + 5], slice[start + 6], slice[start + 7],
-            ]);
+            // Extract offset number (8 bytes)
+            let offset = u64::from_le_bytes(slice[start+8..start+16].try_into().unwrap());
 
             // Extract type_hash (8 bytes)
-            let mut type_hash = Vec::with_capacity(8);
-            type_hash.extend_from_slice(&slice[start + 8..start + 16]);
-
+            let type_hash: Vec<u8> = slice[start + 16..start + 24].to_vec();
             values.push(PositionIndexRecord {
                 segment,
                 offset,
@@ -226,7 +215,7 @@ impl InternalNode {
 
         // Serialize each Position key (8 bytes each)
         for key in &self.keys {
-            // Position is an i64 (8 bytes)
+            // Position is an u64 (8 bytes)
             result.extend_from_slice(&key.to_le_bytes());
         }
 
@@ -272,7 +261,7 @@ impl InternalNode {
         let mut keys = Vec::with_capacity(keys_len);
         for i in 0..keys_len {
             let start = 2 + (i * 8);
-            let key = i64::from_le_bytes([
+            let key = Position::from_le_bytes([
                 slice[start], slice[start + 1], slice[start + 2], slice[start + 3],
                 slice[start + 4], slice[start + 5], slice[start + 6], slice[start + 7],
             ]);
@@ -927,7 +916,7 @@ mod tests {
         // Create a non-trivial LeafNode instance
         let leaf_node = LeafNode {
             keys: vec![
-                1000, // Position is just an i64
+                1000, // Position is just an u64
                 2000,
                 3000,
             ],
@@ -963,8 +952,8 @@ mod tests {
 
         // Calculate the expected size: 
         // 4 bytes for next_leaf_id + 2 bytes for keys length + 
-        // (3 keys * 8 bytes) + (3 values * 16 bytes) + 9 bytes for page overhead
-        let expected_size = 4 + 2 + (3 * 8) + (3 * 16) + 9;
+        // (3 keys * 8 bytes) + (3 values * 24 bytes) + 9 bytes for page overhead
+        let expected_size = 4 + 2 + (3 * 8) + (3 * 24) + 9;
 
         // Verify that the page size is correct
         assert_eq!(page_size, expected_size, 
@@ -988,7 +977,7 @@ mod tests {
         // Create a non-trivial InternalNode instance
         let internal_node = InternalNode {
             keys: vec![
-                1000, // Position is just an i64
+                1000, // Position is just an u64
                 2000,
                 3000,
             ],
@@ -1357,8 +1346,8 @@ mod tests {
         for i in 0..10 {
             keys.push(i * 1000);
             values.push(PositionIndexRecord {
-                segment: i as i32,
-                offset: i as i32 * 100,
+                segment: i as u64,
+                offset: i as u64 * 100,
                 type_hash: hash_type(&format!("Type{}", i)),
             });
         }
@@ -1442,8 +1431,8 @@ mod tests {
         for i in 0..10 {
             keys.push(i * 1000);
             values.push(PositionIndexRecord {
-                segment: i as i32,
-                offset: i as i32 * 100,
+                segment: i,
+                offset: i * 100,
                 type_hash: hash_type(&format!("Type{}", i)),
             });
         }
@@ -1521,7 +1510,7 @@ mod tests {
         let mut keys = Vec::new();
         let mut child_ids = Vec::new();
         for i in 0..5 {
-            keys.push((i * 1000) as i64);
+            keys.push((i * 1000) as u64);
             child_ids.push(PageID(i * 100));
         }
         child_ids.push(PageID(500)); // One more child_id than keys
@@ -1549,7 +1538,7 @@ mod tests {
         position_index.index_pages.add_page(internal_page);
 
         // Add a new key and child_id that will cause the internal node to split
-        let new_key = 5000i64;
+        let new_key = 5000u64;
         let new_child_id = PageID(600);
 
         // Call append_internal_key_and_value with the page_id, key, and child_id
@@ -1560,17 +1549,17 @@ mod tests {
         let (promote_key, new_page_id) = split_result.unwrap();
 
         // Verify the promote_key
-        assert_eq!(promote_key, 4000i64);
+        assert_eq!(promote_key, 4000u64);
 
         // Get the original page and verify it has 4 keys and 5 child_ids
         let original_page = position_index.index_pages.get_page(page_id).unwrap();
         let original_internal = original_page.node.as_any().downcast_ref::<InternalNode>().unwrap();
         assert_eq!(original_internal.keys.len(), 4);
         assert_eq!(original_internal.child_ids.len(), 5);
-        assert_eq!(original_internal.keys[0], 0i64);
-        assert_eq!(original_internal.keys[1], 1000i64);
-        assert_eq!(original_internal.keys[2], 2000i64);
-        assert_eq!(original_internal.keys[3], 3000i64);
+        assert_eq!(original_internal.keys[0], 0u64);
+        assert_eq!(original_internal.keys[1], 1000u64);
+        assert_eq!(original_internal.keys[2], 2000u64);
+        assert_eq!(original_internal.keys[3], 3000u64);
         assert_eq!(original_internal.child_ids[0], PageID(0));
         assert_eq!(original_internal.child_ids[1], PageID(100));
         assert_eq!(original_internal.child_ids[2], PageID(200));
@@ -1582,7 +1571,7 @@ mod tests {
         let new_internal = new_page.node.as_any().downcast_ref::<InternalNode>().unwrap();
         assert_eq!(new_internal.keys.len(), 1);
         assert_eq!(new_internal.child_ids.len(), 2);
-        assert_eq!(new_internal.keys[0], 5000i64);
+        assert_eq!(new_internal.keys[0], 5000u64);
         assert_eq!(new_internal.child_ids[0], PageID(500));
         assert_eq!(new_internal.child_ids[1], PageID(600));
 
@@ -1597,10 +1586,10 @@ mod tests {
         let original_internal = original_page.node.as_any().downcast_ref::<InternalNode>().unwrap();
         assert_eq!(original_internal.keys.len(), 4);
         assert_eq!(original_internal.child_ids.len(), 5);
-        assert_eq!(original_internal.keys[0], 0i64);
-        assert_eq!(original_internal.keys[1], 1000i64);
-        assert_eq!(original_internal.keys[2], 2000i64);
-        assert_eq!(original_internal.keys[3], 3000i64);
+        assert_eq!(original_internal.keys[0], 0u64);
+        assert_eq!(original_internal.keys[1], 1000u64);
+        assert_eq!(original_internal.keys[2], 2000u64);
+        assert_eq!(original_internal.keys[3], 3000u64);
         assert_eq!(original_internal.child_ids[0], PageID(0));
         assert_eq!(original_internal.child_ids[1], PageID(100));
         assert_eq!(original_internal.child_ids[2], PageID(200));
@@ -1612,7 +1601,7 @@ mod tests {
         let new_internal = new_page.node.as_any().downcast_ref::<InternalNode>().unwrap();
         assert_eq!(new_internal.keys.len(), 1);
         assert_eq!(new_internal.child_ids.len(), 2);
-        assert_eq!(new_internal.keys[0], 5000i64);
+        assert_eq!(new_internal.keys[0], 5000u64);
         assert_eq!(new_internal.child_ids[0], PageID(500));
         assert_eq!(new_internal.child_ids[1], PageID(600));
         // No need to clean up the test file, it will be removed when temp_dir goes out of scope
@@ -1636,7 +1625,7 @@ mod tests {
         let mut keys = Vec::new();
         let mut child_ids = Vec::new();
         for i in 0..4 {
-            keys.push((i * 1000) as i64);
+            keys.push((i * 1000) as u64);
             child_ids.push(PageID(i * 100));
         }
         child_ids.push(PageID(400)); // One more child_id than keys
@@ -1656,7 +1645,7 @@ mod tests {
         position_index.index_pages.add_page(internal_page);
 
         // Add a new key and child_id that will not cause the internal node to split
-        let new_key = 4000i64;
+        let new_key = 4000u64;
         let new_child_id = PageID(500);
 
         // Call append_internal_key_and_value with the page_id, key, and child_id
@@ -1670,7 +1659,7 @@ mod tests {
         let internal = page.node.as_any().downcast_ref::<InternalNode>().unwrap();
         assert_eq!(internal.keys.len(), 5);
         assert_eq!(internal.child_ids.len(), 6);
-        assert_eq!(internal.keys[4], 4000i64);
+        assert_eq!(internal.keys[4], 4000u64);
         assert_eq!(internal.child_ids[5], PageID(500));
 
         // Flush changes to disk
@@ -1684,7 +1673,7 @@ mod tests {
         let internal2 = page2.node.as_any().downcast_ref::<InternalNode>().unwrap();
         assert_eq!(internal2.keys.len(), 5);
         assert_eq!(internal2.child_ids.len(), 6);
-        assert_eq!(internal2.keys[4], 4000i64);
+        assert_eq!(internal2.keys[4], 4000u64);
         assert_eq!(internal2.child_ids[5], PageID(500));
 
         // No need to clean up the test file, it will be removed when temp_dir goes out of scope
@@ -1966,7 +1955,7 @@ mod tests {
         let mut position_index = PositionIndex::new(&test_path, page_size).unwrap();
 
         // Create a position and two different records
-        let position: Position = 42.into();
+        let position: Position = 42u64;
         let record1 = PositionIndexRecord {
             segment: 1,
             offset: 100,

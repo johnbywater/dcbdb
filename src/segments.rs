@@ -76,7 +76,7 @@ impl From<SegmentError> for std::io::Error {
 
 /// File-based implementation of Segment
 pub struct Segment {
-    number: u32,
+    number: u64,
     path: PathBuf,
     file: File,
     write_offset: u64,
@@ -86,7 +86,7 @@ pub struct Segment {
 
 impl Segment {
     /// Create a new segment with the given number and path
-    pub fn new(number: u32, path: impl AsRef<Path>) -> SegmentResult<Self> {
+    pub fn new(number: u64, path: impl AsRef<Path>) -> SegmentResult<Self> {
         let path_buf = path.as_ref().to_path_buf();
         let file = OpenOptions::new()
             .read(true)
@@ -109,8 +109,13 @@ impl Segment {
     }
 
     /// Get the segment number
-    pub fn number(&self) -> u32 {
+    pub fn number(&self) -> u64 {
         self.number
+    }
+
+    /// Get the segment number
+    pub fn write_offset(&self) -> u64 {
+        self.write_offset
     }
 
     /// Get the segment path
@@ -217,10 +222,10 @@ impl<'a> Iterator for EventRecordIterator<'a> {
 
 /// File-based implementation of SegmentManager
 pub struct SegmentManager {
-    current_segment_number: u32,
+    current_segment_number: u64,
     path: PathBuf,
     max_segment_size: usize,
-    current_segment: Mutex<Segment>,
+    pub current_segment: Segment,
     segment_cache: Mutex<BTreeMap<u32, Box<Segment>>>,
     segment_cache_size: usize,
 }
@@ -234,7 +239,7 @@ impl SegmentManager {
         let max_size = max_segment_size.unwrap_or(DEFAULT_MAX_SEGMENT_SIZE);
 
         // Find the current segment number
-        let mut current_segment_number = 0;
+        let mut current_segment_number: u64 = 0;
 
         for entry in std::fs::read_dir(&path_buf)? {
             let entry = entry?;
@@ -243,7 +248,7 @@ impl SegmentManager {
 
             if file_name_str.starts_with("segment-") && file_name_str.ends_with(".dat") {
                 if let Some(num_str) = file_name_str.strip_prefix("segment-").and_then(|s| s.strip_suffix(".dat")) {
-                    if let Ok(num) = num_str.parse::<u32>() {
+                    if let Ok(num) = num_str.parse::<u64>() {
                         current_segment_number = current_segment_number.max(num);
                     }
                 }
@@ -255,7 +260,7 @@ impl SegmentManager {
             let segment_path = Self::make_segment_path(&path_buf, current_segment_number);
             Segment::new(current_segment_number, segment_path)?
         } else {
-            // Create first segment
+            // Create the first segment
             current_segment_number = 1;
             let segment_path = Self::make_segment_path(&path_buf, current_segment_number);
             Segment::new(current_segment_number, segment_path)?
@@ -265,22 +270,20 @@ impl SegmentManager {
             current_segment_number,
             path: path_buf,
             max_segment_size: max_size,
-            current_segment: Mutex::new(current_segment),
+            current_segment,
             segment_cache: Mutex::new(BTreeMap::new()),
             segment_cache_size: 16,
         })
     }
 
     /// Add payloads to the segment manager
-    pub fn add_payloads(&mut self, payloads: &[Vec<u8>]) -> SegmentResult<Vec<(u32, u64)>> {
+    pub fn add_payloads(&mut self, payloads: &[Vec<u8>]) -> SegmentResult<Vec<(u64, u64)>> {
         let mut segment_numbers_and_offsets = Vec::with_capacity(payloads.len());
         let payloads_size: usize = payloads.iter().map(|p| p.len()).sum();
 
-        let mut current_segment = self.current_segment.lock().unwrap();
-
         // Check if we need to rotate to a new segment
-        if current_segment.size() + payloads_size as u64 > self.max_segment_size as u64 {
-            current_segment.flush()?;
+        if self.current_segment.size() + payloads_size as u64 > self.max_segment_size as u64 {
+            self.current_segment.flush()?;
 
             // Create a new segment
             self.current_segment_number += 1;
@@ -288,13 +291,13 @@ impl SegmentManager {
             let new_segment = Segment::new(self.current_segment_number, segment_path)?;
 
             // Update the current segment
-            *current_segment = new_segment;
+            self.current_segment = new_segment;
         }
 
         // Add payloads to the current segment
         for payload in payloads {
-            let offset = current_segment.add(payload.clone());
-            segment_numbers_and_offsets.push((current_segment.number(), offset));
+            let offset = self.current_segment.add(payload.clone());
+            segment_numbers_and_offsets.push((self.current_segment.number(), offset));
         }
 
         Ok(segment_numbers_and_offsets)
@@ -310,14 +313,12 @@ impl SegmentManager {
     }
 
     /// Recover from a specific position
-    pub fn recover_position(&mut self, segment_number: u32, offset: u64) -> SegmentResult<()> {
-        let mut current_segment = self.current_segment.lock().unwrap();
-
+    pub fn recover_position(&mut self, segment_number: u64, offset: u64) -> SegmentResult<()> {
         if segment_number == 0 && offset == 0 {
             // Create first segment
             self.current_segment_number = 1;
             let segment_path = Self::make_segment_path(&self.path, 1);
-            *current_segment = Segment::new(1, segment_path)?;
+            self.current_segment = Segment::new(1, segment_path)?;
         } else {
             // Get the specified segment
             let segment_path = Self::make_segment_path(&self.path, segment_number);
@@ -326,14 +327,14 @@ impl SegmentManager {
 
             // Update the current segment
             self.current_segment_number = segment_number;
-            *current_segment = segment;
+            self.current_segment = segment;
         }
 
         Ok(())
     }
 
     /// Get a segment by number
-    pub fn get_segment(&self, segment_number: u32) -> SegmentResult<Segment> {
+    pub fn get_segment(&self, segment_number: u64) -> SegmentResult<Segment> {
         // Check if the segment path exists
         let segment_path = Self::make_segment_path(&self.path, segment_number);
 
@@ -348,15 +349,14 @@ impl SegmentManager {
     }
 
     /// Make a segment path
-    fn make_segment_path(base_path: &Path, segment_number: u32) -> PathBuf {
+    fn make_segment_path(base_path: &Path, segment_number: u64) -> PathBuf {
         base_path.join(format!("segment-{:08}.dat", segment_number))
     }
 
     /// Flush all segments
-    pub fn flush(&self) -> SegmentResult<()> {
+    pub fn flush(&mut self) -> SegmentResult<()> {
         // Flush the current segment
-        let mut current_segment = self.current_segment.lock().unwrap();
-        current_segment.flush()?;
+        self.current_segment.flush()?;
 
         // Trim cache if needed
         let mut cache = self.segment_cache.lock().unwrap();
@@ -373,10 +373,9 @@ impl SegmentManager {
     }
 
     /// Close all segments
-    pub fn close(&self) -> SegmentResult<()> {
+    pub fn close(&mut self) -> SegmentResult<()> {
         // Flush and close the current segment
-        let mut current_segment = self.current_segment.lock().unwrap();
-        current_segment.close()?;
+        self.current_segment.close()?;
 
         // Close all segments in the cache
         let mut cache = self.segment_cache.lock().unwrap();
@@ -402,7 +401,7 @@ impl Drop for SegmentManager {
 /// Iterator over segments
 struct SegmentIterator<'a> {
     manager: &'a SegmentManager,
-    current_number: u32,
+    current_number: u64,
     stop_after_current: bool,
 }
 
@@ -831,8 +830,7 @@ mod tests {
         assert_eq!(manager.current_segment_number, 1);
 
         // Check that the write offset is set correctly
-        let current_segment = manager.current_segment.lock().unwrap();
-        assert_eq!(current_segment.file_size(), 500);
+        assert_eq!(manager.current_segment.file_size(), 500);
     }
 
     #[test]

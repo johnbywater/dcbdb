@@ -134,7 +134,7 @@ impl CheckpointFile {
             blob[4], blob[5], blob[6], blob[7],
         ]);
 
-        self.position = i64::from_le_bytes([
+        self.position = u64::from_le_bytes([
             blob[8], blob[9], blob[10], blob[11], 
             blob[12], blob[13], blob[14], blob[15],
         ]);

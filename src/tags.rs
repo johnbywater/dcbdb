@@ -237,24 +237,31 @@ pub const TAG_LEAF_NODE_TYPE: u8 = 4;
 /// Constant for the tag internal node type
 pub const TAG_INTERNAL_NODE_TYPE: u8 = 5;
 
+/// Constant for indicating a leaf node value does not have a tag tree
+pub const TAG_LEAF_VALUE_NOT_TAG_TREE: u8 = 0;
+
+/// Constant for indicating a leaf node value has a tag tree
+pub const TAG_LEAF_VALUE_HAS_TAG_TREE: u8 = 1;
+
+
 // Leaf node for the B+tree
 #[derive(Debug, Clone)]
 pub struct LeafNode {
     pub keys: Vec<[u8; TAG_HASH_LEN]>,
-    pub values: Vec<Vec<Position>>,
+    pub values: Vec<(u8, Vec<Position>)>,
 }
 
 impl LeafNode {
     fn calc_serialized_node_size(&self) -> usize {
-        // This is a simplified implementation for now
         // 2 bytes for keys_len + keys * (8 bytes per key) + values size
         let keys_len = self.keys.len();
         let mut total_size = 2 + (keys_len * TAG_HASH_LEN);
 
-        // Add size for values (simplified for now)
+        // Add size for values
         for value in &self.values {
             total_size += 2; // 2 bytes for length
-            total_size += value.len() * POSITION_SIZE; // Each Position is 8 bytes
+            total_size += 1; // 1 byte for has_tag_tree
+            total_size += value.1.len() * POSITION_SIZE; // Each Position is 8 bytes
         }
 
         total_size
@@ -273,13 +280,16 @@ impl LeafNode {
             result.extend_from_slice(key);
         }
 
-        // Serialize each value (simplified for now)
+        // Serialize each value
         for value in &self.values {
-            // Serialize the length of the value (2 bytes)
-            result.extend_from_slice(&(value.len() as u16).to_le_bytes());
+            // Serialize the char
+            result.extend_from_slice(&[value.0]);
+            
+            // Serialize the length of the positions (2 bytes)
+            result.extend_from_slice(&(value.1.len() as u16).to_le_bytes());
 
             // Serialize each Position (8 bytes each)
-            for pos in value {
+            for pos in &value.1 {
                 result.extend_from_slice(&pos.to_le_bytes());
             }
         }
@@ -288,7 +298,6 @@ impl LeafNode {
     }
 
     pub fn from_slice(slice: &[u8]) -> Result<Self, std::io::Error> {
-        // This is a simplified implementation for now
         // Check if the slice has at least 2 bytes for keys_len
         if slice.len() < 2 {
             return Err(std::io::Error::new(
@@ -298,7 +307,7 @@ impl LeafNode {
         }
 
         // Extract the length of the keys (first 2 bytes)
-        let keys_len = u16::from_le_bytes([slice[0], slice[1]]) as usize;
+        let keys_len = u16::from_le_bytes(slice[0..2].try_into().unwrap()) as usize;
 
         // Calculate the minimum expected size for the keys
         let min_expected_size = 2 + (keys_len * TAG_HASH_LEN);
@@ -318,7 +327,7 @@ impl LeafNode {
             keys.push(key);
         }
 
-        // Extract the values (simplified for now)
+        // Extract the values
         let mut values = Vec::with_capacity(keys_len);
         let mut offset = 2 + (keys_len * TAG_HASH_LEN);
 
@@ -330,28 +339,29 @@ impl LeafNode {
                 ));
             }
 
+            // Extract the 'has_tag_tree' char
+            let has_tag_tree = slice[offset];
+            offset += 1;
+
             // Extract the length of the value (2 bytes)
             let value_len = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
             offset += 2;
 
-            if offset + (value_len * POSITION_SIZE) > slice.len() {
+            if offset + (value_len * (POSITION_SIZE)) > slice.len() {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "Unexpected end of data while reading value",
                 ));
             }
-
             // Extract the Positions (8 bytes each)
-            let mut value = Vec::with_capacity(value_len);
+            let mut positions = Vec::with_capacity(value_len);
             for j in 0..value_len {
-                let pos_start = offset + (j * POSITION_SIZE);
-                let pos = i64::from_le_bytes([
-                    slice[pos_start], slice[pos_start + 1], slice[pos_start + 2], slice[pos_start + 3],
-                    slice[pos_start + 4], slice[pos_start + 5], slice[pos_start + 6], slice[pos_start + 7],
-                ]);
-                value.push(pos);
+                let pos_start = offset + (j * (POSITION_SIZE));
+                let pos = u64::from_le_bytes(slice[pos_start..pos_start + 8].try_into().unwrap());
+                positions.push(pos);
             }
 
+            let value = (has_tag_tree, positions);
             values.push(value);
             offset += value_len * POSITION_SIZE;
         }
@@ -556,7 +566,7 @@ impl TagLeafNode {
         let mut positions = Vec::with_capacity(positions_len);
         for i in 0..positions_len {
             let start = 6 + (i * POSITION_SIZE);
-            let pos = i64::from_le_bytes([
+            let pos = u64::from_le_bytes([
                 slice[start], slice[start + 1], slice[start + 2], slice[start + 3],
                 slice[start + 4], slice[start + 5], slice[start + 6], slice[start + 7],
             ]);
@@ -653,7 +663,7 @@ impl TagInternalNode {
         let mut keys = Vec::with_capacity(keys_len);
         for i in 0..keys_len {
             let start = 2 + (i * POSITION_SIZE);
-            let key = i64::from_le_bytes([
+            let key = u64::from_le_bytes([
                 slice[start], slice[start + 1], slice[start + 2], slice[start + 3],
                 slice[start + 4], slice[start + 5], slice[start + 6], slice[start + 7],
             ]);
@@ -886,49 +896,52 @@ impl TagIndex {
         match search_result {
             // Key already exists, append the new position to the existing list
             Ok(index) => {
-                // Check if the value is a single negative number, which indicates a TagLeafNode
-                let is_tag_leaf_node = {
+                // Check if the value indicates a tag tree
+                let has_tag_tree = {
                     let page = index_pages.get_page(page_id).unwrap();
                     let leaf_node = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
-                    leaf_node.values[index].len() == 1 && leaf_node.values[index][0] < 0
+                    leaf_node.values[index].0 == TAG_LEAF_VALUE_HAS_TAG_TREE
                 };
 
-                if is_tag_leaf_node {
-                    // Get the TagLeafNode page ID
-                    let tag_leaf_page_id = {
+                if has_tag_tree {
+                    // Get the tag tree root page ID
+                    let tag_tree_root_page_id = {
                         let page = index_pages.get_page(page_id).unwrap();
                         let leaf_node = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
-                        PageID((-leaf_node.values[index][0]) as u32)
+                        PageID((leaf_node.values[index].1[0]) as u32)
                     };
 
                     // Insert the positions into the tag B+tree
                     drop(index_pages);
-                    let new_root_page_id = self.insert_tag_tree(tag_leaf_page_id, value);
+                    let new_root_page_id = self.insert_tag_tree(tag_tree_root_page_id, value);
 
                     // If the root of the tag B+tree changed, update the reference in the LeafNode
                     if let Some(new_id) = new_root_page_id {
                         let mut index_pages = self.index_pages.borrow_mut();
                         let page = index_pages.get_page_mut(page_id).unwrap();
                         let leaf_node = page.node.as_any_mut().downcast_mut::<LeafNode>().unwrap();
-                        leaf_node.values[index] = vec![-(new_id.0 as i64)];
+                        leaf_node.values[index].1[0] = new_id.0 as u64;
                         index_pages.mark_dirty(page_id);
                     }
                 } else {
-                    // Check if adding these positions would exceed 100
-                    let current_positions_count = {
+                    // Check if we need to start a B+tree for this tag
+                    let needs_tag_tree = {
                         let page = index_pages.get_page(page_id).unwrap();
+                        let page_size = page.node.calc_serialized_page_size();
+                        let not_enough_space = page_size + POSITION_SIZE > self.page_size;
                         let leaf_node = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
-                        leaf_node.values[index].len()
+                        let too_many_positions = leaf_node.values[index].1.len() >= 100;
+                        not_enough_space || too_many_positions
                     };
 
-                    if current_positions_count >= 100 {
+                    if needs_tag_tree  {
                         // We need to create a TagLeafNode
 
                         // First, get all the current positions
                         let all_positions = {
                             let page = index_pages.get_page(page_id).unwrap();
                             let leaf_node = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
-                            let mut positions = leaf_node.values[index].clone();
+                            let mut positions = leaf_node.values[index].1.clone();
 
                             // Add the new positions
                             positions.push(value);
@@ -959,7 +972,7 @@ impl TagIndex {
 
                         // Replace the list of positions with a single position that is the negative of the page ID
                         // This is a special marker to indicate that the positions are stored in a TagLeafNode
-                        leaf_node.values[index] = vec![-(tag_leaf_page_id.0 as i64)];
+                        leaf_node.values[index] = (TAG_LEAF_VALUE_HAS_TAG_TREE, vec![tag_leaf_page_id.0 as u64]);
 
                         index_pages.mark_dirty(page_id);
                     } else {
@@ -969,7 +982,7 @@ impl TagIndex {
 
                         // Append the new position to the existing list
                         // We can assume that a new Position for an existing tag is greater than previously added Positions
-                        leaf_node.values[index].push(value);
+                        leaf_node.values[index].1.push(value);
 
                         index_pages.mark_dirty(page_id);
                     }
@@ -984,7 +997,7 @@ impl TagIndex {
                     let page = index_pages.get_page(page_id).unwrap();
                     let page_size = page.node.calc_serialized_page_size();
                     // Calculate the additional size needed for the new key and value
-                    let additional_size = TAG_HASH_LEN + 2 + POSITION_SIZE;
+                    let additional_size = TAG_HASH_LEN + 2 + 1 + POSITION_SIZE;
                     page_size + additional_size > self.page_size
                 };
 
@@ -995,7 +1008,7 @@ impl TagIndex {
 
                     // Insert the key and value at the correct position
                     leaf_node.keys.insert(insert_index, key);
-                    leaf_node.values.insert(insert_index, vec![value]);
+                    leaf_node.values.insert(insert_index, (TAG_LEAF_VALUE_NOT_TAG_TREE, vec![value]));
 
                     index_pages.mark_dirty(page_id);
                     return None;
@@ -1021,7 +1034,7 @@ impl TagIndex {
 
         // Insert the new key and value at the correct position
         leaf_node.keys.insert(insert_index, key);
-        leaf_node.values.insert(insert_index, vec![value]);
+        leaf_node.values.insert(insert_index, (TAG_LEAF_VALUE_NOT_TAG_TREE, vec![value]));
 
         // Calculate the midpoint
         let mid = leaf_node.keys.len() / 2;
@@ -1515,14 +1528,14 @@ impl TagIndex {
         match leaf_node.keys.binary_search(&key) {
             Ok(index) => {
                 // Key found, check if the positions are stored directly or in a TagLeafNode
-                if leaf_node.values[index].len() == 1 && leaf_node.values[index][0] < 0 {
+                if leaf_node.values[index].0 == TAG_LEAF_VALUE_HAS_TAG_TREE {
                     // Positions are stored in a tag B+tree
-                    let tag_tree_root_id = PageID((-leaf_node.values[index][0]) as u32);
+                    let tag_tree_root_id = PageID(leaf_node.values[index].1[0] as u32);
                     drop(index_pages);
                     Ok(TagPositionIterator::TagTree(TagTreePositionIterator::new(self, tag_tree_root_id, after)))
                 } else {
                     // Positions are stored directly in the leaf node
-                    let positions = leaf_node.values[index].clone();
+                    let positions = leaf_node.values[index].1.clone();
                     Ok(TagPositionIterator::Direct(DirectPositionIterator::new(positions, after)))
                 }
             }
@@ -1637,17 +1650,18 @@ mod tests {
                 key3,
             ],
             values: vec![
-                vec![1000, 1001, 1002], // Positions for tag1
-                vec![2000, 2001],       // Positions for tag2
-                vec![3000],             // Positions for tag3
+                (TAG_LEAF_VALUE_NOT_TAG_TREE, vec![1000, 1001, 1002]), // Positions for tag1
+                (TAG_LEAF_VALUE_NOT_TAG_TREE, vec![2000, 2001]),       // Positions for tag2
+                (TAG_LEAF_VALUE_NOT_TAG_TREE, vec![3000]),             // Positions for tag3
             ],
         };
 
         // Serialize the node
-        let serialized = leaf_node.serialize();
+        let serialized_node = leaf_node.serialize();
+        assert_eq!(serialized_node.len(), leaf_node.calc_serialized_node_size());
 
         // Deserialize the node
-        let deserialized: LeafNode = LeafNode::from_slice(&serialized).unwrap();
+        let deserialized: LeafNode = LeafNode::from_slice(&serialized_node).unwrap();
 
         // Verify that the deserialized node matches the original
         assert_eq!(deserialized.keys.len(), leaf_node.keys.len());
@@ -1667,12 +1681,12 @@ mod tests {
         // Calculate the expected size: 
         // 2 bytes for keys length + 
         // (3 keys * 8 bytes) + 
-        // (2 bytes for value1 length + 3 positions * 8 bytes) +
-        // (2 bytes for value2 length + 2 positions * 8 bytes) +
-        // (2 bytes for value3 length + 1 position * 8 bytes) +
+        // (1 byte for has tag tree + 2 bytes for value1 length + 3 positions * 8 bytes) +
+        // (1 byte for has tag tree + 2 bytes for value2 length + 2 positions * 8 bytes) +
+        // (1 byte for has tag tree + 2 bytes for value3 length + 1 position * 8 bytes) +
         // 9 bytes for page overhead
         let expected_size = 2 + (3 * TAG_HASH_LEN) + 
-                           (2 + 3 * 8) + (2 + 2 * 8) + (2 + 1 * 8) + 9;
+                           (1 + 2 + 3 * 8) + (1 + 2 + 2 * 8) + (1 + 2 + 1 * 8) + 9;
 
         // Verify that the page size is correct
         assert_eq!(page_size, expected_size, 
@@ -1774,7 +1788,7 @@ mod tests {
         // Create a non-trivial TagLeafNode instance
         let tag_leaf_node = TagLeafNode {
             positions: vec![
-                1000, // Position is just an i64
+                1000, // Position is just an u64
                 2000,
                 3000,
                 4000,
@@ -1828,7 +1842,7 @@ mod tests {
         // Create a TagLeafNode instance with next_leaf_id as None
         let tag_leaf_node_none = TagLeafNode {
             positions: vec![
-                1000, // Position is just an i64
+                1000, // Position is just an u64
                 2000,
                 3000,
             ],
@@ -1883,7 +1897,7 @@ mod tests {
         // Create a non-trivial TagInternalNode instance
         let tag_internal_node = TagInternalNode {
             keys: vec![
-                1000, // Position is just an i64
+                1000, // Position is just an u64
                 2000,
                 3000,
             ],
@@ -1968,8 +1982,8 @@ mod tests {
         let leaf_node = LeafNode {
             keys: vec![key1, key2],
             values: vec![
-                vec![1000, 1001], // Positions for tag1
-                vec![2000, 2001], // Positions for tag2
+                (TAG_LEAF_VALUE_NOT_TAG_TREE, vec![1000, 1001]), // Positions for tag1
+                (TAG_LEAF_VALUE_NOT_TAG_TREE, vec![2000, 2001]), // Positions for tag2
             ],
         };
 
@@ -2081,9 +2095,9 @@ mod tests {
             // Create a vector of positions for each value
             let mut positions = Vec::new();
             for j in 0..3 {
-                positions.push((i * 1000 + j) as i64);
+                positions.push((i * 1000 + j) as u64);
             }
-            values.push(positions);
+            values.push((TAG_LEAF_VALUE_NOT_TAG_TREE, positions));
         }
 
         let leaf_node = LeafNode {
@@ -2130,7 +2144,7 @@ mod tests {
         }
 
         assert_eq!(leaf.keys[new_key_index], new_key);
-        assert_eq!(leaf.values[new_key_index], vec![9999]);
+        assert_eq!(leaf.values[new_key_index], (TAG_LEAF_VALUE_NOT_TAG_TREE, vec![9999]));
 
         // Flush changes to disk
         index_pages.flush().unwrap();
@@ -2155,7 +2169,7 @@ mod tests {
         }
 
         assert_eq!(leaf2.keys[new_key_index2], new_key);
-        assert_eq!(leaf2.values[new_key_index2], vec![9999]);
+        assert_eq!(leaf2.values[new_key_index2], (TAG_LEAF_VALUE_NOT_TAG_TREE, vec![9999]));
 
         // No need to clean up the test file, it will be removed when temp_dir goes out of scope
     }
@@ -2184,9 +2198,9 @@ mod tests {
             // Create a vector of positions for each value
             let mut positions = Vec::new();
             for j in 0..3 {
-                positions.push((i * 1000 + j) as i64);
+                positions.push((i * 1000 + j) as u64);
             }
-            values.push(positions);
+            values.push((TAG_LEAF_VALUE_NOT_TAG_TREE, positions));
         }
 
         let leaf_node = LeafNode {
@@ -2238,7 +2252,7 @@ mod tests {
             let new_key_in_original = original_leaf.keys.contains(&new_key);
             if new_key_in_original {
                 let index = original_leaf.keys.iter().position(|k| *k == new_key).unwrap();
-                assert_eq!(original_leaf.values[index], vec![new_value]);
+                assert_eq!(original_leaf.values[index], (TAG_LEAF_VALUE_NOT_TAG_TREE, vec![new_value]));
             }
         }
 
@@ -2259,7 +2273,7 @@ mod tests {
             let new_key_in_new = new_leaf.keys.contains(&new_key);
             if new_key_in_new {
                 let index = new_leaf.keys.iter().position(|k| *k == new_key).unwrap();
-                assert_eq!(new_leaf.values[index], vec![new_value]);
+                assert_eq!(new_leaf.values[index], (TAG_LEAF_VALUE_NOT_TAG_TREE, vec![new_value]));
             }
         }
 
@@ -2374,8 +2388,8 @@ mod tests {
         }
 
         // Verify that TagC has only one position before adding another
-        assert_eq!(leaf.values[tag_c_index].len(), 1);
-        assert_eq!(leaf.values[tag_c_index][0], 3000);
+        assert_eq!(leaf.values[tag_c_index].1.len(), 1);
+        assert_eq!(leaf.values[tag_c_index].1[0], 3000);
         drop(index_pages);
 
         // Add another position to TagC
@@ -2400,9 +2414,9 @@ mod tests {
         }
 
         // Verify that TagC now has two positions
-        assert_eq!(leaf.values[tag_c_index].len(), 2);
-        assert_eq!(leaf.values[tag_c_index][0], 3000);
-        assert_eq!(leaf.values[tag_c_index][1], 3001);
+        assert_eq!(leaf.values[tag_c_index].1.len(), 2);
+        assert_eq!(leaf.values[tag_c_index].1[0], 3000);
+        assert_eq!(leaf.values[tag_c_index].1[1], 3001);
 
         // Verify that we still have 5 keys (no duplicates)
         assert_eq!(leaf.keys.len(), 5);
@@ -2435,9 +2449,9 @@ mod tests {
         }
 
         // Verify that TagC still has two positions
-        assert_eq!(leaf2.values[tag_c_index2].len(), 2);
-        assert_eq!(leaf2.values[tag_c_index2][0], 3000);
-        assert_eq!(leaf2.values[tag_c_index2][1], 3001);
+        assert_eq!(leaf2.values[tag_c_index2].1.len(), 2);
+        assert_eq!(leaf2.values[tag_c_index2].1[0], 3000);
+        assert_eq!(leaf2.values[tag_c_index2].1[1], 3001);
     }
 
     #[test]
@@ -2730,7 +2744,7 @@ mod tests {
             // Verify that the leaf was not split
             assert!(split_result.is_none());
 
-            positions.push(i as i64);
+            positions.push(i as u64);
 
         }
 
@@ -2741,7 +2755,7 @@ mod tests {
         let leaf = page.node.as_any().downcast_ref::<LeafNode>().unwrap();
         assert_eq!(leaf.keys.len(), 1);
         assert_eq!(leaf.values.len(), 1);
-        assert_eq!(leaf.values[0].len(), 100);
+        assert_eq!(leaf.values[0].1.len(), 100);
         drop(index_pages);
 
         // Add one more position to the tag
@@ -2758,9 +2772,10 @@ mod tests {
         assert_eq!(leaf.keys.len(), 1);
         assert_eq!(leaf.values.len(), 1);
 
-        // The value should now be a single position that is the negative of the page ID
-        assert_eq!(leaf.values[0].len(), 1);
-        let tag_leaf_page_id = PageID((-leaf.values[0][0]) as u32);
+        // The value should now be a single position
+        assert_eq!(leaf.values[0].0, TAG_LEAF_VALUE_HAS_TAG_TREE);
+        assert_eq!(leaf.values[0].1.len(), 1);
+        let tag_leaf_page_id = PageID(leaf.values[0].1[0] as u32);
 
         // Get the TagLeafNode page
         let tag_leaf_page = index_pages.get_page(tag_leaf_page_id).unwrap();
@@ -2771,7 +2786,7 @@ mod tests {
 
         // Verify that the positions are correct
         for i in 0..101 {
-            assert_eq!(tag_leaf_node.positions[i], i as i64);
+            assert_eq!(tag_leaf_node.positions[i], i as u64);
         }
 
         // Verify that the TagLeafNode's next_leaf_id is None
@@ -2791,9 +2806,9 @@ mod tests {
         assert_eq!(leaf2.keys.len(), 1);
         assert_eq!(leaf2.values.len(), 1);
 
-        // The value should still be a single position that is the negative of the page ID
-        assert_eq!(leaf2.values[0].len(), 1);
-        let tag_leaf_page_id2 = PageID((-leaf2.values[0][0]) as u32);
+        // The value should still be a single position
+        assert_eq!(leaf2.values[0].1.len(), 1);
+        let tag_leaf_page_id2 = PageID(leaf2.values[0].1[0] as u32);
         assert_eq!(tag_leaf_page_id, tag_leaf_page_id2);
 
         // Get the TagLeafNode page
@@ -2805,7 +2820,7 @@ mod tests {
 
         // Verify that the positions are still correct
         for i in 0..101 {
-            assert_eq!(tag_leaf_node2.positions[i], i as i64);
+            assert_eq!(tag_leaf_node2.positions[i], i as u64);
         }
 
         // Verify that the TagLeafNode's next_leaf_id is still None
@@ -2913,7 +2928,7 @@ mod tests {
         // Create a TagLeafNode with many positions to fill up most of the page
         let mut positions = Vec::new();
         for i in 0..100 {
-            positions.push(i as i64);
+            positions.push(i as u64);
         }
 
         let tag_leaf_node = TagLeafNode {
@@ -3210,8 +3225,8 @@ mod tests {
         assert_eq!(leaf_node.keys[0], expected_key);
 
         // Verify that the value contains the position
-        assert_eq!(leaf_node.values[0].len(), 1);
-        assert_eq!(leaf_node.values[0][0], position);
+        assert_eq!(leaf_node.values[0].1.len(), 1);
+        assert_eq!(leaf_node.values[0].1[0], position);
         drop(index_pages);
 
         // Use the lookup method to find the position for the tag
@@ -3249,8 +3264,8 @@ mod tests {
         assert_eq!(leaf_node2.keys[0], expected_key);
 
         // Verify that the value still contains the position
-        assert_eq!(leaf_node2.values[0].len(), 1);
-        assert_eq!(leaf_node2.values[0][0], position);
+        assert_eq!(leaf_node2.values[0].1.len(), 1);
+        assert_eq!(leaf_node2.values[0].1[0], position);
         drop(index_pages2);
 
         // Use the lookup method to find the position for the tag after reopening
@@ -3275,7 +3290,7 @@ mod tests {
         let tag = "test-tag";
         let mut inserted_positions = Vec::new();
         for i in 1..11 {
-            let position = i as i64;
+            let position = i as u64;
             tag_index.insert(tag, position).unwrap();
             inserted_positions.push(position);
         }
@@ -3284,7 +3299,7 @@ mod tests {
         let all_positions = tag_index.lookup(tag).unwrap();
         assert_eq!(all_positions.len(), 10);
         for i in 0..10 {
-            assert!(all_positions.contains(&({i + 1} as i64)));
+            assert!(all_positions.contains(&({i + 1} as u64)));
         }
 
         // Test lookup_with_after with 'after' parameter in the middle of the range
@@ -3292,15 +3307,15 @@ mod tests {
         let middle_positions = tag_index.lookup_with_after(tag, after).unwrap();
         assert_eq!(middle_positions.len(), 5); // Should return the last 5 positions
         for i in 5..10 {
-            assert!(middle_positions.contains(&({i+1} as i64)));
+            assert!(middle_positions.contains(&({i+1} as u64)));
         }
 
         // Test lookup_with_after with 'after' parameter at the beginning
-        let after: Position = -1; // Before the first position
+        let after: Position = 0; // Before the first position
         let start_positions = tag_index.lookup_with_after(tag, after).unwrap();
         assert_eq!(start_positions.len(), 10); // Should return all positions
         for i in 0..10 {
-            assert!(start_positions.contains(&({i+1} as i64)));
+            assert!(start_positions.contains(&({i+1} as u64)));
         }
 
         // Test lookup_with_after with 'after' parameter at the end
@@ -3325,7 +3340,7 @@ mod tests {
         let mut inserted_tags = Vec::new();
         for i in 1..21 {
             let tag = format!("tag-{}", i);
-            let position = (i * 100) as i64;
+            let position = (i * 100) as u64;
             tag_index.insert(&tag, position).unwrap();
             inserted_tags.push((tag, position));
         }
@@ -3393,9 +3408,9 @@ mod tests {
 
             // Verify the position is correct
             if let Some(idx) = in_left {
-                assert!(left_keys_values.1[idx].contains(position), "Position {} not found for tag {}", position, tag);
+                assert!(left_keys_values.1[idx].1.contains(position), "Position {} not found for tag {}", position, tag);
             } else if let Some(idx) = in_right {
-                assert!(right_keys_values.1[idx].contains(position), "Position {} not found for tag {}", position, tag);
+                assert!(right_keys_values.1[idx].1.contains(position), "Position {} not found for tag {}", position, tag);
             }
 
             // Use the lookup method to verify the position can be found
@@ -3486,7 +3501,7 @@ mod tests {
         let mut inserted_tags = Vec::new();
         for i in 1..251 {
             let tag = format!("tag-{}", i);
-            let position = (i * 100) as i64;
+            let position = (i * 100) as u64;
             tag_index.insert(&tag, position).unwrap();
             inserted_tags.push((tag, position));
         }
@@ -3564,7 +3579,7 @@ mod tests {
 
         // First, insert 100 positions
         for i in 1..101 {
-            let position = i as i64;
+            let position = i as u64;
             tag_index.insert(tag, position).unwrap();
             inserted_positions.push(position);
         }
@@ -3596,12 +3611,12 @@ mod tests {
         assert_eq!(leaf_node.keys[0], expected_key, "Key should match the hashed tag");
 
         // Verify that the value has 100 positions
-        assert_eq!(leaf_node.values[0].len(), 100, "Value should have 100 elements");
+        assert_eq!(leaf_node.values[0].1.len(), 100, "Value should have 100 elements");
         drop(index_pages);
 
         // Now insert 11 more positions to trigger the creation of a TagLeafNode
         for i in 101..112 {
-            let position = i as i64;
+            let position = i as u64;
             tag_index.insert(tag, position).unwrap();
             inserted_positions.push(position);
         }
@@ -3633,11 +3648,11 @@ mod tests {
         assert_eq!(leaf_node.keys[0], expected_key, "Key should match the hashed tag");
 
         // Verify that the value is a PageID of a TagLeafNode (a single negative value)
-        assert_eq!(leaf_node.values[0].len(), 1, "Value should have one element");
-        assert!(leaf_node.values[0][0] < 0, "Value should be a negative number (PageID)");
+        assert_eq!(leaf_node.values[0].1.len(), 1, "Value should have one element");
+        assert_eq!(leaf_node.values[0].0, TAG_LEAF_VALUE_HAS_TAG_TREE, "Value should indicate tag tree exists");
 
         // Get the TagLeafNode page
-        let tag_leaf_page_id = PageID((-leaf_node.values[0][0]) as u32);
+        let tag_leaf_page_id = PageID(leaf_node.values[0].1[0] as u32);
         let tag_leaf_page = index_pages.get_page(tag_leaf_page_id).unwrap();
         let tag_leaf_node = tag_leaf_page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
 
@@ -3646,7 +3661,7 @@ mod tests {
 
         // Verify that the positions are correct
         for i in 0..111 {
-            assert_eq!(tag_leaf_node.positions[i], {i+1} as i64, "Position at index {} should be {}", i, i);
+            assert_eq!(tag_leaf_node.positions[i], {i+1} as u64, "Position at index {} should be {}", i, i);
         }
         drop(index_pages);
 
@@ -3654,7 +3669,7 @@ mod tests {
         let positions = tag_index.lookup(tag).unwrap();
         assert_eq!(positions.len(), 111, "lookup() should return 111 positions");
         for i in 1..112 {
-            assert!(positions.contains(&(i as i64)), "lookup() should return position {}", i);
+            assert!(positions.contains(&(i as u64)), "lookup() should return position {}", i);
         }
 
         // Flush changes to disk
@@ -3668,7 +3683,7 @@ mod tests {
         let positions2 = tag_index2.lookup(tag).unwrap();
         assert_eq!(positions2.len(), 111, "lookup() should return 111 positions after reopening");
         for i in 1..112 {
-            assert!(positions2.contains(&(i as i64)), "lookup() should return position {} after reopening", i);
+            assert!(positions2.contains(&(i as u64)), "lookup() should return position {} after reopening", i);
         }
 
         // Get the root page again
@@ -3689,11 +3704,11 @@ mod tests {
         assert_eq!(leaf_node2.keys[0], expected_key, "Key should still match the hashed tag after reopening");
 
         // Verify that the value is still a PageID of a TagLeafNode
-        assert_eq!(leaf_node2.values[0].len(), 1, "Value should still have one element after reopening");
-        assert!(leaf_node2.values[0][0] < 0, "Value should still be a negative number (PageID) after reopening");
+        assert_eq!(leaf_node2.values[0].1.len(), 1, "Value should still have one element after reopening");
+        assert_eq!(leaf_node2.values[0].0, TAG_LEAF_VALUE_HAS_TAG_TREE, "Value should still indicate tag tree exists after reopening");
 
         // Get the TagLeafNode page again
-        let tag_leaf_page_id2 = PageID((-leaf_node2.values[0][0]) as u32);
+        let tag_leaf_page_id2 = PageID(leaf_node2.values[0].1[0] as u32);
         assert_eq!(tag_leaf_page_id, tag_leaf_page_id2, "TagLeafNode PageID should be the same after reopening");
         let tag_leaf_page2 = index_pages2.get_page(tag_leaf_page_id2).unwrap();
         let tag_leaf_node2 = tag_leaf_page2.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
@@ -3703,7 +3718,7 @@ mod tests {
 
         // Verify that the positions are still correct
         for i in 0..111 {
-            assert_eq!(tag_leaf_node2.positions[i], {i + 1} as i64, "Position at index {} should still be {} after reopening", i, i);
+            assert_eq!(tag_leaf_node2.positions[i], {i + 1} as u64, "Position at index {} should still be {} after reopening", i, i);
         }
     }
 
@@ -3718,7 +3733,7 @@ mod tests {
         // Create a TagLeafNode with many positions to calculate its size
         let mut positions = Vec::new();
         for i in 1..101 {
-            positions.push(i as i64);
+            positions.push(i as u64);
         }
 
         let tag_leaf_node = TagLeafNode {
@@ -3740,14 +3755,14 @@ mod tests {
 
         // First, insert 100 positions to create a TagLeafNode
         for i in 1..101 {
-            let position = i as i64;
+            let position = i as u64;
             tag_index.insert(tag, position).unwrap();
             inserted_positions.push(position);
         }
 
         // Now insert 50 more positions to trigger splitting the TagLeafNode
         for i in 101..151 {
-            let position = i as i64;
+            let position = i as u64;
             tag_index.insert(tag, position).unwrap();
             inserted_positions.push(position);
         }
@@ -3779,11 +3794,11 @@ mod tests {
         assert_eq!(leaf_node.keys[0], expected_key, "Key should match the hashed tag");
 
         // Verify that the value is a PageID (a single negative value)
-        assert_eq!(leaf_node.values[0].len(), 1, "Value should have one element");
-        assert!(leaf_node.values[0][0] < 0, "Value should be a negative number (PageID)");
+        assert_eq!(leaf_node.values[0].1.len(), 1, "Value should have one element");
+        assert_eq!(leaf_node.values[0].0, TAG_LEAF_VALUE_HAS_TAG_TREE, "Value should indicate a tag tree exists");
 
         // Get the page ID from the LeafNode value
-        let page_id = PageID((-leaf_node.values[0][0]) as u32);
+        let page_id = PageID(leaf_node.values[0].1[0] as u32);
 
         // Get the page
         let page = index_pages.get_page(page_id).unwrap();
@@ -3805,7 +3820,7 @@ mod tests {
         let positions = tag_index.lookup(tag).unwrap();
         assert_eq!(positions.len(), 150, "lookup() should return 150 positions");
         for i in 0..150 {
-            assert!(positions.contains(&({i+1} as i64)), "lookup() should return position {}", i);
+            assert!(positions.contains(&({i+1} as u64)), "lookup() should return position {}", i);
         }
 
         // Test lookup_with_after with a value in the middle of the first leaf node
@@ -3813,7 +3828,7 @@ mod tests {
         let positions_middle = tag_index.lookup_with_after(tag, first_leaf_middle_pos).unwrap();
         assert_eq!(positions_middle.len(), 100, "Should return 100 positions when 'after' is in the middle");
         for i in 51..151 {
-            assert!(positions_middle.contains(&(i as i64)), "lookup_with_after should return position {}", i);
+            assert!(positions_middle.contains(&(i as u64)), "lookup_with_after should return position {}", i);
         }
 
         // Test lookup_with_after with a value in the middle of the last leaf node
@@ -3821,7 +3836,7 @@ mod tests {
         let positions_last = tag_index.lookup_with_after(tag, last_leaf_middle_pos).unwrap();
         assert_eq!(positions_last.len(), 25, "Should return 25 positions when 'after' is in the last leaf");
         for i in 126..151 {
-            assert!(positions_last.contains(&(i as i64)), "lookup_with_after should return position {}", i);
+            assert!(positions_last.contains(&(i as u64)), "lookup_with_after should return position {}", i);
         }
 
         // Test lookup_with_after with a value greater than the last inserted position
@@ -3840,7 +3855,7 @@ mod tests {
         let positions = tag_index2.lookup(tag).unwrap();
         assert_eq!(positions.len(), 150, "lookup() should return 150 positions after reopening");
         for i in 0..150 {
-            assert!(positions.contains(&({i+1} as i64)), "lookup() should return position {} after reopening", i);
+            assert!(positions.contains(&({i+1} as u64)), "lookup() should return position {} after reopening", i);
         }
     }
 
@@ -3855,7 +3870,7 @@ mod tests {
         // Create a TagLeafNode with many positions to calculate its size
         let mut positions = Vec::new();
         for i in 1..101 {
-            positions.push(i as i64);
+            positions.push(i as u64);
         }
 
         let tag_leaf_node = TagLeafNode {
@@ -3877,7 +3892,7 @@ mod tests {
 
         // Now insert 9000 more positions to trigger splitting the TagInternalNode
         for i in 1..9001 {
-            let position = i as i64;
+            let position = i as u64;
             tag_index.insert(tag, position).unwrap();
             inserted_positions.push(position);
         }
@@ -3909,11 +3924,11 @@ mod tests {
         assert_eq!(leaf_node.keys[0], expected_key, "Key should match the hashed tag");
 
         // Verify that the value is a PageID (a single negative value)
-        assert_eq!(leaf_node.values[0].len(), 1, "Value should have one element");
-        assert!(leaf_node.values[0][0] < 0, "Value should be a negative number (PageID)");
+        assert_eq!(leaf_node.values[0].1.len(), 1, "Value should have one element");
+        assert_eq!(leaf_node.values[0].0, TAG_LEAF_VALUE_HAS_TAG_TREE,"Value should indicate tag tree exists");
 
         // Get the page ID from the LeafNode value
-        let page_id = PageID((-leaf_node.values[0][0]) as u32);
+        let page_id = PageID(leaf_node.values[0].1[0] as u32);
 
         // Get the page
         let page = index_pages.get_page(page_id).unwrap();
@@ -3939,7 +3954,7 @@ mod tests {
         let result = tag_index.lookup(tag).unwrap();
         assert_eq!(result.len(), 9000, "lookup() should return 500 positions");
         for i in 0..9000 {
-            assert!(result.contains(&({i+1} as i64)), "lookup() should return position {}", i);
+            assert!(result.contains(&({i+1} as u64)), "lookup() should return position {}", i);
         }
 
         // Test lookup_with_after with a value in the middle of the first leaf node
@@ -3947,7 +3962,7 @@ mod tests {
         let positions_middle = tag_index.lookup_with_after(tag, first_leaf_middle_pos).unwrap();
         assert_eq!(positions_middle.len(), 8900, "Should return 400 positions when 'after' is in the middle");
         for i in 101..9001 {
-            assert!(positions_middle.contains(&(i as i64)), "lookup_with_after should return position {}", i);
+            assert!(positions_middle.contains(&(i as u64)), "lookup_with_after should return position {}", i);
         }
 
         // Test lookup_with_after with a value in the middle of the range
@@ -3955,7 +3970,7 @@ mod tests {
         let positions_middle_range = tag_index.lookup_with_after(tag, middle_pos).unwrap();
         assert_eq!(positions_middle_range.len(), 4500, "Should return 4500 positions when 'after' is in the middle of the range");
         for i in 4501..9001 {
-            assert!(positions_middle_range.contains(&(i as i64)), "lookup_with_after should return position {}", i);
+            assert!(positions_middle_range.contains(&(i as u64)), "lookup_with_after should return position {}", i);
         }
 
         // Test lookup_with_after with a value greater than the last inserted position
@@ -3974,7 +3989,7 @@ mod tests {
         let result2 = tag_index2.lookup(tag).unwrap();
         assert_eq!(result2.len(), 9000, "lookup() should return 500 positions after reopening");
         for i in 0..9000 {
-            assert!(result2.contains(&({i+1} as i64)), "lookup() should return position {} after reopening", i);
+            assert!(result2.contains(&({i+1} as u64)), "lookup() should return position {} after reopening", i);
         }
     }
 }

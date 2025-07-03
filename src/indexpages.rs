@@ -261,6 +261,7 @@ pub struct IndexPages {
     pub deserializer: Deserializer,
     /// Cache capacity
     pub cache_capacity: usize,
+    pub page_buffer: Vec<u8>,
 }
 
 impl IndexPages {
@@ -290,7 +291,8 @@ impl IndexPages {
     /// Creates a new IndexPages with the given path, page size, and cache capacity
     pub fn new_with_cache_capacity<P: AsRef<Path>>(path: P, page_size: usize, cache_capacity: Option<usize>) -> std::io::Result<Self> {
         let cache_capacity = cache_capacity.unwrap_or(1024);
-        let mut paged_file = PagedFile::new(path, Some(page_size))?;
+        let mut paged_file = PagedFile::new(path, page_size)?;
+        let mut page_buffer = vec![0; page_size];
 
         // Create a new Deserializer
         let mut deserializer = Deserializer::new();
@@ -307,7 +309,7 @@ impl IndexPages {
         // Check if the file exists
         let header_page = if paged_file.new {
             // File exists, read the header page from disk
-            let header_page_data = paged_file.read_page(header_page_id)
+            paged_file.read_page(header_page_id, &mut page_buffer)
                 .map_err(|e| std::io::Error::new(
                     match e {
                         PagedFileError::Io(ref io_err) => io_err.kind(),
@@ -317,7 +319,7 @@ impl IndexPages {
                 ))?;
 
             // Deserialize the header page
-            deserializer.deserialize_page(&header_page_data, header_page_id)
+            deserializer.deserialize_page(&page_buffer, header_page_id)
                 .map_err(|e| std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     format!("Failed to deserialize header page: {}", e)
@@ -337,7 +339,7 @@ impl IndexPages {
         };
 
         // Create the IndexPages instance
-        let mut index_pages = IndexPages {
+        let mut index_pages = Self {
             paged_file,
             dirty: HashMap::new(),
             header_page_id,
@@ -346,6 +348,7 @@ impl IndexPages {
             cache: LruCache::unbounded(),
             deserializer,
             cache_capacity,
+            page_buffer
         };
 
         // If the file doesn't exist, mark the header page as dirty and flush it to disk
@@ -449,7 +452,7 @@ impl IndexPages {
         // Check if the page is in the cache
         if !self.cache.contains(&page_id) {
             // Page is not in the cache, read it from disk
-            let page_data = self.paged_file.read_page(page_id)
+            self.paged_file.read_page(page_id, &mut self.page_buffer)
                 .map_err(|e| std::io::Error::new(
                     match e {
                         PagedFileError::Io(ref io_err) => io_err.kind(),
@@ -459,7 +462,7 @@ impl IndexPages {
                 ))?;
 
             // Deserialize the page
-            let page = self.deserializer.deserialize_page(&page_data, page_id)
+            let page = self.deserializer.deserialize_page(&self.page_buffer, page_id)
                 .map_err(|e| std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     format!("Failed to deserialize page: {}", e)
@@ -1119,11 +1122,12 @@ mod tests {
             .expect("Failed to create new IndexPages");
 
         // Read the header page from disk
-        let header_page_data = new_index_pages.paged_file.read_page(index_pages.header_page_id)
+        let mut page_buffer = vec![0u8; PAGE_SIZE];
+        new_index_pages.paged_file.read_page(index_pages.header_page_id, &mut page_buffer)
             .expect("Failed to read header page from disk");
 
         // Deserialize the header page
-        let deserialized_header_page = new_index_pages.deserializer.deserialize_page(&header_page_data, index_pages.header_page_id)
+        let deserialized_header_page = new_index_pages.deserializer.deserialize_page(&page_buffer, index_pages.header_page_id)
             .expect("Failed to deserialize header page");
 
         // Verify that the deserialized header page has the correct page_id
@@ -1131,11 +1135,11 @@ mod tests {
                    "Deserialized header page_id should match header_page_id");
 
         // Read page 1 from disk
-        let page1_data = new_index_pages.paged_file.read_page(page_id1)
+        new_index_pages.paged_file.read_page(page_id1, &mut page_buffer)
             .expect("Failed to read page 1 from disk");
 
         // Deserialize page 1
-        let deserialized_page1 = new_index_pages.deserializer.deserialize_page(&page1_data, page_id1)
+        let deserialized_page1 = new_index_pages.deserializer.deserialize_page(&page_buffer, page_id1)
             .expect("Failed to deserialize page 1");
 
         // Verify that the deserialized page 1 has the correct page_id
@@ -1143,11 +1147,11 @@ mod tests {
                    "Deserialized page 1 page_id should match page_id1");
 
         // Read page 2 from disk
-        let page2_data = new_index_pages.paged_file.read_page(page_id2)
+        new_index_pages.paged_file.read_page(page_id2, &mut page_buffer)
             .expect("Failed to read page 2 from disk");
 
         // Deserialize page 2
-        let deserialized_page2 = new_index_pages.deserializer.deserialize_page(&page2_data, page_id2)
+        let deserialized_page2 = new_index_pages.deserializer.deserialize_page(&page_buffer, page_id2)
             .expect("Failed to deserialize page 2");
 
         // Verify that the deserialized page 2 has the correct page_id

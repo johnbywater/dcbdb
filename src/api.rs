@@ -54,7 +54,7 @@ pub struct DCBSequencedEvent {
 /// Response from a read operation, providing an iterator over sequenced events
 pub trait DCBReadResponse: Iterator<Item = DCBSequencedEvent> {
     /// Returns the current head position of the event store, or None if empty
-    fn head(&self) -> Option<i64>;
+    fn head(&self) -> Option<u64>;
 }
 
 /// Interface for recording and retrieving events
@@ -103,9 +103,14 @@ pub trait DCBEventStoreAPIExt: DCBEventStoreAPI {
         limit: Option<usize>,
     ) -> Result<(Vec<DCBSequencedEvent>, Option<u64>)> {
         let response = self.read_response(query, after, limit)?;
-        let head = response.head().map(|h| h as u64);
+        let mut head = response.head();
         let events: Vec<DCBSequencedEvent> = response.collect();
 
+        // If there's a limit and the result set is not empty, set the head to the position of the last event
+        if limit.is_some() && !events.is_empty() {
+            head = Some(events.last().unwrap().position);
+        }
+        
         Ok((events, head))
     }
 }
@@ -132,11 +137,11 @@ mod tests {
     struct TestReadResponse {
         events: Vec<DCBSequencedEvent>,
         current_index: usize,
-        head_position: Option<i64>,
+        head_position: Option<u64>,
     }
 
     impl TestReadResponse {
-        fn new(events: Vec<DCBSequencedEvent>, head_position: Option<i64>) -> Self {
+        fn new(events: Vec<DCBSequencedEvent>, head_position: Option<u64>) -> Self {
             Self {
                 events,
                 current_index: 0,
@@ -160,7 +165,7 @@ mod tests {
     }
 
     impl DCBReadResponse for TestReadResponse {
-        fn head(&self) -> Option<i64> {
+        fn head(&self) -> Option<u64> {
             self.head_position
         }
     }

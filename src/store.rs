@@ -69,7 +69,7 @@ pub struct EventStoreDCBReadResponse<'a> {
     /// Last committed position in the event store
     last_committed_position: u64,
     /// Current head position
-    head: Option<i64>,
+    head: Option<u64>,
     /// Whether the head was given
     head_was_given: bool,
     /// Current position for iteration
@@ -98,7 +98,7 @@ impl<'a> EventStoreDCBReadResponse<'a> {
         // If there's no limit, set the head to the last issued position
         // If there is a limit, we'll set the head to the position of the last event in the result set
         let head = if limit.is_none() && last_issued_position > 0 {
-            Some(last_issued_position as i64)
+            Some(last_issued_position)
         } else {
             None
         };
@@ -192,7 +192,7 @@ impl<'a> Iterator for EventStoreDCBReadResponse<'a> {
             // For the limit case, we'll set the head to the position of the last event in the result set
             // This is done in the read() method that collects all events and then sets the head
             if !self.head_was_given {
-                self.head = Some(event.position as i64);
+                self.head = Some(event.position);
             }
 
             // Increment the batch index and count
@@ -210,7 +210,7 @@ impl<'a> Iterator for EventStoreDCBReadResponse<'a> {
 }
 
 impl<'a> DCBReadResponse for EventStoreDCBReadResponse<'a> {
-    fn head(&self) -> Option<i64> {
+    fn head(&self) -> Option<u64> {
         self.head
     }
 }
@@ -679,7 +679,7 @@ impl DCBEventStoreAPI for EventStore {
     ) -> Result<(Vec<DCBSequencedEvent>, Option<u64>)> {
         // Implement read in terms of read_response
         let response = self.read_response(query.clone(), after, limit)?;
-        let mut head = response.head().map(|h| h as u64);
+        let mut head = response.head();
         let events: Vec<DCBSequencedEvent> = response.collect();
 
         // If there's a limit and the result set is not empty, set the head to the position of the last event
@@ -844,24 +844,24 @@ mod tests {
         assert_eq!(head, None);
 
         // Query by tag1 - limit 1
-        let (events, head) = store.read(Some(query1.clone()), None, Some(1)).unwrap();
+        let (events, head) = store.read_as_tuple(Some(query1.clone()), None, Some(1)).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event.event_type, "test_event");
         assert_eq!(head, Some(1));
 
         // Query by tag1 - after 0
-        let (events, head) = store.read(Some(query1.clone()), Some(0), None).unwrap();
+        let (events, head) = store.read_as_tuple(Some(query1.clone()), Some(0), None).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event.event_type, "test_event");
         assert_eq!(head, Some(2));
 
         // Query by tag1 - after 1
-        let (events, head) = store.read(Some(query1.clone()), Some(1), None).unwrap();
+        let (events, head) = store.read_as_tuple(Some(query1.clone()), Some(1), None).unwrap();
         assert_eq!(events.len(), 0);
         assert_eq!(head, Some(2));
 
         // Query by tag1 - after 1, limit 1
-        let (events, head) = store.read(Some(query1.clone()), Some(1), Some(1)).unwrap();
+        let (events, head) = store.read_as_tuple(Some(query1.clone()), Some(1), Some(1)).unwrap();
         assert_eq!(events.len(), 0);
         assert_eq!(head, None);
 
@@ -873,7 +873,7 @@ mod tests {
             }],
         };
 
-        let (events, _) = store.read(Some(query2), None, None).unwrap();
+        let (events, _) = store.read_as_tuple(Some(query2), None, None).unwrap();
         assert_eq!(events.len(), 2);
 
         // Query by tag1 or tag3 (should match both events)
@@ -890,7 +890,7 @@ mod tests {
             ],
         };
 
-        let (events, _) = store.read(Some(query2), None, None).unwrap();
+        let (events, _) = store.read_as_tuple(Some(query2), None, None).unwrap();
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].event.event_type, "test_event");
         assert_eq!(events[1].event.event_type, "another_event");
@@ -909,7 +909,7 @@ mod tests {
             ],
         };
 
-        let (events, _) = store.read(Some(query2), None, None).unwrap();
+        let (events, _) = store.read_as_tuple(Some(query2), None, None).unwrap();
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].event.event_type, "test_event");
         assert_eq!(events[1].event.event_type, "another_event");
@@ -923,7 +923,7 @@ mod tests {
             }],
         };
 
-        let (events, _) = store.read(Some(query3), None, None).unwrap();
+        let (events, _) = store.read_as_tuple(Some(query3), None, None).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event.event_type, "another_event");
 
@@ -935,7 +935,7 @@ mod tests {
             }],
         };
 
-        let (events, head) = store.read(Some(query4), None, None).unwrap();
+        let (events, head) = store.read_as_tuple(Some(query4), None, None).unwrap();
         assert_eq!(events.len(), 0);
         assert_eq!(head, Some(2));
 
@@ -971,34 +971,34 @@ mod tests {
             }],
         };
 
-        let (events, _) = store.read(Some(query.clone()), None, None).unwrap();
+        let (events, _) = store.read_as_tuple(Some(query.clone()), None, None).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event.event_type, "test_event");
 
         // Query by tag1 - limit 0
-        let (events, head) = store.read(Some(query.clone()), None, Some(0)).unwrap();
+        let (events, head) = store.read_as_tuple(Some(query.clone()), None, Some(0)).unwrap();
         assert_eq!(events.len(), 0);
         assert_eq!(head, None);
 
         // Query by tag1 - limit 1
-        let (events, head) = store.read(Some(query.clone()), None, Some(1)).unwrap();
+        let (events, head) = store.read_as_tuple(Some(query.clone()), None, Some(1)).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event.event_type, "test_event");
         assert_eq!(head, Some(1));
 
         // Query by tag1 - after 0
-        let (events, head) = store.read(Some(query.clone()), Some(0), None).unwrap();
+        let (events, head) = store.read_as_tuple(Some(query.clone()), Some(0), None).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event.event_type, "test_event");
         assert_eq!(head, Some(2));
 
         // Query by tag1 - after 1
-        let (events, head) = store.read(Some(query.clone()), Some(1), None).unwrap();
+        let (events, head) = store.read_as_tuple(Some(query.clone()), Some(1), None).unwrap();
         assert_eq!(events.len(), 0);
         assert_eq!(head, Some(2));
 
         // Query by tag1 - after 1, limit 1
-        let (events, head) = store.read(Some(query.clone()), Some(1), Some(1)).unwrap();
+        let (events, head) = store.read_as_tuple(Some(query.clone()), Some(1), Some(1)).unwrap();
         assert_eq!(events.len(), 0);
         assert_eq!(head, None);
 
@@ -1034,7 +1034,7 @@ mod tests {
             }],
         };
 
-        let (events, _) = store.read(Some(query), None, None).unwrap();
+        let (events, _) = store.read_as_tuple(Some(query), None, None).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event.event_type, "test_event");
 
@@ -1046,7 +1046,7 @@ mod tests {
             }],
         };
 
-        let (events, head) = store.read(Some(query), None, None).unwrap();
+        let (events, head) = store.read_as_tuple(Some(query), None, None).unwrap();
         assert_eq!(events.len(), 0);
         assert_eq!(head, Some(2));
 
@@ -1157,7 +1157,7 @@ mod tests {
         };
 
         // Read events with the query
-        let (events, head) = store.read(Some(query), None, None).unwrap();
+        let (events, head) = store.read_as_tuple(Some(query), None, None).unwrap();
 
         // Check that we got the expected number of events
         assert_eq!(events.len(), num_events, "Expected {}, got {}", num_events, events.len());

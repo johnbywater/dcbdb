@@ -1,6 +1,6 @@
 use tempfile::tempdir;
 use uuid::Uuid;
-use dcbsd::api::{DCBAppendCondition, DCBQuery, DCBEvent, EventStoreError, DCBQueryItem, DCBEventStoreAPI};
+use dcbsd::api::{DCBAppendCondition, DCBQuery, DCBEvent, EventStoreError, DCBQueryItem, DCBEventStoreAPI, DCBEventStoreAPIExt};
 use dcbsd::store::EventStore;
 // Import the EventStore and related types from the main crate
 
@@ -13,10 +13,10 @@ fn test_direct_event_store() {
 
 
 // Helper function to run the test with a given EventStoreApi implementation
-pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
+pub fn run_event_store_test<T: DCBEventStoreAPI + DCBEventStoreAPIExt>(event_store: &T) {
 
     // Read all, expect no results.
-    let (result, head) = event_store.read(None, None, None).unwrap();
+    let (result, head) = event_store.read_as_tuple(None, None, None).unwrap();
     assert_eq!(0, result.len());
     assert_eq!(None, head);
 
@@ -32,24 +32,24 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
     assert_eq!(1, position);
 
     // Read all, expect one event.
-    let (result, head) = event_store.read(None, None, None).unwrap();
+    let (result, head) = event_store.read_as_tuple(None, None, None).unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event1.data, result[0].event.data);
     assert_eq!(Some(1), head);
 
     // Read all after 1, expect no events.
-    let (result, head) = event_store.read(None, Some(1), None).unwrap();
+    let (result, head) = event_store.read_as_tuple(None, Some(1), None).unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(1), head);
 
     // Read all limit 1, expect one event.
-    let (result, head) = event_store.read(None, None, Some(1)).unwrap();
+    let (result, head) = event_store.read_as_tuple(None, None, Some(1)).unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event1.data, result[0].event.data);
     assert_eq!(Some(1), head);
 
     // Read all limit 0, expect no events (and head is None).
-    let (result, head) = event_store.read(None, None, Some(0)).unwrap();
+    let (result, head) = event_store.read_as_tuple(None, None, Some(0)).unwrap();
     assert_eq!(0, result.len());
     assert_eq!(None, head);
 
@@ -60,7 +60,7 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             tags: vec![],
         }],
     };
-    let (result, head) = event_store.read(Some(query_type1.clone()), None, None).unwrap();
+    let (result, head) = event_store.read_as_tuple(Some(query_type1.clone()), None, None).unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event1.data, result[0].event.data);
     assert_eq!(Some(1), head);
@@ -72,7 +72,7 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             tags: vec![],
         }],
     };
-    let (result, head) = event_store.read(Some(query_type2.clone()), None, None).unwrap();
+    let (result, head) = event_store.read_as_tuple(Some(query_type2.clone()), None, None).unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(1), head);
 
@@ -83,7 +83,7 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             tags: vec!["tagX".to_string()],
         }],
     };
-    let (result, head) = event_store.read(Some(query_tag_x.clone()), None, None).unwrap();
+    let (result, head) = event_store.read_as_tuple(Some(query_tag_x.clone()), None, None).unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event1.data, result[0].event.data);
     assert_eq!(Some(1), head);
@@ -95,7 +95,7 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             tags: vec!["tagY".to_string()],
         }],
     };
-    let (result, head) = event_store.read(Some(query_tag_y.clone()), None, None).unwrap();
+    let (result, head) = event_store.read_as_tuple(Some(query_tag_y.clone()), None, None).unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(1), head);
 
@@ -106,7 +106,7 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             tags: vec!["tagX".to_string()],
         }],
     };
-    let (result, head) = event_store.read(Some(query_type1_tag_x.clone()), None, None).unwrap();
+    let (result, head) = event_store.read_as_tuple(Some(query_type1_tag_x.clone()), None, None).unwrap();
     assert_eq!(1, result.len());
     assert_eq!(Some(1), head);
 
@@ -117,7 +117,7 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             tags: vec!["tagY".to_string()],
         }],
     };
-    let (result, head) = event_store.read(Some(query_type1_tag_y), None, None).unwrap();
+    let (result, head) = event_store.read_as_tuple(Some(query_type1_tag_y), None, None).unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(1), head);
 
@@ -128,7 +128,7 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             tags: vec!["tagX".to_string()],
         }],
     };
-    let (result, head) = event_store.read(Some(query_type2_tag_x), None, None).unwrap();
+    let (result, head) = event_store.read_as_tuple(Some(query_type2_tag_x), None, None).unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(1), head);
 
@@ -149,7 +149,7 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
     assert_eq!(3, position);
 
     // Read all, expect 3 events (in ascending order).
-    let (result, head) = event_store.read(None, None, None).unwrap();
+    let (result, head) = event_store.read_as_tuple(None, None, None).unwrap();
     assert_eq!(3, result.len());
     assert_eq!(event1.data, result[0].event.data);
     assert_eq!(event2.data, result[1].event.data);
@@ -157,46 +157,46 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
     assert_eq!(Some(3), head);
 
     // Read all after 1, expect two events.
-    let (result, head) = event_store.read(None, Some(1), None).unwrap();
+    let (result, head) = event_store.read_as_tuple(None, Some(1), None).unwrap();
     assert_eq!(2, result.len());
     assert_eq!(event2.data, result[0].event.data);
     assert_eq!(event3.data, result[1].event.data);
     assert_eq!(Some(3), head);
 
     // Read all after 2, expect one event.
-    let (result, head) = event_store.read(None, Some(2), None).unwrap();
+    let (result, head) = event_store.read_as_tuple(None, Some(2), None).unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event3.data, result[0].event.data);
     assert_eq!(Some(3), head);
 
     // Read all after 1, limit 1, expect one event.
-    let (result, head) = event_store.read(None, Some(1), Some(1)).unwrap();
+    let (result, head) = event_store.read_as_tuple(None, Some(1), Some(1)).unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event2.data, result[0].event.data);
     assert_eq!(Some(2), head);
 
     // Read all after 10, limit 10, expect zero events.
-    let (result, head) = event_store.read(None, Some(10), Some(10)).unwrap();
+    let (result, head) = event_store.read_as_tuple(None, Some(10), Some(10)).unwrap();
     assert_eq!(0, result.len());
     assert_eq!(None, head);
 
     // Read type1 after 1, expect no events.
-    let (result, head) = event_store.read(Some(query_type1.clone()), Some(1), None).unwrap();
+    let (result, head) = event_store.read_as_tuple(Some(query_type1.clone()), Some(1), None).unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(3), head);
 
     // Read tagX after 1, expect no events.
-    let (result, head) = event_store.read(Some(query_tag_x.clone()), Some(1), None).unwrap();
+    let (result, head) = event_store.read_as_tuple(Some(query_tag_x.clone()), Some(1), None).unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(3), head);
 
     // Read tagX after 1, limit 1 expect no events.
-    let (result, head) = event_store.read(Some(query_tag_x.clone()), Some(1), Some(1)).unwrap();
+    let (result, head) = event_store.read_as_tuple(Some(query_tag_x.clone()), Some(1), Some(1)).unwrap();
     assert_eq!(0, result.len());
     assert_eq!(None, head);
 
     // Read type1 and tagX after 1, expect no events.
-    let (result, head) = event_store.read(Some(query_type1_tag_x.clone()), Some(1), None).unwrap();
+    let (result, head) = event_store.read_as_tuple(Some(query_type1_tag_x.clone()), Some(1), None).unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(3), head);
 
@@ -207,7 +207,7 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             tags: vec!["tagA".to_string()],
         }],
     };
-    let (result, head) = event_store.read(Some(query_tag_a.clone()), None, None).unwrap();
+    let (result, head) = event_store.read_as_tuple(Some(query_tag_a.clone()), None, None).unwrap();
     assert_eq!(2, result.len());
     assert_eq!(event2.data, result[0].event.data);
     assert_eq!(event3.data, result[1].event.data);
@@ -220,7 +220,7 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             tags: vec!["tagA".to_string(), "tagB".to_string()],
         }],
     };
-    let (result, head) = event_store.read(Some(query_tag_a_and_b.clone()), None, None).unwrap();
+    let (result, head) = event_store.read_as_tuple(Some(query_tag_a_and_b.clone()), None, None).unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event2.data, result[0].event.data);
     assert_eq!(Some(3), head);
@@ -238,7 +238,7 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             },
         ],
     };
-    let (result, head) = event_store.read(Some(query_tag_b_or_c.clone()), None, None).unwrap();
+    let (result, head) = event_store.read_as_tuple(Some(query_tag_b_or_c.clone()), None, None).unwrap();
     assert_eq!(2, result.len());
     assert_eq!(event2.data, result[0].event.data);
     assert_eq!(event3.data, result[1].event.data);
@@ -257,7 +257,7 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             },
         ],
     };
-    let (result, head) = event_store.read(Some(query_tag_x_or_y.clone()), None, None).unwrap();
+    let (result, head) = event_store.read_as_tuple(Some(query_tag_x_or_y.clone()), None, None).unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event1.data, result[0].event.data);
     assert_eq!(Some(3), head);
@@ -269,13 +269,13 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             tags: vec!["tagA".to_string()],
         }],
     };
-    let (result, head) = event_store.read(Some(query_type2_tag_a.clone()), None, None).unwrap();
+    let (result, head) = event_store.read_as_tuple(Some(query_type2_tag_a.clone()), None, None).unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event2.data, result[0].event.data);
     assert_eq!(Some(3), head);
 
     // Read events with type2 and tagA after 2, expect no events.
-    let (result, head) = event_store.read(Some(query_type2_tag_a.clone()), Some(2), None).unwrap();
+    let (result, head) = event_store.read_as_tuple(Some(query_type2_tag_a.clone()), Some(2), None).unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(3), head);
 
@@ -292,7 +292,7 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             },
         ],
     };
-    let (result, head) = event_store.read(Some(query_type2_tag_b_or_type3_tagc.clone()), None, None).unwrap();
+    let (result, head) = event_store.read_as_tuple(Some(query_type2_tag_b_or_type3_tagc.clone()), None, None).unwrap();
     assert_eq!(2, result.len());
     assert_eq!(event2.data, result[0].event.data);
     assert_eq!(event3.data, result[1].event.data);
@@ -311,7 +311,7 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             },
         ],
     };
-    let (result, head) = event_store.read(Some(query_type3_tag_c_or_type2_tag_b), None, None).unwrap();
+    let (result, head) = event_store.read_as_tuple(Some(query_type3_tag_c_or_type2_tag_b), None, None).unwrap();
     assert_eq!(2, result.len());
     assert_eq!(event2.data, result[0].event.data);
     assert_eq!(event3.data, result[1].event.data);
@@ -566,7 +566,7 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
         }),
     ).unwrap();
 
-    let (result, head) = event_store.read(None, None, None).unwrap();
+    let (result, head) = event_store.read_as_tuple(None, None, None).unwrap();
     assert_eq!(13, result.len());
     assert_eq!(result[10].event.event_type, student_registered.event_type);
     assert_eq!(result[11].event.event_type, course_registered.event_type);
@@ -579,7 +579,7 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
     assert_eq!(result[12].event.tags, student_joined_course.tags);
     assert_eq!(Some(13), head);
 
-    let (result, head) = event_store.read(
+    let (result, head) = event_store.read_as_tuple(
         Some(DCBQuery {
             items: vec![DCBQueryItem {
                 types: vec![],
@@ -592,7 +592,7 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
     assert_eq!(2, result.len());
     assert_eq!(Some(13), head);
 
-    let (result, head) = event_store.read(
+    let (result, head) = event_store.read_as_tuple(
         Some(DCBQuery {
             items: vec![DCBQueryItem {
                 types: vec![],
@@ -605,7 +605,7 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
     assert_eq!(2, result.len());
     assert_eq!(Some(13), head);
 
-    let (result, head) = event_store.read(
+    let (result, head) = event_store.read_as_tuple(
         Some(DCBQuery {
             items: vec![DCBQueryItem {
                 types: vec![],
@@ -618,7 +618,7 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
     assert_eq!(1, result.len());
     assert_eq!(Some(13), head);
 
-    let (result, head) = event_store.read(
+    let (result, head) = event_store.read_as_tuple(
         Some(DCBQuery {
             items: vec![DCBQueryItem {
                 types: vec![],
@@ -631,7 +631,7 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
     assert_eq!(2, result.len());
     assert_eq!(Some(13), head);
 
-    let (result, head) = event_store.read(
+    let (result, head) = event_store.read_as_tuple(
         Some(DCBQuery {
             items: vec![DCBQueryItem {
                 types: vec![],
@@ -644,7 +644,7 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
     assert_eq!(2, result.len());
     assert_eq!(Some(13), head);
 
-    let (result, head) = event_store.read(
+    let (result, head) = event_store.read_as_tuple(
         Some(DCBQuery {
             items: vec![DCBQueryItem {
                 types: vec![],
@@ -657,7 +657,7 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
     assert_eq!(1, result.len());
     assert_eq!(Some(13), head);
 
-    let (result, head) = event_store.read(
+    let (result, head) = event_store.read_as_tuple(
         Some(DCBQuery {
             items: vec![DCBQueryItem {
                 types: vec![],
@@ -670,7 +670,7 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
     assert_eq!(1, result.len());
     assert_eq!(Some(11), head);
 
-    let (result, head) = event_store.read(
+    let (result, head) = event_store.read_as_tuple(
         Some(DCBQuery {
             items: vec![DCBQueryItem {
                 types: vec![],
@@ -683,7 +683,7 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
     assert_eq!(1, result.len());
     assert_eq!(Some(12), head);
 
-    let (result, head) = event_store.read(
+    let (result, head) = event_store.read_as_tuple(
         Some(DCBQuery {
             items: vec![DCBQueryItem {
                 types: vec![],
@@ -708,7 +708,7 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             },
         ],
     };
-    let (result, head) = event_store.read(Some(consistency_boundary), None, None).unwrap();
+    let (result, head) = event_store.read_as_tuple(Some(consistency_boundary), None, None).unwrap();
     assert_eq!(3, result.len());
     assert_eq!(Some(13), head);
 }

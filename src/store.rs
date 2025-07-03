@@ -1,11 +1,44 @@
 use std::path::{Path};
-use std::sync::Mutex;
+use std::sync::{Mutex};
 use std::collections::HashMap;
 use itertools::Itertools;
 
 use crate::api::{DCBEvent, DCBEventStoreAPI, DCBQuery, DCBQueryItem, DCBSequencedEvent, DCBAppendCondition, EventStoreError, Result};
-use crate::transactions::TransactionManager;
+use crate::transactions::{TransactionManager};
 use crate::wal::Position;
+
+/// Iterator that yields (position, tag, query item indices)
+struct PositionTagQiidIterator {
+    // This is the iterator over positions
+    positions: std::vec::IntoIter<Position>,
+    // Tag and query item indices
+    tag: String,
+    qiids: Vec<usize>,
+}
+
+impl PositionTagQiidIterator {
+    fn new(
+        positions: Vec<Position>,
+        tag: String,
+        qiids: Vec<usize>
+    ) -> Self {
+        Self {
+            positions: positions.into_iter(),
+            tag,
+            qiids,
+        }
+    }
+}
+
+impl Iterator for PositionTagQiidIterator {
+    type Item = (Position, String, Vec<usize>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.positions.next().map(|position| {
+            (position, self.tag.clone(), self.qiids.clone())
+        })
+    }
+}
 
 /// EventStore implements the DCBEventStoreAPI using TransactionManager
 pub struct EventStore {
@@ -39,40 +72,6 @@ impl EventStore {
         })
     }
 
-    /// Helper method to create an iterator of (position, tag, query item indices)
-    fn _position_tag_qiid<'a>(
-        &'a self,
-        tag: &'a str,
-        tag_qiids: &'a HashMap<String, Vec<usize>>,
-        after: Option<Position>,
-    ) -> impl Iterator<Item = (Position, String, Vec<usize>)> + 'a {
-        let qiids = tag_qiids.get(tag).cloned().unwrap_or_default();
-        let tag_owned = tag.to_string();
-
-        let mut tm = self.transaction_manager.lock().unwrap();
-        let after_pos = after.unwrap_or(0);
-
-        // We need to drop the mutex guard before returning the iterator
-        // So we collect the positions into a Vec first
-        let positions = match tm.lookup_positions_for_tag_after_iter(tag, after_pos) {
-            Ok(iter) => {
-                let mut positions = Vec::new();
-                for pos_result in iter {
-                    if let Ok(pos) = pos_result {
-                        positions.push(pos);
-                    }
-                }
-                positions
-            },
-            Err(_) => Vec::new(),
-        };
-
-        // Now return an iterator that yields (position, tag, qiids)
-        positions.into_iter().map(move |position| {
-            (position, tag_owned.clone(), qiids.clone())
-        })
-    }
-
     /// Checks if an event matches a query item
     fn event_matches_query_item(event: &DCBEvent, query_item: &DCBQueryItem) -> bool {
         // If query_item.types is empty, any event type matches
@@ -85,11 +84,10 @@ impl EventStore {
 
         type_matches && tags_match
     }
-}
 
-impl DCBEventStoreAPI for EventStore {
-    fn read(
+    fn read_internal(
         &self,
+        tm: &mut TransactionManager,
         query: Option<DCBQuery>,
         after: Option<i64>,
         limit: Option<usize>,
@@ -107,7 +105,6 @@ impl DCBEventStoreAPI for EventStore {
 
         // Get the last issued position and check if there are any events
         let last_issued_position = {
-            let tm = self.transaction_manager.lock().unwrap();
             tm.get_last_issued_position()
         };
 
@@ -154,10 +151,38 @@ impl DCBEventStoreAPI for EventStore {
                     }
                 }
 
+
                 // Create iterators for each tag and merge them
                 let mut tag_iterators = Vec::new();
                 for tag in tag_qiis.keys() {
-                    tag_iterators.push(self._position_tag_qiid(tag, &tag_qiis, after_position));
+                    let qiids = tag_qiis.get(tag).cloned().unwrap_or_default();
+                    let tag_owned = tag.to_string();
+
+                    let after_pos = after.unwrap_or(0);
+
+                    // We need to drop the mutex guard before returning the iterator
+                    // So we collect the positions into a Vec first
+                    let positions = match tm.lookup_positions_for_tag_after_iter(tag, after_pos) {
+                        Ok(iter) => {
+                            let mut positions = Vec::new();
+                            for pos_result in iter {
+                                if let Ok(pos) = pos_result {
+                                    positions.push(pos);
+                                }
+                            }
+                            positions
+                        },
+                        Err(_) => Vec::new(),
+                    };
+
+                    // Now create an iterator that yields (position, tag, qiids)
+                    let position_tag_qiids_iter = PositionTagQiidIterator::new(
+                        positions,
+                        tag_owned,
+                        qiids
+                    );
+
+                    tag_iterators.push(position_tag_qiids_iter);
                 }
 
                 // Merge the iterators and group by position
@@ -168,8 +193,8 @@ impl DCBEventStoreAPI for EventStore {
                     .kmerge_by(|a, b| a.0 < b.0);
 
                 // Iterator that groups tuples by position
-                struct GroupByPositionIterator<I> 
-                where 
+                struct GroupByPositionIterator<I>
+                where
                     I: Iterator<Item = (Position, String, Vec<usize>)>
                 {
                     all_tuples_iter: I,
@@ -179,8 +204,8 @@ impl DCBEventStoreAPI for EventStore {
                     finished: bool,
                 }
 
-                impl<I> GroupByPositionIterator<I> 
-                where 
+                impl<I> GroupByPositionIterator<I>
+                where
                     I: Iterator<Item = (Position, String, Vec<usize>)>
                 {
                     fn new(iter: I) -> Self {
@@ -194,8 +219,8 @@ impl DCBEventStoreAPI for EventStore {
                     }
                 }
 
-                impl<I> Iterator for GroupByPositionIterator<I> 
-                where 
+                impl<I> Iterator for GroupByPositionIterator<I>
+                where
                     I: Iterator<Item = (Position, String, Vec<usize>)>
                 {
                     type Item = (Position, std::collections::HashSet<String>, std::collections::HashSet<usize>);
@@ -254,12 +279,9 @@ impl DCBEventStoreAPI for EventStore {
                 // Filter for tag-matching query items using an iterator
                 let positions_with_tags_iter = positions_with_tags.into_iter();
 
-                // Lock the transaction manager for scanning positions
-                let mut tm = self.transaction_manager.lock().unwrap();
-
                 // Iterator that filters positions based on tag matching
-                struct TagMatchingIterator<'a, I> 
-                where 
+                struct TagMatchingIterator<'a, I>
+                where
                     I: Iterator<Item = (Position, std::collections::HashSet<String>, std::collections::HashSet<usize>)>
                 {
                     positions_with_tags_iter: I,
@@ -267,8 +289,8 @@ impl DCBEventStoreAPI for EventStore {
                     tm: &'a mut TransactionManager,
                 }
 
-                impl<'a, I> Iterator for TagMatchingIterator<'a, I> 
-                where 
+                impl<'a, I> Iterator for TagMatchingIterator<'a, I>
+                where
                     I: Iterator<Item = (Position, std::collections::HashSet<String>, std::collections::HashSet<usize>)>
                 {
                     type Item = (Position, crate::positions::PositionIndexRecord, std::collections::HashSet<usize>);
@@ -299,7 +321,7 @@ impl DCBEventStoreAPI for EventStore {
                 let tag_matching_iter = TagMatchingIterator {
                     positions_with_tags_iter,
                     qi_tags: &qi_tags,
-                    tm: &mut tm,
+                    tm,
                 };
 
                 // Collect the filtered positions and records
@@ -309,16 +331,16 @@ impl DCBEventStoreAPI for EventStore {
                 let positions_matching_tags_iter = positions_matching_tags.into_iter();
 
                 // Iterator that filters positions based on type matching
-                struct TypeMatchingIterator<'a, I> 
-                where 
+                struct TypeMatchingIterator<'a, I>
+                where
                     I: Iterator<Item = (Position, crate::positions::PositionIndexRecord, std::collections::HashSet<usize>)>
                 {
                     positions_matching_tags_iter: I,
                     qi_type_hashes: &'a Vec<std::collections::HashSet<Vec<u8>>>,
                 }
 
-                impl<'a, I> Iterator for TypeMatchingIterator<'a, I> 
-                where 
+                impl<'a, I> Iterator for TypeMatchingIterator<'a, I>
+                where
                     I: Iterator<Item = (Position, crate::positions::PositionIndexRecord, std::collections::HashSet<usize>)>
                 {
                     type Item = (Position, crate::positions::PositionIndexRecord);
@@ -385,7 +407,7 @@ impl DCBEventStoreAPI for EventStore {
                             match self.events_iter.next()? {
                                 Ok(event) => {
                                     // Check if the event matches the query
-                                    let matches = self.query_items.iter().any(|item| 
+                                    let matches = self.query_items.iter().any(|item|
                                         EventStore::event_matches_query_item(&event.event, item)
                                     );
 
@@ -405,7 +427,7 @@ impl DCBEventStoreAPI for EventStore {
 
                 // Create and use the iterators
                 let events_iter = ReadEventAtPositionIterator {
-                    tm: &mut tm,
+                    tm,
                     positions_and_idx_records_iter,
                 };
 
@@ -442,7 +464,6 @@ impl DCBEventStoreAPI for EventStore {
 
         // Fall back to a sequential scan to match query items without tags.
         // Use scan() on PositionIndex to get all positions and position index records
-        let mut tm = self.transaction_manager.lock().unwrap();
         let position_records = tm.scan_positions(after_position).map_err(|e| EventStoreError::Io(e.into()))?;
 
         // Process each position and position index record
@@ -493,19 +514,33 @@ impl DCBEventStoreAPI for EventStore {
         Ok((result, head))
     }
 
+}
+
+impl DCBEventStoreAPI for EventStore {
+    fn read(
+        &self,
+        query: Option<DCBQuery>,
+        after: Option<i64>,
+        limit: Option<usize>,
+    ) -> Result<(Vec<DCBSequencedEvent>, Option<i64>)> {
+        let mut tm = self.transaction_manager.lock().unwrap();
+        
+        self.read_internal(&mut tm, query, after, limit)
+    }
+
     fn append(&self, events: Vec<DCBEvent>, condition: Option<DCBAppendCondition>) -> Result<i64> {
         // Check condition if provided
+        // Lock the transaction manager
+        let mut tm = self.transaction_manager.lock().unwrap();
+
         if let Some(condition) = condition {
             // Check if any events match the fail_if_events_match query
-            let (matching_events, _) = self.read(Some(condition.fail_if_events_match), condition.after, None)?;
+            let (matching_events, _) = self.read_internal(&mut tm, Some(condition.fail_if_events_match), condition.after, None)?;
 
             if !matching_events.is_empty() {
                 return Err(EventStoreError::IntegrityError);
             }
         }
-
-        // Lock the transaction manager
-        let mut tm = self.transaction_manager.lock().unwrap();
 
         // Begin a transaction
         let txn_id = tm.begin().map_err(|e| EventStoreError::Io(e.into()))?;

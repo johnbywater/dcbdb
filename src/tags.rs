@@ -189,6 +189,8 @@ impl<'a> Iterator for TagTreePositionIterator<'a> {
 
         // Return the next position
         let position = self.current_positions[self.current_index];
+        println!("Position: {}", position);
+
         self.current_index += 1;
         Some(Ok(position))
     }
@@ -1622,6 +1624,7 @@ impl TagIndex {
         // Only take positions from start_idx onwards
         positions.extend_from_slice(&tag_leaf_node.positions[start_idx..]);
 
+        // TODO: Make this an iterator somehow... and drop the RefCell borrow...
         // Follow the next_leaf_id chain
         let mut next_leaf_id = tag_leaf_node.next_leaf_id;
         while let Some(leaf_id) = next_leaf_id {

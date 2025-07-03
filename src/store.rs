@@ -8,34 +8,45 @@ use crate::transactions::{TransactionManager};
 use crate::wal::Position;
 
 /// Iterator that yields (position, tag, query item indices)
-struct PositionTagQiidIterator {
+struct PositionTagQiidIterator<I>
+where
+    I: Iterator<Item = crate::transactions::Result<Position>>,
+{
     // This is the iterator over positions
-    positions: std::vec::IntoIter<Position>,
+    positions: I,
     // Tag and query item indices
     tag: String,
     qiids: Vec<usize>,
 }
 
-impl PositionTagQiidIterator {
+impl<I> PositionTagQiidIterator<I>
+where
+    I: Iterator<Item = crate::transactions::Result<Position>>,
+{
     fn new(
-        positions: Vec<Position>,
+        positions: I,
         tag: String,
         qiids: Vec<usize>
     ) -> Self {
         Self {
-            positions: positions.into_iter(),
+            positions,
             tag,
             qiids,
         }
     }
 }
 
-impl Iterator for PositionTagQiidIterator {
+impl<I> Iterator for PositionTagQiidIterator<I>
+where
+    I: Iterator<Item = crate::transactions::Result<Position>>,
+{
     type Item = (Position, String, Vec<usize>);
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.positions.next().map(|position| {
-            (position, self.tag.clone(), self.qiids.clone())
+        self.positions.next().and_then(|position_result| {
+            position_result.ok().map(|position| {
+                (position, self.tag.clone(), self.qiids.clone())
+            })
         })
     }
 }
@@ -101,7 +112,8 @@ impl EventStore {
         }
 
         // Convert i64 to Position (u64)
-        let after_position = after.map(|pos| pos as Position);
+        let after_optional = after.map(|pos| pos as Position);
+        let after_position = after.unwrap_or(0);
 
         // Get the last issued position and check if there are any events
         let last_issued_position = {
@@ -152,32 +164,20 @@ impl EventStore {
                 }
 
 
-                // Create iterators for each tag and merge them
+                // Create iterators for each tag
                 let mut tag_iterators = Vec::new();
                 for tag in tag_qiis.keys() {
                     let qiids = tag_qiis.get(tag).cloned().unwrap_or_default();
                     let tag_owned = tag.to_string();
 
-                    let after_pos = after.unwrap_or(0);
 
-                    // We need to drop the mutex guard before returning the iterator
-                    // So we collect the positions into a Vec first
-                    let positions = match tm.lookup_positions_for_tag_after_iter(tag, after_pos) {
-                        Ok(iter) => {
-                            let mut positions = Vec::new();
-                            for pos_result in iter {
-                                if let Ok(pos) = pos_result {
-                                    positions.push(pos);
-                                }
-                            }
-                            positions
-                        },
-                        Err(_) => Vec::new(),
-                    };
+                    // Call lookup to get an iterator of positions
+                    let positions_iter = tm.lookup_positions_for_tag_after_iter(tag, after_position)
+                        .unwrap();
 
                     // Now create an iterator that yields (position, tag, qiids)
                     let position_tag_qiids_iter = PositionTagQiidIterator::new(
-                        positions,
+                        positions_iter,
                         tag_owned,
                         qiids
                     );
@@ -464,7 +464,7 @@ impl EventStore {
 
         // Fall back to a sequential scan to match query items without tags.
         // Use scan() on PositionIndex to get all positions and position index records
-        let position_records = tm.scan_positions(after_position).map_err(|e| EventStoreError::Io(e.into()))?;
+        let position_records = tm.scan_positions(after_optional).map_err(|e| EventStoreError::Io(e.into()))?;
 
         // Process each position and position index record
         for (position, record) in position_records {
@@ -524,7 +524,7 @@ impl DCBEventStoreAPI for EventStore {
         limit: Option<usize>,
     ) -> Result<(Vec<DCBSequencedEvent>, Option<i64>)> {
         let mut tm = self.transaction_manager.lock().unwrap();
-        
+
         self.read_internal(&mut tm, query, after, limit)
     }
 

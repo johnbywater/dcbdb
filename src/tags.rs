@@ -189,8 +189,7 @@ impl<'a> Iterator for TagTreePositionIterator<'a> {
 
         // Return the next position
         let position = self.current_positions[self.current_index];
-        println!("Position: {}", position);
-
+        
         self.current_index += 1;
         Some(Ok(position))
     }
@@ -1550,100 +1549,6 @@ impl TagIndex {
         let mut positions = Vec::new();
         for result in iter {
             positions.push(result?);
-        }
-
-        Ok(positions)
-    }
-
-
-    /// Looks up all positions in a tag B+tree that are greater than the given position
-    ///
-    /// # Arguments
-    /// * `root_page_id` - The PageID of the root page of the tag B+tree
-    /// * `after` - Optional position to start from (exclusive). If None, returns all positions.
-    ///
-    /// # Returns
-    /// * `std::io::Result<Vec<Position>>` - All positions in the tag B+tree that are greater than the given position
-    pub fn lookup_tag_tree(&mut self, root_page_id: PageID, after: Position) -> std::io::Result<Vec<Position>> {
-        // Start with the root page ID
-        let mut current_page_id = root_page_id;
-        let mut index_pages = self.index_pages.borrow_mut();
-
-        // Traverse down the tree until we find a leaf node
-        loop {
-            let page = index_pages.get_page(current_page_id)?;
-
-            if page.node.node_type_byte() == TAG_LEAF_NODE_TYPE {
-                // Found a leaf node, break out of the loop
-                break;
-            } else if page.node.node_type_byte() == TAG_INTERNAL_NODE_TYPE {
-                // Internal node, find the appropriate child based on the 'after' parameter
-                let tag_internal_node = page.node.as_any().downcast_ref::<TagInternalNode>().unwrap();
-
-                if tag_internal_node.child_ids.is_empty() {
-                    return Ok(Vec::new());
-                }
-
-                // Find the index of the first key greater than the 'after' parameter using binary search
-                let index = match tag_internal_node.keys.binary_search(&after) {
-                    // If 'after' is found, use the child at that index + 1
-                    Ok(idx) => idx + 1,
-                    // If 'after' is not found, Err(idx) gives the index where it would be inserted
-                    // This is the index of the first key greater than 'after'
-                    Err(idx) => idx,
-                };
-
-                // Use the child at the found index
-                current_page_id = tag_internal_node.child_ids[index];
-            } else {
-                // Invalid node type
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Invalid node type",
-                ));
-            }
-        }
-
-        // Now current_page_id points to a leaf node
-        // Collect positions from the leaf node and follow the next_leaf_id chain
-        let mut positions = Vec::new();
-
-        // Start with the first leaf node
-        let page = index_pages.get_page(current_page_id)?;
-        let tag_leaf_node = page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
-
-        // Use binary search to find the index of the first position greater than 'after'
-        let start_idx = match tag_leaf_node.positions.binary_search(&after) {
-            // If 'after' is found, start from the next position
-            Ok(idx) => idx + 1,
-            // If 'after' is not found, Err(idx) gives the index where it would be inserted
-            // This is the index of the first position greater than 'after'
-            Err(idx) => idx,
-        };
-
-        // Only take positions from start_idx onwards
-        positions.extend_from_slice(&tag_leaf_node.positions[start_idx..]);
-
-        // TODO: Make this an iterator somehow... and drop the RefCell borrow...
-        // Follow the next_leaf_id chain
-        let mut next_leaf_id = tag_leaf_node.next_leaf_id;
-        while let Some(leaf_id) = next_leaf_id {
-            let leaf_page = index_pages.get_page(leaf_id)?;
-
-            if leaf_page.node.node_type_byte() != TAG_LEAF_NODE_TYPE {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Expected leaf node",
-                ));
-            }
-
-            let leaf_node = leaf_page.node.as_any().downcast_ref::<TagLeafNode>().unwrap();
-            // Since we're past the first leaf node, we know all positions in subsequent nodes
-            // are greater than 'after', so we can just extend with all positions
-            positions.extend_from_slice(&leaf_node.positions);
-
-            // Move to the next leaf node
-            next_leaf_id = leaf_node.next_leaf_id;
         }
 
         Ok(positions)

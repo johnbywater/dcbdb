@@ -24,7 +24,6 @@ clap = { version = "4.4.6", features = ["derive"] }
 
 [dev-dependencies]
 # Add test dependencies as needed
-tokio-test = "0.4.3"
 
 [build-dependencies]
 tonic-build = "0.10.2"

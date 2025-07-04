@@ -512,8 +512,7 @@ impl TagLeafNode {
     fn calc_serialized_node_size(&self) -> usize {
         // 4 bytes for next_leaf_id + 2 bytes for positions_len + positions * (8 bytes per position)
         let positions_len = self.positions.len();
-        let total_size = 4 + 2 + (positions_len * POSITION_SIZE);
-        total_size
+        4 + 2 + (positions_len * POSITION_SIZE)
     }
 
     pub fn serialize(&self) -> Vec<u8> {

@@ -341,7 +341,7 @@ impl IndexPages {
                 .map_err(|e| {
                     std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
-                        format!("Failed to deserialize header page: {}", e),
+                        format!("Failed to deserialize header page: {e}"),
                     )
                 })?
         } else {
@@ -559,8 +559,7 @@ impl IndexPages {
             self.paged_file
                 .write_page(*page_id, &serialized_data)
                 .map_err(|e| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::Other,
+                    std::io::Error::other(
                         format!("Failed to write page: {e}"),
                     )
                 })?;
@@ -568,8 +567,7 @@ impl IndexPages {
 
         // Flush and fsync the paged file
         self.paged_file.flush_and_fsync().map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::Other,
+            std::io::Error::other(
                 format!("Failed to flush and fsync: {e}"),
             )
         })?;

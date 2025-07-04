@@ -95,7 +95,7 @@ impl<'a> EventStoreDCBReadResponse<'a> {
 
         // Read a batch of events
         let max_batch_size = 100;
-        let (batch, _) = event_store
+        let (current_batch, _) = event_store
             .read_internal(&mut tm, query.clone(), after, Some(max_batch_size))
             .unwrap();
 
@@ -114,8 +114,8 @@ impl<'a> EventStoreDCBReadResponse<'a> {
             last_committed_position,
             head,
             current_position,
-            current_batch: batch,
-            max_batch_size: max_batch_size,
+            current_batch,
+            max_batch_size,
             batch_index: 0,
             count: 0,
         }
@@ -457,7 +457,7 @@ impl EventStore {
                             return None;
                         }
 
-                        while let Some((position, tag, qiids)) = self.all_tuples_iter.next() {
+                        for (position, tag, qiids) in self.all_tuples_iter.by_ref() {
                             if self.current_position.is_none() {
                                 // First tuple, initialize the current group
                                 self.current_position = Some(position);
@@ -713,7 +713,7 @@ impl EventStore {
 
                 if let Some(limit) = limit {
                     // Get only a limited number of events
-                    events_iter = Box::new(events_iter.take(limit).into_iter());
+                    events_iter = Box::new(events_iter.take(limit));
                 }
 
                 result = events_iter.collect_vec();

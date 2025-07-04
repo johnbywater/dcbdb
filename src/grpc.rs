@@ -67,7 +67,7 @@ impl From<AppendConditionProto> for DCBAppendCondition {
         DCBAppendCondition {
             fail_if_events_match: proto
                 .fail_if_events_match
-                .map_or_else(|| DCBQuery::default(), |q| q.into()),
+                .map_or_else(DCBQuery::default, |q| q.into()),
             after: proto.after,
         }
     }
@@ -196,15 +196,13 @@ impl EventStoreHandle {
             })
             .await
             .map_err(|_| {
-                EventStoreError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                EventStoreError::Io(std::io::Error::other(
                     "Failed to send read request to EventStore thread",
                 ))
             })?;
 
         response_rx.await.map_err(|_| {
-            EventStoreError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            EventStoreError::Io(std::io::Error::other(
                 "Failed to receive read response from EventStore thread",
             ))
         })?
@@ -225,15 +223,13 @@ impl EventStoreHandle {
             })
             .await
             .map_err(|_| {
-                EventStoreError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                EventStoreError::Io(std::io::Error::other(
                     "Failed to send append request to EventStore thread",
                 ))
             })?;
 
         response_rx.await.map_err(|_| {
-            EventStoreError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            EventStoreError::Io(std::io::Error::other(
                 "Failed to receive append response from EventStore thread",
             ))
         })?
@@ -246,15 +242,13 @@ impl EventStoreHandle {
             .send(EventStoreRequest::Head { response_tx })
             .await
             .map_err(|_| {
-                EventStoreError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                EventStoreError::Io(std::io::Error::other(
                     "Failed to send head request to EventStore thread",
                 ))
             })?;
 
         response_rx.await.map_err(|_| {
-            EventStoreError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            EventStoreError::Io(std::io::Error::other(
                 "Failed to receive head response from EventStore thread",
             ))
         })?
@@ -273,15 +267,13 @@ impl EventStoreHandle {
             .send(EventStoreRequest::FlushAndShutdown { response_tx })
             .await
             .map_err(|_| {
-                EventStoreError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                EventStoreError::Io(std::io::Error::other(
                     "Failed to send flush_and_shutdown request to EventStore thread",
                 ))
             })?;
 
         response_rx.await.map_err(|_| {
-            EventStoreError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            EventStoreError::Io(std::io::Error::other(
                 "Failed to receive flush_and_shutdown response from EventStore thread",
             ))
         })?
@@ -295,15 +287,13 @@ impl EventStoreHandle {
             .send(EventStoreRequest::FlushAndCheckpoint { response_tx })
             .await
             .map_err(|_| {
-                EventStoreError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                EventStoreError::Io(std::io::Error::other(
                     "Failed to send flush_and_checkpoint request to EventStore thread",
                 ))
             })?;
 
         response_rx.await.map_err(|_| {
-            EventStoreError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            EventStoreError::Io(std::io::Error::other(
                 "Failed to receive flush_and_checkpoint response from EventStore thread",
             ))
         })?
@@ -486,8 +476,7 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
                 Ok(Box::new(GrpcReadResponse::new(rt, stream.into_inner()))
                     as Box<dyn crate::api::DCBReadResponse + '_>)
             }
-            Err(status) => Err(EventStoreError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            Err(status) => Err(EventStoreError::Io(std::io::Error::other(
                 format!("gRPC read error: {status}"),
             ))),
         }
@@ -543,8 +532,7 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
                 if status.message().contains("Integrity error") {
                     Err(EventStoreError::IntegrityError)
                 } else {
-                    Err(EventStoreError::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
+                    Err(EventStoreError::Io(std::io::Error::other(
                         format!("gRPC append error: {status}"),
                     )))
                 }
@@ -565,8 +553,7 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
 
         match response {
             Ok(response) => Ok(response.into_inner().position),
-            Err(status) => Err(EventStoreError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            Err(status) => Err(EventStoreError::Io(std::io::Error::other(
                 format!("gRPC head error: {status}"),
             ))),
         }
@@ -629,8 +616,7 @@ impl GrpcReadResponse {
                 Ok(())
             }
             Ok(None) => Ok(()),
-            Err(status) => Err(EventStoreError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            Err(status) => Err(EventStoreError::Io(std::io::Error::other(
                 format!("gRPC stream error: {status}"),
             ))),
         }

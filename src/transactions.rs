@@ -267,7 +267,7 @@ impl TransactionManager {
         let committed = self
             .uncommitted
             .remove(&txn_id)
-            .ok_or_else(|| TransactionError::TransactionNotFound(txn_id))?;
+            .ok_or(TransactionError::TransactionNotFound(txn_id))?;
 
         self.push_to_segment_and_indexes(&committed)?;
 
@@ -461,19 +461,19 @@ impl TransactionManager {
                 .position_idx
                 .lookup(position)
                 .map_err(TransactionError::Io)?
-                .ok_or_else(|| TransactionError::PositionNotFound(position))?,
+                .ok_or(TransactionError::PositionNotFound(position))?,
         };
 
         // Get the segment from the segment manager
         let mut segment = self
             .segment_manager
             .get_segment(position_index_record.segment)
-            .map_err(|e| TransactionError::Segment(e))?;
+            .map_err(TransactionError::Segment)?;
 
         // Get the position and event blob from the segment
         let (recorded_position, event, _) = segment
             .get_event_record(position_index_record.offset)
-            .map_err(|e| TransactionError::Segment(e))?;
+            .map_err(TransactionError::Segment)?;
 
         // Check the recorded event position is the one we asked for
         if recorded_position != position {

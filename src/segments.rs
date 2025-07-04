@@ -477,8 +477,7 @@ pub fn read_event_record(
         return Err(SegmentError::Io(io::Error::new(
             e.kind(),
             format!(
-                "Failed to seek to offset {} in file {:?}: {}",
-                offset, file_path, e
+                "Failed to seek to offset {offset} in file {file_path:?}: {e}",
             ),
         )));
     }

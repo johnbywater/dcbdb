@@ -178,7 +178,6 @@ impl TransactionWAL {
 
         let file = OpenOptions::new()
             .read(true)
-            .write(true)
             .create(true)
             .append(true)
             .open(&wal_path)?;

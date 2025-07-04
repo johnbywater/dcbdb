@@ -16,7 +16,7 @@ uuid = { version = "1.4.1", features = ["v5", "v4"] }
 bincode = "2.0.1"
 tonic = "0.10.2"
 prost = "0.12.1"
-tokio = { version = "1.32.0", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio = { version = "1.32.0", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
 tokio-stream = "0.1.14"
 async-trait = "0.1.73"
 futures = "0.3.28"

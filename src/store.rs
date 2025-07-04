@@ -286,6 +286,12 @@ impl EventStore {
         Self::new_with_options(path, None, None)
     }
 
+    /// Flushes all pending changes to disk and creates a checkpoint
+    pub fn flush_and_checkpoint(&self) -> Result<()> {
+        self.transaction_manager.lock().unwrap().flush_and_checkpoint()
+            .map_err(|e| EventStoreError::Io(e.into()))
+    }
+
     /// Creates a new EventStore with the given path and options
     pub fn new_with_options<P: AsRef<Path>>(
         path: P,
@@ -792,9 +798,9 @@ impl DCBEventStoreAPI for EventStore {
         // Commit the transaction
         tm.commit(txn_id).map_err(|e| EventStoreError::Io(e.into()))?;
 
-        // Flush and checkpoint
-        tm.flush_and_checkpoint().map_err(|e| EventStoreError::Io(e.into()))?;
-
+        // // Flush and checkpoint
+        // tm.flush_and_checkpoint().map_err(|e| EventStoreError::Io(e.into()))?;
+        // 
         Ok(last_position)
     }
 }

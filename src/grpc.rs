@@ -95,6 +95,9 @@ enum EventStoreRequest {
     },
     #[allow(dead_code)]
     Shutdown,
+    FlushAndShutdown {
+        response_tx: oneshot::Sender<DCBResult<()>>,
+    },
 }
 
 // Thread-safe wrapper for EventStore
@@ -138,6 +141,12 @@ impl EventStoreHandle {
                             let _ = response_tx.send(result);
                         }
                         EventStoreRequest::Shutdown => {
+                            break;
+                        }
+                        EventStoreRequest::FlushAndShutdown { response_tx } => {
+                            // Flush and checkpoint before shutting down
+                            let result = event_store.flush_and_checkpoint();
+                            let _ = response_tx.send(result);
                             break;
                         }
                     }
@@ -204,6 +213,23 @@ impl EventStoreHandle {
     #[allow(dead_code)]
     async fn shutdown(&self) {
         let _ = self.request_tx.send(EventStoreRequest::Shutdown).await;
+    }
+
+    /// Flushes all pending changes to disk, creates a checkpoint, and shuts down the EventStore
+    pub async fn flush_and_shutdown(&self) -> DCBResult<()> {
+        let (response_tx, response_rx) = oneshot::channel();
+
+        self.request_tx.send(EventStoreRequest::FlushAndShutdown {
+            response_tx,
+        }).await.map_err(|_| EventStoreError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Failed to send flush_and_shutdown request to EventStore thread",
+        )))?;
+
+        response_rx.await.map_err(|_| EventStoreError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Failed to receive flush_and_shutdown response from EventStore thread",
+        )))?
     }
 }
 
@@ -604,6 +630,7 @@ pub async fn start_grpc_server_with_shutdown<P: AsRef<Path> + Send + 'static>(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let addr = addr.parse()?;
     let server = GrpcEventStoreServer::new(path)?;
+    let event_store = server.event_store.clone();
 
     println!("gRPC server listening on {}", addr);
 
@@ -611,7 +638,16 @@ pub async fn start_grpc_server_with_shutdown<P: AsRef<Path> + Send + 'static>(
         .add_service(server.into_service())
         .serve_with_shutdown(addr, async {
             shutdown_rx.await.ok();
-            println!("gRPC server shutting down");
+            println!("gRPC server shutting down, flushing data to disk...");
+
+            // Flush and checkpoint before shutting down
+            if let Err(e) = event_store.flush_and_shutdown().await {
+                eprintln!("Error during flush_and_shutdown: {:?}", e);
+            } else {
+                println!("Data flushed successfully");
+            }
+
+            println!("gRPC server shutdown complete");
         })
         .await?;
 

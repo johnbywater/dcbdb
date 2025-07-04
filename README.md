@@ -1,6 +1,6 @@
-# DCBDB - Distributed Content-Based Database
+# DCBDB - Event Store for Dynamic Consistency Boundaries
 
-DCBDB is a distributed content-based database with a gRPC interface.
+DCBDB is an event store designed for dynamic consistency boundaries with a gRPC interface. It provides a robust foundation for event-driven architectures where consistency boundaries may shift based on business requirements.
 
 ## Quick Start
 
@@ -11,7 +11,7 @@ DCBDB is a distributed content-based database with a gRPC interface.
 
 2. Start the gRPC server:
    ```bash
-   cargo run --bin grpc_server -- --path /path/to/database
+   cargo run --bin grpc_server -- --path /path/to/event-store
    ```
 
 3. In another terminal, run the example client:
@@ -38,20 +38,20 @@ This will create the executable in `target/release/`.
 The gRPC server can be started using the `grpc_server` binary. You can run it directly after building:
 
 ```bash
-./target/release/grpc_server --path /path/to/database --address 127.0.0.1:50051
+./target/release/grpc_server --path /path/to/event-store --address 127.0.0.1:50051
 ```
 
 Or you can use `cargo run`:
 
 ```bash
-cargo run --bin grpc_server -- --path /path/to/database --address 127.0.0.1:50051
+cargo run --bin grpc_server -- --path /path/to/event-store --address 127.0.0.1:50051
 ```
 
 ### Command-line Options
 
 The gRPC server accepts the following command-line options:
 
-- `-p, --path <PATH>`: Path to the database directory (required)
+- `-p, --path <PATH>`: Path to the event store directory (required)
 - `-a, --address <ADDR>`: Address to listen on (default: "127.0.0.1:50051")
 - `-h, --help`: Print help information
 - `-V, --version`: Print version information
@@ -60,8 +60,8 @@ The gRPC server accepts the following command-line options:
 
 You can interact with the gRPC server using any gRPC client. The server implements the following methods:
 
-- `Read`: Read events from the database
-- `Append`: Append events to the database
+- `Read`: Read events from the event store
+- `Append`: Append events to the event store
 
 ### Using the Example Client
 
@@ -73,8 +73,8 @@ cargo run --bin example_client -- --address http://127.0.0.1:50051
 
 The example client:
 1. Connects to the gRPC server
-2. Appends an event to the database
-3. Reads events from the database using a query
+2. Appends an event to the event store
+3. Reads events from the event store using a query
 4. Displays the events that were read
 
 ### Using the Rust Client in Your Own Code
@@ -123,7 +123,7 @@ You can also use other gRPC clients to interact with the server. The protocol de
 
 ## Additional Information
 
-- The database is stored in the directory specified by the `--path` option.
+- The event store is stored in the directory specified by the `--path` option.
 - The server listens on the address specified by the `--address` option.
 - The server uses the gRPC protocol for communication.
 - The server is implemented in Rust and uses the Tokio runtime for asynchronous I/O.

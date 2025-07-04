@@ -782,7 +782,7 @@ impl DCBEventStoreAPI for EventStore {
         tm.commit(txn_id).map_err(|e| EventStoreError::Io(e.into()))?;
 
         // Flush and checkpoint
-        // tm.flush_and_checkpoint().map_err(|e| EventStoreError::Io(e.into()))?;
+        tm.flush_and_checkpoint().map_err(|e| EventStoreError::Io(e.into()))?;
 
         Ok(last_position)
     }

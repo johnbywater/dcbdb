@@ -476,9 +476,9 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
                 Ok(Box::new(GrpcReadResponse::new(rt, stream.into_inner()))
                     as Box<dyn crate::api::DCBReadResponse + '_>)
             }
-            Err(status) => Err(EventStoreError::Io(std::io::Error::other(
-                format!("gRPC read error: {status}"),
-            ))),
+            Err(status) => Err(EventStoreError::Io(std::io::Error::other(format!(
+                "gRPC read error: {status}"
+            )))),
         }
     }
 
@@ -532,9 +532,9 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
                 if status.message().contains("Integrity error") {
                     Err(EventStoreError::IntegrityError)
                 } else {
-                    Err(EventStoreError::Io(std::io::Error::other(
-                        format!("gRPC append error: {status}"),
-                    )))
+                    Err(EventStoreError::Io(std::io::Error::other(format!(
+                        "gRPC append error: {status}"
+                    ))))
                 }
             }
         }
@@ -553,9 +553,9 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
 
         match response {
             Ok(response) => Ok(response.into_inner().position),
-            Err(status) => Err(EventStoreError::Io(std::io::Error::other(
-                format!("gRPC head error: {status}"),
-            ))),
+            Err(status) => Err(EventStoreError::Io(std::io::Error::other(format!(
+                "gRPC head error: {status}"
+            )))),
         }
     }
 }
@@ -616,9 +616,9 @@ impl GrpcReadResponse {
                 Ok(())
             }
             Ok(None) => Ok(()),
-            Err(status) => Err(EventStoreError::Io(std::io::Error::other(
-                format!("gRPC stream error: {status}"),
-            ))),
+            Err(status) => Err(EventStoreError::Io(std::io::Error::other(format!(
+                "gRPC stream error: {status}"
+            )))),
         }
     }
 }

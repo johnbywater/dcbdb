@@ -103,6 +103,7 @@ impl Segment {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&path_buf)?;
 
         file.sync_all()?;
@@ -476,9 +477,7 @@ pub fn read_event_record(
     if let Err(e) = file.seek(SeekFrom::Start(offset)) {
         return Err(SegmentError::Io(io::Error::new(
             e.kind(),
-            format!(
-                "Failed to seek to offset {offset} in file {file_path:?}: {e}",
-            ),
+            format!("Failed to seek to offset {offset} in file {file_path:?}: {e}",),
         )));
     }
 

@@ -205,11 +205,10 @@ impl<'a> DCBReadResponse for EventStoreDCBReadResponse<'a> {
         let is_limit_some = self.limit.is_some();
 
         let events: Vec<DCBSequencedEvent> = self
-            .map(|event| {
+            .inspect(|event| {
                 if is_limit_some {
                     head = Some(event.position);
                 }
-                event
             })
             .collect();
         (events, head)

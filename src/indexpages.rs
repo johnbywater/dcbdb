@@ -163,6 +163,12 @@ pub struct Deserializer {
     decoders: HashMap<u8, DecodeFn>,
 }
 
+impl Default for Deserializer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Deserializer {
     /// Creates a new Deserializer
     pub fn new() -> Self {
@@ -237,9 +243,7 @@ impl Deserializer {
         let decode_fn = self.decoders.get(&node_type_byte).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!(
-                    "No decoder registered for node type byte: {node_type_byte}",
-                ),
+                format!("No decoder registered for node type byte: {node_type_byte}",),
             )
         })?;
 
@@ -558,19 +562,13 @@ impl IndexPages {
             // Write the page to the paged file
             self.paged_file
                 .write_page(*page_id, &serialized_data)
-                .map_err(|e| {
-                    std::io::Error::other(
-                        format!("Failed to write page: {e}"),
-                    )
-                })?;
+                .map_err(|e| std::io::Error::other(format!("Failed to write page: {e}")))?;
         }
 
         // Flush and fsync the paged file
-        self.paged_file.flush_and_fsync().map_err(|e| {
-            std::io::Error::other(
-                format!("Failed to flush and fsync: {e}"),
-            )
-        })?;
+        self.paged_file
+            .flush_and_fsync()
+            .map_err(|e| std::io::Error::other(format!("Failed to flush and fsync: {e}")))?;
 
         // Clear the dirty HashMap
         self.clear_dirty();

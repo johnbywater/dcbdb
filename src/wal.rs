@@ -65,7 +65,7 @@ impl From<WalError> for std::io::Error {
             }
             WalError::InvalidRecord(msg) => std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("Invalid record: {}", msg),
+                format!("Invalid record: {msg}"),
             ),
             WalError::InvalidMagic => {
                 std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid magic number")
@@ -75,7 +75,7 @@ impl From<WalError> for std::io::Error {
             }
             WalError::Serialization(msg) => std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("Serialization error: {}", msg),
+                format!("Serialization error: {msg}"),
             ),
         }
     }
@@ -184,7 +184,7 @@ impl TransactionWAL {
             .open(&wal_path)?;
 
         Ok(Self {
-            file: file,
+            file,
             buffered: Mutex::new(Vec::new()),
             commit_offset: 0,
         })
@@ -192,7 +192,7 @@ impl TransactionWAL {
 
     /// Encode a record with the given type, transaction ID, and payload
     pub fn commit_offset(&self) -> u64 {
-        self.commit_offset as u64
+        self.commit_offset
     }
 
     /// Encode a record with the given type, transaction ID, and payload
@@ -347,10 +347,7 @@ impl TransactionWAL {
             Err(e) => return Err(WalError::Io(e)),
         }
 
-        let header = match RecordHeader::from_bytes(&header_bytes) {
-            Ok(h) => h,
-            Err(e) => return Err(e),
-        };
+        let header = RecordHeader::from_bytes(&header_bytes)?;
 
         if header.length > MAX_RECORD_SIZE as u32 {
             return Err(WalError::InvalidRecord("Payload too large".to_string()));

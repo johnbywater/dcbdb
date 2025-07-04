@@ -49,19 +49,19 @@ impl From<TransactionError> for std::io::Error {
             TransactionError::Wal(wal_error) => wal_error.into(),
             TransactionError::TransactionNotFound(txn_id) => std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                format!("Transaction not found: {}", txn_id),
+                format!("Transaction not found: {txn_id}"),
             ),
             TransactionError::PositionNotFound(position) => std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                format!("Position not found: {}", position),
+                format!("Position not found: {position}"),
             ),
             TransactionError::InvalidPosition { expected, found } => std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("Invalid position: expected {}, found {}", expected, found),
+                format!("Invalid position: expected {expected}, found {found}"),
             ),
             TransactionError::Serialization(msg) => std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("Serialization error: {}", msg),
+                format!("Serialization error: {msg}"),
             ),
         }
     }
@@ -472,7 +472,7 @@ impl TransactionManager {
 
         // Get the position and event blob from the segment
         let (recorded_position, event, _) = segment
-            .get_event_record(position_index_record.offset as u64)
+            .get_event_record(position_index_record.offset)
             .map_err(|e| TransactionError::Segment(e))?;
 
         // Check the recorded event position is the one we asked for
@@ -498,7 +498,7 @@ impl TransactionManager {
         use rmp_serde::decode;
 
         let event_with_pos: DCBEventWithPosition = decode::from_slice(data).map_err(|e| {
-            let err_msg = format!("Failed to deserialize event: {}", e);
+            let err_msg = format!("Failed to deserialize event: {e}");
             TransactionError::Serialization(err_msg)
         })?;
 

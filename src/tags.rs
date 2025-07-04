@@ -224,7 +224,7 @@ const TAG_HASH_LEN: usize = 8;
 // TODO: Maybe this should be 16?
 
 pub fn hash_tag(type_str: &str) -> Vec<u8> {
-    let uuid = Uuid::new_v5(&NAMESPACE_URL, format!("/tag/{}", type_str).as_bytes());
+    let uuid = Uuid::new_v5(&NAMESPACE_URL, format!("/tag/{type_str}").as_bytes());
     uuid.as_bytes()[..TAG_HASH_LEN].to_vec()
 }
 
@@ -408,9 +408,7 @@ pub struct InternalNode {
 impl InternalNode {
     fn calc_serialized_node_size(&self) -> usize {
         // 2 bytes for keys_len + keys * (8 bytes per key) + child_ids * (4 bytes per child_id)
-        let keys_len = self.keys.len();
-        let total_size = 2 + (keys_len * TAG_HASH_LEN) + (self.child_ids.len() * PAGE_ID_SIZE);
-        total_size
+        2 + (self.keys.len() * TAG_HASH_LEN) + (self.child_ids.len() * PAGE_ID_SIZE)
     }
 
     pub fn serialize(&self) -> Vec<u8> {
@@ -625,9 +623,7 @@ pub struct TagInternalNode {
 impl TagInternalNode {
     fn calc_serialized_node_size(&self) -> usize {
         // 2 bytes for keys_len + keys * (8 bytes per key) + child_ids * (4 bytes per child_id)
-        let keys_len = self.keys.len();
-        let total_size = 2 + (keys_len * POSITION_SIZE) + (self.child_ids.len() * PAGE_ID_SIZE);
-        total_size
+        2 + (self.keys.len() * POSITION_SIZE) + (self.child_ids.len() * PAGE_ID_SIZE)
     }
 
     pub fn serialize(&self) -> Vec<u8> {
@@ -809,7 +805,7 @@ impl TagIndex {
         }
 
         Ok(Self {
-            page_size: page_size,
+            page_size,
             index_pages: RefCell::new(index_pages),
         })
     }

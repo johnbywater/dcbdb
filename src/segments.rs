@@ -71,15 +71,15 @@ impl From<SegmentError> for std::io::Error {
             }
             SegmentError::SegmentNotFound(path) => std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                format!("Segment not found: {:?}", path),
+                format!("Segment not found: {path:?}"),
             ),
             SegmentError::DatabaseCorrupted(msg) => std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("Database corrupted: {}", msg),
+                format!("Database corrupted: {msg}"),
             ),
             SegmentError::Serialization(msg) => std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("Serialization error: {}", msg),
+                format!("Serialization error: {msg}"),
             ),
         }
     }
@@ -366,7 +366,7 @@ impl SegmentManager {
 
     /// Make a segment path
     fn make_segment_path(base_path: &Path, segment_number: u64) -> PathBuf {
-        base_path.join(format!("segment-{:08}.dat", segment_number))
+        base_path.join(format!("segment-{segment_number:08}.dat"))
     }
 
     /// Flush all segments
@@ -489,15 +489,13 @@ pub fn read_event_record(
         Ok(_) => {}
         Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
             let msg = format!(
-                "Not enough data for event crc and blob length at offset {} in file {:?}",
-                offset, file_path
+                "Not enough data for event crc and blob length at offset {offset} in file {file_path:?}",
             );
             return Err(SegmentError::NotEnoughData(msg));
         }
         Err(e) => {
             let msg = format!(
-                "Failed to read crc and length at offset {} in file {:?}: {}",
-                offset, file_path, e
+                "Failed to read crc and length at offset {offset} in file {file_path:?}: {e}",
             );
             return Err(SegmentError::Io(io::Error::new(e.kind(), msg)));
         }

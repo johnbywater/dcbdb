@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Appending event...");
     let position = client.append(vec![event], None)?;
-    println!("Appended event at position: {}", position);
+    println!("Appended event at position: {position}");
 
     // Read events
     let query = DCBQuery {

@@ -165,7 +165,7 @@ impl<'a> Iterator for EventStoreDCBReadResponse<'a> {
             self.fetch_next_batch().unwrap();
         }
 
-        if self.current_batch.len() == 0 {
+        if self.current_batch.is_empty() {
             return None;
         }
         // Get the next event from the current batch

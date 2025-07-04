@@ -124,7 +124,7 @@ impl EventStoreHandle {
             let event_store = match EventStore::new(path) {
                 Ok(store) => store,
                 Err(e) => {
-                    eprintln!("Failed to create EventStore: {:?}", e);
+                    eprintln!("Failed to create EventStore: {e:?}");
                     return;
                 }
             };
@@ -363,7 +363,7 @@ impl EventStoreService for GrpcEventStoreServer {
                 }
                 Err(e) => {
                     let _ = tx
-                        .send(Err(Status::internal(format!("Read error: {:?}", e))))
+                        .send(Err(Status::internal(format!("Read error: {e:?}"))))
                         .await;
                 }
             }
@@ -397,7 +397,7 @@ impl EventStoreService for GrpcEventStoreServer {
                     EventStoreError::IntegrityError => Err(Status::failed_precondition(
                         "Integrity error: condition failed",
                     )),
-                    _ => Err(Status::internal(format!("Append error: {:?}", e))),
+                    _ => Err(Status::internal(format!("Append error: {e:?}"))),
                 }
             }
         }
@@ -413,7 +413,7 @@ impl EventStoreService for GrpcEventStoreServer {
                 // Return the position as a response
                 Ok(Response::new(HeadResponseProto { position }))
             }
-            Err(e) => Err(Status::internal(format!("Head error: {:?}", e))),
+            Err(e) => Err(Status::internal(format!("Head error: {e:?}"))),
         }
     }
 }
@@ -488,7 +488,7 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
             }
             Err(status) => Err(EventStoreError::Io(std::io::Error::new(
                 std::io::ErrorKind::Other,
-                format!("gRPC read error: {}", status),
+                format!("gRPC read error: {status}"),
             ))),
         }
     }
@@ -545,7 +545,7 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
                 } else {
                     Err(EventStoreError::Io(std::io::Error::new(
                         std::io::ErrorKind::Other,
-                        format!("gRPC append error: {}", status),
+                        format!("gRPC append error: {status}"),
                     )))
                 }
             }
@@ -567,7 +567,7 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
             Ok(response) => Ok(response.into_inner().position),
             Err(status) => Err(EventStoreError::Io(std::io::Error::new(
                 std::io::ErrorKind::Other,
-                format!("gRPC head error: {}", status),
+                format!("gRPC head error: {status}"),
             ))),
         }
     }
@@ -631,7 +631,7 @@ impl GrpcReadResponse {
             Ok(None) => Ok(()),
             Err(status) => Err(EventStoreError::Io(std::io::Error::new(
                 std::io::ErrorKind::Other,
-                format!("gRPC stream error: {}", status),
+                format!("gRPC stream error: {status}"),
             ))),
         }
     }
@@ -669,7 +669,7 @@ impl crate::api::DCBReadResponse for GrpcReadResponse {
     fn collect_with_head(&mut self) -> (Vec<DCBSequencedEvent>, Option<u64>) {
         // Collect all events
         let mut events = Vec::new();
-        while let Some(event) = self.next() {
+        for event in self.by_ref() {
             events.push(event);
         }
 
@@ -698,7 +698,7 @@ pub async fn start_grpc_server<P: AsRef<Path> + Send + 'static>(
     let addr = addr.parse()?;
     let server = GrpcEventStoreServer::new(path)?;
 
-    println!("gRPC server listening on {}", addr);
+    println!("gRPC server listening on {addr}");
 
     Server::builder()
         .add_service(server.into_service())
@@ -718,7 +718,7 @@ pub async fn start_grpc_server_with_shutdown<P: AsRef<Path> + Send + 'static>(
     let server = GrpcEventStoreServer::new(path)?;
     let event_store = server.event_store.clone();
 
-    println!("gRPC server listening on {}", addr);
+    println!("gRPC server listening on {addr}");
 
     // Create a channel to signal the background task to stop
     let (flush_stop_tx, flush_stop_rx) = tokio::sync::watch::channel(false);
@@ -734,7 +734,7 @@ pub async fn start_grpc_server_with_shutdown<P: AsRef<Path> + Send + 'static>(
                 _ = interval.tick() => {
                     // Call flush_and_checkpoint
                     if let Err(e) = flush_event_store.flush_and_checkpoint().await {
-                        eprintln!("Error during periodic flush_and_checkpoint: {:?}", e);
+                        eprintln!("Error during periodic flush_and_checkpoint: {e:?}");
                     }
                 }
                 _ = flush_stop_rx.changed() => {
@@ -759,7 +759,7 @@ pub async fn start_grpc_server_with_shutdown<P: AsRef<Path> + Send + 'static>(
 
             // Flush and checkpoint before shutting down
             if let Err(e) = event_store.flush_and_shutdown().await {
-                eprintln!("Error during flush_and_shutdown: {:?}", e);
+                eprintln!("Error during flush_and_shutdown: {e:?}");
             } else {
                 println!("Data flushed successfully");
             }

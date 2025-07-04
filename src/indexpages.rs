@@ -238,8 +238,7 @@ impl Deserializer {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!(
-                    "No decoder registered for node type byte: {}",
-                    node_type_byte
+                    "No decoder registered for node type byte: {node_type_byte}",
                 ),
             )
         })?;
@@ -332,7 +331,7 @@ impl IndexPages {
                             PagedFileError::Io(ref io_err) => io_err.kind(),
                             _ => std::io::ErrorKind::Other,
                         },
-                        format!("Failed to read header page: {}", e),
+                        format!("Failed to read header page: {e}"),
                     )
                 })?;
 
@@ -481,7 +480,7 @@ impl IndexPages {
                             PagedFileError::Io(ref io_err) => io_err.kind(),
                             _ => std::io::ErrorKind::Other,
                         },
-                        format!("Failed to read page: {}", e),
+                        format!("Failed to read page: {e}"),
                     )
                 })?;
 
@@ -492,7 +491,7 @@ impl IndexPages {
                 .map_err(|e| {
                     std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
-                        format!("Failed to deserialize page: {}", e),
+                        format!("Failed to deserialize page: {e}"),
                     )
                 })?;
 
@@ -523,7 +522,7 @@ impl IndexPages {
         let page_ref = self.cache.get_mut(&page_id).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                format!("Page not found in cache: {:?}", page_id),
+                format!("Page not found in cache: {page_id:?}"),
             )
         })?;
         Ok(page_ref)
@@ -547,7 +546,7 @@ impl IndexPages {
                     None => {
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::NotFound,
-                            format!("Page not found in cache: {:?}", page_id),
+                            format!("Page not found in cache: {page_id:?}"),
                         ))
                     }
                 }
@@ -562,7 +561,7 @@ impl IndexPages {
                 .map_err(|e| {
                     std::io::Error::new(
                         std::io::ErrorKind::Other,
-                        format!("Failed to write page: {}", e),
+                        format!("Failed to write page: {e}"),
                     )
                 })?;
         }
@@ -571,7 +570,7 @@ impl IndexPages {
         self.paged_file.flush_and_fsync().map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::Other,
-                format!("Failed to flush and fsync: {}", e),
+                format!("Failed to flush and fsync: {e}"),
             )
         })?;
 

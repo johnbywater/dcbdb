@@ -18,6 +18,7 @@ use dcbdb::{
     event_store_service_server::{EventStoreService, EventStoreServiceServer},
     EventProto, SequencedEventProto, SequencedEventBatchProto, QueryItemProto, QueryProto,
     AppendConditionProto, ReadRequestProto, ReadResponseProto, AppendRequestProto, AppendResponseProto,
+    HeadRequestProto, HeadResponseProto,
 };
 
 // Conversion functions between proto and API types
@@ -89,6 +90,9 @@ enum EventStoreRequest {
         condition: Option<DCBAppendCondition>,
         response_tx: oneshot::Sender<DCBResult<u64>>,
     },
+    Head {
+        response_tx: oneshot::Sender<DCBResult<Option<u64>>>,
+    },
     #[allow(dead_code)]
     Shutdown,
 }
@@ -127,6 +131,10 @@ impl EventStoreHandle {
                         }
                         EventStoreRequest::Append { events, condition, response_tx } => {
                             let result = event_store.append(events, condition);
+                            let _ = response_tx.send(result);
+                        }
+                        EventStoreRequest::Head { response_tx } => {
+                            let result = event_store.head();
                             let _ = response_tx.send(result);
                         }
                         EventStoreRequest::Shutdown => {
@@ -174,6 +182,22 @@ impl EventStoreHandle {
         response_rx.await.map_err(|_| EventStoreError::Io(std::io::Error::new(
             std::io::ErrorKind::Other,
             "Failed to receive append response from EventStore thread",
+        )))?
+    }
+
+    async fn head(&self) -> DCBResult<Option<u64>> {
+        let (response_tx, response_rx) = oneshot::channel();
+
+        self.request_tx.send(EventStoreRequest::Head {
+            response_tx,
+        }).await.map_err(|_| EventStoreError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Failed to send head request to EventStore thread",
+        )))?;
+
+        response_rx.await.map_err(|_| EventStoreError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Failed to receive head response from EventStore thread",
         )))?
     }
 
@@ -271,6 +295,22 @@ impl EventStoreService for GrpcEventStoreServer {
                         Err(Status::internal(format!("Append error: {:?}", e)))
                     }
                 }
+            }
+        }
+    }
+
+    async fn head(
+        &self,
+        _request: Request<HeadRequestProto>,
+    ) -> Result<Response<HeadResponseProto>, Status> {
+        // Call the event store head method
+        match self.event_store.head().await {
+            Ok(position) => {
+                // Return the position as a response
+                Ok(Response::new(HeadResponseProto { position }))
+            }
+            Err(e) => {
+                Err(Status::internal(format!("Head error: {:?}", e)))
             }
         }
     }
@@ -396,6 +436,32 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
                         format!("gRPC append error: {}", status),
                     )))
                 }
+            }
+        }
+    }
+
+    fn head(&self) -> DCBResult<Option<u64>> {
+        // Create a blocking runtime for the async head operation
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        // Create the head request
+        let request = HeadRequestProto {};
+
+        // Execute the head operation in the runtime
+        let mut client = self.client.clone();
+        let response = rt.block_on(async move {
+            client.head(request).await
+        });
+
+        match response {
+            Ok(response) => {
+                Ok(response.into_inner().position)
+            }
+            Err(status) => {
+                Err(EventStoreError::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("gRPC head error: {}", status),
+                )))
             }
         }
     }

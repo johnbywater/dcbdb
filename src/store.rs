@@ -748,6 +748,17 @@ impl DCBEventStoreAPI for EventStore {
         Ok(Box::new(response))
     }
 
+    fn head(&self) -> Result<Option<u64>> {
+        let tm = self.transaction_manager.lock().unwrap();
+        let last_committed_position = tm.get_last_committed_position();
+
+        if last_committed_position == 0 {
+            Ok(None)
+        } else {
+            Ok(Some(last_committed_position))
+        }
+    }
+
     fn append(&self, events: Vec<DCBEvent>, condition: Option<DCBAppendCondition>) -> Result<u64> {
         // Check condition if provided
         // Lock the transaction manager
@@ -1144,6 +1155,47 @@ mod tests {
 
         let result = store.append(vec![event2.clone()], Some(condition));
         assert!(result.is_ok());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_head_method() -> std::io::Result<()> {
+        let dir = tempdir()?;
+        let store = EventStore::new(dir.path()).unwrap();
+
+        // For an empty store, head() should return None
+        let head = store.head().unwrap();
+        assert_eq!(head, None);
+
+        // Create a test event
+        let event = DCBEvent {
+            event_type: "test_event".to_string(),
+            data: vec![1, 2, 3],
+            tags: vec!["tag1".to_string(), "tag2".to_string()],
+        };
+
+        // Append the event
+        let position = store.append(vec![event.clone()], None).unwrap();
+        assert_eq!(position, 1);
+
+        // Now head() should return Some(1)
+        let head = store.head().unwrap();
+        assert_eq!(head, Some(1));
+
+        // Append another event
+        let event2 = DCBEvent {
+            event_type: "another_event".to_string(),
+            data: vec![4, 5, 6],
+            tags: vec!["tag2".to_string(), "tag3".to_string()],
+        };
+
+        let position = store.append(vec![event2.clone()], None).unwrap();
+        assert_eq!(position, 2);
+
+        // Now head() should return Some(2)
+        let head = store.head().unwrap();
+        assert_eq!(head, Some(2));
 
         Ok(())
     }

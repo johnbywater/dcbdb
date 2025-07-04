@@ -88,6 +88,11 @@ pub trait DCBEventStoreAPI {
         Ok(response.collect_with_head())
     }    
 
+    /// Returns the current head position of the event store, or None if empty
+    ///
+    /// Returns the value of last_committed_position, or None if last_committed_position is zero
+    fn head(&self) -> Result<Option<u64>>;
+
     /// Appends given events to the event store, unless the condition fails
     ///
     /// Returns the position of the last appended event

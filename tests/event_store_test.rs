@@ -56,6 +56,10 @@ fn test_grpc_event_store() {
 // Helper function to run the test with a given EventStoreApi implementation
 pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
 
+    // Test head() method on empty store
+    let head_position = event_store.head().unwrap();
+    assert_eq!(None, head_position);
+
     // Read all, expect no results.
     let (result, head) = event_store.read_with_head(None, None, None).unwrap();
     assert_eq!(0, result.len());
@@ -71,6 +75,10 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
 
     // Check the returned position is 1.
     assert_eq!(1, position);
+
+    // Test head() method after appending one event
+    let head_position = event_store.head().unwrap();
+    assert_eq!(Some(1), head_position);
 
     // Read all, expect one event.
     let (result, head) = event_store.read_with_head(None, None, None).unwrap();
@@ -188,6 +196,10 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
 
     // Check the returned position is 3
     assert_eq!(3, position);
+
+    // Test head() method after appending more events
+    let head_position = event_store.head().unwrap();
+    assert_eq!(Some(3), head_position);
 
     // Read all, expect 3 events (in ascending order).
     let (result, head) = event_store.read_with_head(None, None, None).unwrap();
@@ -752,4 +764,8 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
     let (result, head) = event_store.read_with_head(Some(consistency_boundary), None, None).unwrap();
     assert_eq!(3, result.len());
     assert_eq!(Some(13), head);
+
+    // Final test of head() method after all operations
+    let head_position = event_store.head().unwrap();
+    assert_eq!(Some(13), head_position);
 }

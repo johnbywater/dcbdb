@@ -61,6 +61,16 @@ message AppendResponseProto {
   uint64 position = 1;
 }
 
+// Head request message
+message HeadRequestProto {
+  // Empty request, no parameters needed
+}
+
+// Head response message
+message HeadResponseProto {
+  optional uint64 position = 1;
+}
+
 // Error response
 message ErrorResponseProto {
   string message = 1;
@@ -79,6 +89,9 @@ service EventStoreService {
   // Read events from the store
   rpc Read(ReadRequestProto) returns (stream ReadResponseProto);
 
-    // Append events to the store
+  // Append events to the store
   rpc Append(AppendRequestProto) returns (AppendResponseProto);
+
+  // Get the current head position of the event store
+  rpc Head(HeadRequestProto) returns (HeadResponseProto);
 }

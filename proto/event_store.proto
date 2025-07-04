@@ -34,7 +34,7 @@ message QueryProto {
 
 // Append Condition message
 message AppendConditionProto {
-  QueryProto fail_if_events_match = 1;
+  optional QueryProto fail_if_events_match = 1;
   optional uint64 after = 2;
 }
 

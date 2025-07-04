@@ -57,7 +57,8 @@ pub trait DCBReadResponse: Iterator<Item = DCBSequencedEvent> {
     fn head(&self) -> Option<u64>;
     /// Returns a vector of events with head
     fn collect_with_head(&mut self) -> (Vec<DCBSequencedEvent>, Option<u64>);
-
+    /// Returns a batch of events, updating head with the last event in the batch if there is one and if limit.is_some() is true
+    fn next_batch(&mut self) -> Result<Vec<DCBSequencedEvent>>;
 }
 
 /// Interface for recording and retrieving events
@@ -86,7 +87,7 @@ pub trait DCBEventStoreAPI {
         let mut response = self.read(query, after, limit)?;
         Ok(response.collect_with_head())
     }    
-    
+
     /// Appends given events to the event store, unless the condition fails
     ///
     /// Returns the position of the last appended event
@@ -150,6 +151,14 @@ mod tests {
 
         fn collect_with_head(&mut self) -> (Vec<DCBSequencedEvent>, Option<u64>) {
             todo!()
+        }
+
+        fn next_batch(&mut self) -> Result<Vec<DCBSequencedEvent>> {
+            let mut batch = Vec::new();
+            while let Some(event) = self.next() {
+                batch.push(event);
+            }
+            Ok(batch)
         }
     }
 

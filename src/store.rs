@@ -216,7 +216,67 @@ impl<'a> DCBReadResponse for EventStoreDCBReadResponse<'a> {
         })
             .collect();
         (events, head)
+    }
 
+    fn next_batch(&mut self) -> Result<Vec<DCBSequencedEvent>> {
+        let mut batch = Vec::new();
+        let is_limit_some = self.limit.is_some();
+
+        // Check if we've reached the limit
+        if let Some(limit) = self.limit {
+            if self.count >= limit {
+                return Ok(batch);
+            }
+        }
+
+        // If we've exhausted the current batch, fetch the next one
+        if self.batch_index >= self.current_batch.len() {
+            // If that was the last batch, we're done
+            if self.current_batch.len() < self.max_batch_size {
+                return Ok(batch);
+            }
+            self.fetch_next_batch()?;
+        }
+
+        // If there are no events in the current batch, we're done
+        if self.current_batch.is_empty() {
+            return Ok(batch);
+        }
+
+        // Get all remaining events from the current batch
+        while self.batch_index < self.current_batch.len() {
+            // Check if we've reached the limit
+            if let Some(limit) = self.limit {
+                if self.count >= limit {
+                    break;
+                }
+            }
+
+            let event = self.current_batch[self.batch_index].clone();
+
+            // Skip events beyond the last committed position
+            if event.position > self.last_committed_position {
+                break;
+            }
+
+            // Update the head value based on whether there's a limit
+            if is_limit_some {
+                // When there's a limit, always update the head to the position of the current event
+                self.head = Some(event.position);
+            }
+
+            // Increment the batch index and count
+            self.batch_index += 1;
+            self.count += 1;
+
+            // Update the current position for the next fetch
+            self.current_position = event.position;
+
+            // Add the event to the batch
+            batch.push(event);
+        }
+
+        Ok(batch)
     }
 }
 
@@ -1164,12 +1224,40 @@ mod tests {
 
         store.transaction_manager.lock().unwrap().flush_and_checkpoint().unwrap();
 
-        // // Read events with the query
-        // let read_response = store.read(Some(query.clone()), None, None).unwrap();
-        // let (events, head) = (Vec::new(), None);
-        // while true {
-        //     let batch = read_response.
-        // }
+        // Read events with the query using next_batch
+        let mut read_response = store.read(Some(query.clone()), None, None).unwrap();
+        let mut events: Vec<DCBSequencedEvent> = Vec::new();
+
+        // Collect events from batches until there are no more
+        loop {
+            let batch = read_response.next_batch().unwrap();
+            if batch.is_empty() {
+                break;
+            }
+            events.extend(batch);
+        }
+
+        let head = read_response.head();
+
+        // Check that we got the expected number of events
+        assert_eq!(events.len(), num_events, "Expected {}, got {}", num_events, events.len());
+
+        // Check that the head position is correct
+        assert_eq!(head, Some(num_events as u64), "Expected head position to be {}, got {:?}", num_events, head);
+
+        // Check that positions are in order and tags alternate correctly
+        for (i, event) in events.iter().enumerate() {
+            // Check position
+            assert_eq!(event.position, expected_positions[i],
+                       "Event at index {} has position {}, expected {}",
+                       i, event.position, expected_positions[i]);
+
+            // Check tag
+            let tag = &event.event.tags[0];
+            assert_eq!(tag, &expected_tags[i],
+                       "Event at index {} has tag {}, expected {}",
+                       i, tag, expected_tags[i]);
+        }
 
 
 

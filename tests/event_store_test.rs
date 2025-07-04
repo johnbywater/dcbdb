@@ -1,7 +1,10 @@
 use tempfile::tempdir;
 use uuid::Uuid;
+use std::thread;
+use std::time::Duration;
 use dcbsd::api::{DCBAppendCondition, DCBQuery, DCBEvent, EventStoreError, DCBQueryItem, DCBEventStoreAPI};
 use dcbsd::store::EventStore;
+use dcbsd::grpc::GrpcEventStoreClient;
 // Import the EventStore and related types from the main crate
 
 #[test]
@@ -9,6 +12,44 @@ fn test_direct_event_store() {
     let temp_dir = tempdir().unwrap();
     let event_store = EventStore::new(temp_dir.path()).unwrap();
     run_event_store_test(&event_store);
+}
+
+#[test]
+fn test_grpc_event_store() {
+    // Create a temporary directory for the event store
+    let temp_dir = tempdir().unwrap();
+    let temp_path = temp_dir.path().to_path_buf();
+
+    // Create a shutdown channel
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+
+    // Start the gRPC server in a separate thread
+    let server_addr = "127.0.0.1:50051";
+    let server_thread = thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            use dcbsd::grpc::start_grpc_server_with_shutdown;
+            start_grpc_server_with_shutdown(temp_path, server_addr, shutdown_rx).await.unwrap();
+        });
+    });
+
+    // Give the server some time to start
+    thread::sleep(Duration::from_millis(500));
+
+    // Create a gRPC client
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let client = rt.block_on(async {
+        GrpcEventStoreClient::connect(format!("http://{}", server_addr)).await.unwrap()
+    });
+
+    // Run the test with the gRPC client
+    run_event_store_test(&client);
+
+    // Shutdown the server
+    shutdown_tx.send(()).unwrap();
+
+    // Wait for the server to shutdown
+    server_thread.join().unwrap();
 }
 
 

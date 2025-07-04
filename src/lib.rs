@@ -33,6 +33,9 @@ pub mod transactions;
 // Export the Event Store module
 pub mod store;
 
+// Export the gRPC module
+pub mod grpc;
+
 #[cfg(test)]
 mod tests {
     #[test]

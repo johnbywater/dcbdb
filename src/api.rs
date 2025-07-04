@@ -55,65 +55,44 @@ pub struct DCBSequencedEvent {
 pub trait DCBReadResponse: Iterator<Item = DCBSequencedEvent> {
     /// Returns the current head position of the event store, or None if empty
     fn head(&self) -> Option<u64>;
+    /// Returns a vector of events with head
+    fn collect_with_head(&mut self) -> (Vec<DCBSequencedEvent>, Option<u64>);
+
 }
 
 /// Interface for recording and retrieving events
 pub trait DCBEventStoreAPI {
     /// Reads events from the store based on the provided query and constraints
     ///
-    /// Returns a tuple of (Vec<DCBSequencedEvent>, Option<u64>) containing the matching events
-    /// and the head position.
-    ///
-    /// This method is kept for backward compatibility. New code should use `read_response` instead.
-    fn read(
-        &self,
-        query: Option<DCBQuery>,
-        after: Option<u64>,
-        limit: Option<usize>,
-    ) -> Result<(Vec<DCBSequencedEvent>, Option<u64>)>;
-
-    /// Reads events from the store based on the provided query and constraints
-    ///
-    /// Returns a DCBReadResponse that provides an iterator over matching events,
+    /// Returns a DCBReadResponse that provides an iterator over all events,
     /// unless 'after' is given then only those with position greater than 'after',
     /// and unless any query items are given, then only those that match at least one
     /// query item. An event matches a query item if its type is in the item types or
     /// there are no item types, and if all the item tags are in the event tags.
-    fn read_response(
+    fn read(
         &self,
         query: Option<DCBQuery>,
         after: Option<u64>,
         limit: Option<usize>,
     ) -> Result<Box<dyn DCBReadResponse + '_>>;
 
+    /// Reads events from the store and returns them as a tuple of (Vec<DCBSequencedEvent>, Option<u64>)
+    fn read_with_head(
+        &self,
+        query: Option<DCBQuery>,
+        after: Option<u64>,
+        limit: Option<usize>,
+    ) -> Result<(Vec<DCBSequencedEvent>, Option<u64>)> {
+        let mut response = self.read(query, after, limit)?;
+        Ok(response.collect_with_head())
+    }    
+    
     /// Appends given events to the event store, unless the condition fails
     ///
     /// Returns the position of the last appended event
     fn append(&self, events: Vec<DCBEvent>, condition: Option<DCBAppendCondition>) -> Result<u64>;
 }
 
-/// Extension trait for DCBEventStoreAPI that provides backward compatibility
-/// for the old read method that returned a tuple of (Vec<DCBSequencedEvent>, Option<u64>)
-pub trait DCBEventStoreAPIExt: DCBEventStoreAPI {
-    /// Reads events from the store and returns them as a tuple of (Vec<DCBSequencedEvent>, Option<u64>)
-    fn read_as_tuple(
-        &self,
-        query: Option<DCBQuery>,
-        after: Option<u64>,
-        limit: Option<usize>,
-    ) -> Result<(Vec<DCBSequencedEvent>, Option<u64>)> {
-        let response = self.read_response(query, after, limit)?;
-        let mut head = response.head();
-        let events: Vec<DCBSequencedEvent> = response.collect();
-
-        // If there's a limit and the result set is not empty, set the head to the position of the last event
-        if limit.is_some() && !events.is_empty() {
-            head = Some(events.last().unwrap().position);
-        }
-        
-        Ok((events, head))
-    }
-}
 
 // Error types
 #[derive(Error, Debug)]
@@ -167,6 +146,10 @@ mod tests {
     impl DCBReadResponse for TestReadResponse {
         fn head(&self) -> Option<u64> {
             self.head_position
+        }
+
+        fn collect_with_head(&mut self) -> (Vec<DCBSequencedEvent>, Option<u64>) {
+            todo!()
         }
     }
 

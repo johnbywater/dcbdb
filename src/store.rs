@@ -1,9 +1,9 @@
 use std::path::{Path};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex};
 use std::collections::HashMap;
 use itertools::Itertools;
 
-use crate::api::{DCBEvent, DCBEventStoreAPI, DCBEventStoreAPIExt, DCBQuery, DCBQueryItem, DCBSequencedEvent, DCBAppendCondition, EventStoreError, Result, DCBReadResponse};
+use crate::api::{DCBEvent, DCBEventStoreAPI, DCBQuery, DCBQueryItem, DCBSequencedEvent, DCBAppendCondition, EventStoreError, Result, DCBReadResponse};
 use crate::transactions::{TransactionManager};
 use crate::wal::Position;
 
@@ -62,20 +62,18 @@ pub struct EventStoreDCBReadResponse<'a> {
     event_store: &'a EventStore,
     /// Query to filter events
     query: Option<DCBQuery>,
-    /// Position after which to read events
-    after: Option<u64>,
     /// Maximum number of events to read
     limit: Option<usize>,
     /// Last committed position in the event store
     last_committed_position: u64,
     /// Current head position
     head: Option<u64>,
-    /// Whether the head was given
-    head_was_given: bool,
     /// Current position for iteration
     current_position: u64,
     /// Current batch of events
     current_batch: Vec<DCBSequencedEvent>,
+    /// Max batch size
+    max_batch_size: usize,
     /// Current index in the batch
     batch_index: usize,
     /// Count of events returned so far
@@ -92,45 +90,46 @@ impl<'a> EventStoreDCBReadResponse<'a> {
     ) -> Self {
         let mut tm = event_store.transaction_manager.lock().unwrap();
         let last_committed_position = tm.get_last_committed_position();
-        let last_issued_position = tm.get_last_issued_position();
-
-        // Determine the head position
-        // If there's no limit, set the head to the last issued position
-        // If there is a limit, we'll set the head to the position of the last event in the result set
-        let head = if limit.is_none() && last_issued_position > 0 {
-            Some(last_issued_position)
-        } else {
-            None
-        };
-
-        let head_was_given = head.is_some();
 
         // Initialize with the after position or 0
         let current_position = after.unwrap_or(0);
 
+        // Read a batch of events
+        let max_batch_size = 100;
+        let (batch, _) = event_store.read_internal(
+            &mut tm,
+            query.clone(),
+            after,
+            Some(max_batch_size),
+        ).unwrap();
+
+        let head = {
+            if limit.is_none() && last_committed_position > 0 {
+                Some(last_committed_position)
+            } else {
+                None
+            }
+        };
+
         Self {
             event_store,
             query,
-            after,
             limit,
             last_committed_position,
             head,
-            head_was_given,
             current_position,
-            current_batch: Vec::new(),
+            current_batch: batch,
+            max_batch_size: max_batch_size,
             batch_index: 0,
             count: 0,
         }
     }
 
     /// Fetches the next batch of events
-    fn fetch_next_batch(&mut self) -> Result<bool> {
+    fn fetch_next_batch(&mut self) -> Result<()> {
         // Clear the current batch and reset the index
         self.current_batch.clear();
         self.batch_index = 0;
-
-        // Maximum batch size - use a larger value for better performance with many events
-        let max_batch_size = 10000;
 
         // Lock the transaction manager
         let mut tm = self.event_store.transaction_manager.lock().unwrap();
@@ -140,23 +139,13 @@ impl<'a> EventStoreDCBReadResponse<'a> {
             &mut tm,
             self.query.clone(),
             Some(self.current_position),
-            Some(max_batch_size),
+            Some(self.max_batch_size),
         )?;
-
-        // If the batch is empty, we're done
-        if batch.is_empty() {
-            return Ok(false);
-        }
-
-        // Update the current position to the last event's position
-        if let Some(last_event) = batch.last() {
-            self.current_position = last_event.position;
-        }
 
         // Store the batch
         self.current_batch = batch;
 
-        Ok(true)
+        Ok(())
     }
 }
 
@@ -171,47 +160,63 @@ impl<'a> Iterator for EventStoreDCBReadResponse<'a> {
             }
         }
 
-        // If we've exhausted the current batch, fetch the next one
+        // If we've exhausted the current batch...
         if self.batch_index >= self.current_batch.len() {
-            match self.fetch_next_batch() {
-                Ok(true) => {}, // Successfully fetched a non-empty batch
-                _ => return None, // Error or empty batch
-            }
-        }
-
-        // Get the next event from the current batch
-        if self.batch_index < self.current_batch.len() {
-            let event = self.current_batch[self.batch_index].clone();
-
-            // Skip events beyond the last committed position
-            if event.position > self.last_committed_position {
+            // that was the last batch, we're done.
+            if self.current_batch.len() < self.max_batch_size {
                 return None;
             }
-
-            // Update the head if not already given
-            // For the limit case, we'll set the head to the position of the last event in the result set
-            // This is done in the read() method that collects all events and then sets the head
-            if !self.head_was_given {
-                self.head = Some(event.position);
-            }
-
-            // Increment the batch index and count
-            self.batch_index += 1;
-            self.count += 1;
-
-            // Update the current position for the next fetch
-            self.current_position = event.position;
-
-            Some(event)
-        } else {
-            None
+            self.fetch_next_batch().unwrap();
         }
+
+        if self.current_batch.len() == 0 {
+            return None;
+        }
+        // Get the next event from the current batch
+        let event = self.current_batch[self.batch_index].clone();
+
+        // Skip events beyond the last committed position
+        if event.position > self.last_committed_position {
+            return None;
+        }
+
+        // Update the head value based on whether there's a limit
+        if self.limit.is_some() {
+            // When there's a limit, always update the head to the position of the current event
+            // This ensures that when the iterator is exhausted, the head will be the position of the last event
+            self.head = Some(event.position);
+        }
+
+        // Increment the batch index and count
+        self.batch_index += 1;
+        self.count += 1;
+
+        // Update the current position for the next fetch
+        self.current_position = event.position;
+
+        // Return the event
+        Some(event)
     }
 }
 
 impl<'a> DCBReadResponse for EventStoreDCBReadResponse<'a> {
     fn head(&self) -> Option<u64> {
         self.head
+    }
+
+    fn collect_with_head(&mut self) -> (Vec<DCBSequencedEvent>, Option<u64>) {
+        let mut head: Option<u64> = self.head;
+        let is_limit_some = self.limit.is_some();
+
+        let events: Vec<DCBSequencedEvent> = self.map(|event| {
+            if is_limit_some {
+                head = Some(event.position);
+            }
+            event
+        })
+            .collect();
+        (events, head)
+
     }
 }
 
@@ -676,25 +681,6 @@ impl DCBEventStoreAPI for EventStore {
         query: Option<DCBQuery>,
         after: Option<u64>,
         limit: Option<usize>,
-    ) -> Result<(Vec<DCBSequencedEvent>, Option<u64>)> {
-        // Implement read in terms of read_response
-        let response = self.read_response(query.clone(), after, limit)?;
-        let mut head = response.head();
-        let events: Vec<DCBSequencedEvent> = response.collect();
-
-        // If there's a limit and the result set is not empty, set the head to the position of the last event
-        if limit.is_some() && !events.is_empty() {
-            head = Some(events.last().unwrap().position);
-        }
-
-        Ok((events, head))
-    }
-
-    fn read_response(
-        &self,
-        query: Option<DCBQuery>,
-        after: Option<u64>,
-        limit: Option<usize>,
     ) -> Result<Box<dyn DCBReadResponse + '_>> {
         // Create a new EventStoreDCBReadResponse
         let response = EventStoreDCBReadResponse::new(self, query, after, limit);
@@ -742,10 +728,6 @@ impl DCBEventStoreAPI for EventStore {
     }
 }
 
-// Implement DCBEventStoreAPIExt for EventStore
-impl DCBEventStoreAPIExt for EventStore {}
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -766,7 +748,7 @@ mod tests {
         let store = EventStore::new(dir.path()).unwrap();
 
         // Read all events
-        let (events, head) = store.read_as_tuple(None, None, None).unwrap();
+        let (events, head) = store.read_with_head(None, None, None).unwrap();
         assert_eq!(events.len(), 0);
         assert_eq!(head, None);
 
@@ -788,7 +770,7 @@ mod tests {
         assert_eq!(position, 2);
 
         // Read all events
-        let (events, head) = store.read_as_tuple(None, None, None).unwrap();
+        let (events, head) = store.read_with_head(None, None, None).unwrap();
         assert_eq!(events.len(), 2);
         assert_eq!(head, Some(2));
 
@@ -833,35 +815,36 @@ mod tests {
             }],
         };
 
-        let (events, head) = store.read_as_tuple(Some(query1.clone()), None, None).unwrap();
+        let (events, head) = store.read_with_head(Some(query1.clone()), None, None).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event.event_type, "test_event");
         assert_eq!(head, Some(2));
 
         // Query by tag1 - limit 0
-        let (events, head) = store.read_as_tuple(Some(query1.clone()), None, Some(0)).unwrap();
+        let (events, head) = store.read_with_head(Some(query1.clone()), None, Some(0)).unwrap();
         assert_eq!(events.len(), 0);
         assert_eq!(head, None);
 
         // Query by tag1 - limit 1
-        let (events, head) = store.read_as_tuple(Some(query1.clone()), None, Some(1)).unwrap();
+        let read_response = store.read(Some(query1.clone()), None, Some(1));
+        let (events, head) = read_response.unwrap().collect_with_head();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event.event_type, "test_event");
         assert_eq!(head, Some(1));
 
         // Query by tag1 - after 0
-        let (events, head) = store.read_as_tuple(Some(query1.clone()), Some(0), None).unwrap();
+        let (events, head) = store.read_with_head(Some(query1.clone()), Some(0), None).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event.event_type, "test_event");
         assert_eq!(head, Some(2));
 
         // Query by tag1 - after 1
-        let (events, head) = store.read_as_tuple(Some(query1.clone()), Some(1), None).unwrap();
+        let (events, head) = store.read_with_head(Some(query1.clone()), Some(1), None).unwrap();
         assert_eq!(events.len(), 0);
         assert_eq!(head, Some(2));
 
         // Query by tag1 - after 1, limit 1
-        let (events, head) = store.read_as_tuple(Some(query1.clone()), Some(1), Some(1)).unwrap();
+        let (events, head) = store.read_with_head(Some(query1.clone()), Some(1), Some(1)).unwrap();
         assert_eq!(events.len(), 0);
         assert_eq!(head, None);
 
@@ -873,7 +856,7 @@ mod tests {
             }],
         };
 
-        let (events, _) = store.read_as_tuple(Some(query2), None, None).unwrap();
+        let (events, _) = store.read_with_head(Some(query2), None, None).unwrap();
         assert_eq!(events.len(), 2);
 
         // Query by tag1 or tag3 (should match both events)
@@ -890,7 +873,7 @@ mod tests {
             ],
         };
 
-        let (events, _) = store.read_as_tuple(Some(query2), None, None).unwrap();
+        let (events, _) = store.read_with_head(Some(query2), None, None).unwrap();
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].event.event_type, "test_event");
         assert_eq!(events[1].event.event_type, "another_event");
@@ -909,7 +892,7 @@ mod tests {
             ],
         };
 
-        let (events, _) = store.read_as_tuple(Some(query2), None, None).unwrap();
+        let (events, _) = store.read_with_head(Some(query2), None, None).unwrap();
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].event.event_type, "test_event");
         assert_eq!(events[1].event.event_type, "another_event");
@@ -923,7 +906,7 @@ mod tests {
             }],
         };
 
-        let (events, _) = store.read_as_tuple(Some(query3), None, None).unwrap();
+        let (events, _) = store.read_with_head(Some(query3), None, None).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event.event_type, "another_event");
 
@@ -935,7 +918,7 @@ mod tests {
             }],
         };
 
-        let (events, head) = store.read_as_tuple(Some(query4), None, None).unwrap();
+        let (events, head) = store.read_with_head(Some(query4), None, None).unwrap();
         assert_eq!(events.len(), 0);
         assert_eq!(head, Some(2));
 
@@ -971,34 +954,34 @@ mod tests {
             }],
         };
 
-        let (events, _) = store.read_as_tuple(Some(query.clone()), None, None).unwrap();
+        let (events, _) = store.read_with_head(Some(query.clone()), None, None).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event.event_type, "test_event");
 
         // Query by tag1 - limit 0
-        let (events, head) = store.read_as_tuple(Some(query.clone()), None, Some(0)).unwrap();
+        let (events, head) = store.read_with_head(Some(query.clone()), None, Some(0)).unwrap();
         assert_eq!(events.len(), 0);
         assert_eq!(head, None);
 
         // Query by tag1 - limit 1
-        let (events, head) = store.read_as_tuple(Some(query.clone()), None, Some(1)).unwrap();
+        let (events, head) = store.read_with_head(Some(query.clone()), None, Some(1)).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event.event_type, "test_event");
         assert_eq!(head, Some(1));
 
         // Query by tag1 - after 0
-        let (events, head) = store.read_as_tuple(Some(query.clone()), Some(0), None).unwrap();
+        let (events, head) = store.read_with_head(Some(query.clone()), Some(0), None).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event.event_type, "test_event");
         assert_eq!(head, Some(2));
 
         // Query by tag1 - after 1
-        let (events, head) = store.read_as_tuple(Some(query.clone()), Some(1), None).unwrap();
+        let (events, head) = store.read_with_head(Some(query.clone()), Some(1), None).unwrap();
         assert_eq!(events.len(), 0);
         assert_eq!(head, Some(2));
 
         // Query by tag1 - after 1, limit 1
-        let (events, head) = store.read_as_tuple(Some(query.clone()), Some(1), Some(1)).unwrap();
+        let (events, head) = store.read_with_head(Some(query.clone()), Some(1), Some(1)).unwrap();
         assert_eq!(events.len(), 0);
         assert_eq!(head, None);
 
@@ -1034,7 +1017,7 @@ mod tests {
             }],
         };
 
-        let (events, _) = store.read_as_tuple(Some(query), None, None).unwrap();
+        let (events, _) = store.read_with_head(Some(query), None, None).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event.event_type, "test_event");
 
@@ -1046,7 +1029,7 @@ mod tests {
             }],
         };
 
-        let (events, head) = store.read_as_tuple(Some(query), None, None).unwrap();
+        let (events, head) = store.read_with_head(Some(query), None, None).unwrap();
         assert_eq!(events.len(), 0);
         assert_eq!(head, Some(2));
 
@@ -1110,7 +1093,7 @@ mod tests {
         let dir = tempdir()?;
         let store = EventStore::new(dir.path()).unwrap();
 
-        let num_appends = 100;
+        let num_appends = 300;
         let num_events = num_appends * 2;
 
         // Create and insert pairs of events with alternating tags
@@ -1157,7 +1140,7 @@ mod tests {
         };
 
         // Read events with the query
-        let (events, head) = store.read_as_tuple(Some(query), None, None).unwrap();
+        let (events, head) = store.read_with_head(Some(query.clone()), None, None).unwrap();
 
         // Check that we got the expected number of events
         assert_eq!(events.len(), num_events, "Expected {}, got {}", num_events, events.len());
@@ -1180,6 +1163,15 @@ mod tests {
         }
 
         store.transaction_manager.lock().unwrap().flush_and_checkpoint().unwrap();
+
+        // // Read events with the query
+        // let read_response = store.read(Some(query.clone()), None, None).unwrap();
+        // let (events, head) = (Vec::new(), None);
+        // while true {
+        //     let batch = read_response.
+        // }
+
+
 
         Ok(())
     }

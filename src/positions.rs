@@ -1,10 +1,10 @@
-use uuid::{uuid, Uuid};
-use std::format;
-use std::path::Path;
-use std::any::Any;
+use crate::indexpages::{HeaderNode, IndexPage, IndexPages, Node};
 use crate::pagedfile::{PageID, PAGE_ID_SIZE};
 use crate::wal::{Position, POSITION_SIZE};
-use crate::indexpages::{IndexPages, Node, IndexPage, HeaderNode};
+use std::any::Any;
+use std::format;
+use std::path::Path;
+use uuid::{uuid, Uuid};
 
 const NAMESPACE_URL: Uuid = uuid!("6ba7b810-9dad-11d1-80b4-00c04fd430c8");
 const TYPE_HASH_LEN: usize = 8;
@@ -13,7 +13,6 @@ pub fn hash_type(type_str: &str) -> Vec<u8> {
     let uuid = Uuid::new_v5(&NAMESPACE_URL, format!("/type/{}", type_str).as_bytes());
     uuid.as_bytes()[..TYPE_HASH_LEN].to_vec()
 }
-
 
 /// Constant for the internal node type
 pub const INTERNAL_NODE_TYPE: u8 = 2;
@@ -110,7 +109,11 @@ impl LeafNode {
 
         // Extract the next_leaf_id (first 4 bytes)
         let next_leaf_id = u32::from_le_bytes(slice[0..4].try_into().unwrap());
-        let next_leaf_id = if next_leaf_id == 0 { None } else { Some(PageID(next_leaf_id)) };
+        let next_leaf_id = if next_leaf_id == 0 {
+            None
+        } else {
+            Some(PageID(next_leaf_id))
+        };
 
         // Extract the length of the keys (next 2 bytes)
         let keys_len = u16::from_le_bytes(slice[4..6].try_into().unwrap()) as usize;
@@ -128,7 +131,7 @@ impl LeafNode {
         let mut keys = Vec::with_capacity(keys_len);
         for i in 0..keys_len {
             let start = 6 + (i * 8);
-            let key = u64::from_le_bytes(slice[start..start+8].try_into().unwrap());
+            let key = u64::from_le_bytes(slice[start..start + 8].try_into().unwrap());
             keys.push(key);
         }
 
@@ -138,10 +141,10 @@ impl LeafNode {
             let start = 6 + (keys_len * 8) + (i * 24);
 
             // Extract segment number (8 bytes)
-            let segment = u64::from_le_bytes(slice[start..start+8].try_into().unwrap());
+            let segment = u64::from_le_bytes(slice[start..start + 8].try_into().unwrap());
 
             // Extract offset number (8 bytes)
-            let offset = u64::from_le_bytes(slice[start+8..start+16].try_into().unwrap());
+            let offset = u64::from_le_bytes(slice[start + 8..start + 16].try_into().unwrap());
 
             // Extract type_hash (8 bytes)
             let type_hash: Vec<u8> = slice[start + 16..start + 24].to_vec();
@@ -262,8 +265,14 @@ impl InternalNode {
         for i in 0..keys_len {
             let start = 2 + (i * 8);
             let key = Position::from_le_bytes([
-                slice[start], slice[start + 1], slice[start + 2], slice[start + 3],
-                slice[start + 4], slice[start + 5], slice[start + 6], slice[start + 7],
+                slice[start],
+                slice[start + 1],
+                slice[start + 2],
+                slice[start + 3],
+                slice[start + 4],
+                slice[start + 5],
+                slice[start + 6],
+                slice[start + 7],
             ]);
             keys.push(key);
         }
@@ -273,15 +282,15 @@ impl InternalNode {
         for i in 0..(keys_len + 1) {
             let start = 2 + (keys_len * 8) + (i * 4);
             let page_id = u32::from_le_bytes([
-                slice[start], slice[start + 1], slice[start + 2], slice[start + 3],
+                slice[start],
+                slice[start + 1],
+                slice[start + 2],
+                slice[start + 3],
             ]);
             child_ids.push(PageID(page_id));
         }
 
-        Ok(InternalNode {
-            keys,
-            child_ids,
-        })
+        Ok(InternalNode { keys, child_ids })
     }
 }
 
@@ -319,7 +328,11 @@ impl PositionIndex {
     }
 
     /// Creates a new PositionIndex with the given path, page size, and cache capacity
-    pub fn new_with_cache_capacity<P: AsRef<Path>>(path: P, page_size: usize, cache_capacity: Option<usize>) -> std::io::Result<Self> {
+    pub fn new_with_cache_capacity<P: AsRef<Path>>(
+        path: P,
+        page_size: usize,
+        cache_capacity: Option<usize>,
+    ) -> std::io::Result<Self> {
         let mut index_pages = IndexPages::new_with_cache_capacity(path, page_size, cache_capacity)?;
 
         // Register deserializers for LeafNode and InternalNode
@@ -328,13 +341,20 @@ impl PositionIndex {
             Ok(Box::new(leaf_node) as Box<dyn Node>)
         });
 
-        index_pages.deserializer.register(INTERNAL_NODE_TYPE, |data| {
-            let internal_node: InternalNode = InternalNode::from_slice(data)?;
-            Ok(Box::new(internal_node) as Box<dyn Node>)
-        });
+        index_pages
+            .deserializer
+            .register(INTERNAL_NODE_TYPE, |data| {
+                let internal_node: InternalNode = InternalNode::from_slice(data)?;
+                Ok(Box::new(internal_node) as Box<dyn Node>)
+            });
 
         // Get the root page ID from the header page
-        let header_node = index_pages.header_page.node.as_any().downcast_ref::<HeaderNode>().unwrap();
+        let header_node = index_pages
+            .header_page
+            .node
+            .as_any()
+            .downcast_ref::<HeaderNode>()
+            .unwrap();
         let root_page_id = header_node.root_page_id;
 
         // Try to get the root page
@@ -374,7 +394,12 @@ impl PositionIndex {
     ///
     /// # Returns
     /// * `Option<(Position, PageID)>` - If the leaf node was split, returns the first key of the new leaf node and the new page ID
-    pub fn append_leaf_key_and_value(&mut self, page_id: PageID, key: Position, value: PositionIndexRecord) -> Option<(Position, PageID)> {
+    pub fn append_leaf_key_and_value(
+        &mut self,
+        page_id: PageID,
+        key: Position,
+        value: PositionIndexRecord,
+    ) -> Option<(Position, PageID)> {
         // Check for duplicate.
         {
             // Optimization for append-only event store:
@@ -461,7 +486,12 @@ impl PositionIndex {
     ///
     /// # Returns
     /// * `Option<(Position, PageID)>` - If the internal node was split, returns the promoted key and the new page ID
-    pub fn append_internal_key_and_value(&mut self, page_id: PageID, key: Position, child_id: PageID) -> Option<(Position, PageID)> {
+    pub fn append_internal_key_and_value(
+        &mut self,
+        page_id: PageID,
+        key: Position,
+        child_id: PageID,
+    ) -> Option<(Position, PageID)> {
         let max_page_size = self.get_max_page_size();
 
         // Check if there is space for this key and value in the leaf node
@@ -477,7 +507,11 @@ impl PositionIndex {
             let page = self.index_pages.get_page_mut(page_id).unwrap();
 
             // Downcast the node to an InternalNode
-            let internal_node = page.node.as_any_mut().downcast_mut::<InternalNode>().unwrap();
+            let internal_node = page
+                .node
+                .as_any_mut()
+                .downcast_mut::<InternalNode>()
+                .unwrap();
 
             // Add the key and child_id
             internal_node.keys.push(key);
@@ -490,8 +524,11 @@ impl PositionIndex {
         let page = self.index_pages.get_page_mut(page_id).unwrap();
 
         // Downcast the node to an InternalNode
-        let internal_node = page.node.as_any_mut().downcast_mut::<InternalNode>().unwrap();
-
+        let internal_node = page
+            .node
+            .as_any_mut()
+            .downcast_mut::<InternalNode>()
+            .unwrap();
 
         // Get the last key
         let promote_key = internal_node.keys.pop().unwrap();
@@ -622,7 +659,13 @@ impl PositionIndex {
     /// * `std::io::Result<Option<PositionIndexRecord>>` - Ok(Some(record)) if the key was found, Ok(None) if not found, Err if an error occurred
     pub fn lookup(&mut self, key: Position) -> std::io::Result<Option<PositionIndexRecord>> {
         // Get the root page ID from the header page
-        let header_node = self.index_pages.header_page.node.as_any().downcast_ref::<HeaderNode>().unwrap();
+        let header_node = self
+            .index_pages
+            .header_page
+            .node
+            .as_any()
+            .downcast_ref::<HeaderNode>()
+            .unwrap();
         let root_page_id = header_node.root_page_id;
 
         // Get the root page
@@ -709,9 +752,18 @@ impl PositionIndex {
     ///
     /// # Returns
     /// * `std::io::Result<Vec<(Position, PositionIndexRecord)>>` - Ok(records) if successful, Err if an error occurred
-    pub fn scan(&mut self, mut after: Option<Position>) -> std::io::Result<Vec<(Position, PositionIndexRecord)>> {
+    pub fn scan(
+        &mut self,
+        mut after: Option<Position>,
+    ) -> std::io::Result<Vec<(Position, PositionIndexRecord)>> {
         // Get the root page ID from the header page
-        let header_node = self.index_pages.header_page.node.as_any().downcast_ref::<HeaderNode>().unwrap();
+        let header_node = self
+            .index_pages
+            .header_page
+            .node
+            .as_any()
+            .downcast_ref::<HeaderNode>()
+            .unwrap();
         let root_page_id = header_node.root_page_id;
 
         // Initialize the result vector
@@ -745,7 +797,7 @@ impl PositionIndex {
                         Ok(idx) => idx + 1, // Start after the exact match
                         Err(idx) => idx,    // Start at the insertion point
                     }
-                },
+                }
                 None => 0, // Start from the beginning
             };
 
@@ -813,7 +865,11 @@ impl PositionIndex {
     ///
     /// # Returns
     /// * `std::io::Result<PageID>` - The page ID of the leaf node that would contain the key
-    fn find_leaf_node_for_key(&mut self, start_page_id: PageID, key: Position) -> std::io::Result<PageID> {
+    fn find_leaf_node_for_key(
+        &mut self,
+        start_page_id: PageID,
+        key: Position,
+    ) -> std::io::Result<PageID> {
         let mut current_page_id = start_page_id;
 
         loop {
@@ -874,7 +930,13 @@ mod tests {
         assert!(test_path.exists());
 
         // Get the root page ID from the header page
-        let header_node = position_index.index_pages.header_page.node.as_any().downcast_ref::<HeaderNode>().unwrap();
+        let header_node = position_index
+            .index_pages
+            .header_page
+            .node
+            .as_any()
+            .downcast_ref::<HeaderNode>()
+            .unwrap();
         let root_page_id = header_node.root_page_id;
 
         // Get the root page
@@ -915,15 +977,23 @@ mod tests {
     fn test_leaf_node_serialization() {
         // Create a non-trivial LeafNode instance
         let leaf_node = LeafNode {
-            keys: vec![
-                1000, // Position is just an u64
-                2000,
-                3000,
-            ],
+            keys: vec![1000, 2000, 3000], // Position is just an u64
             values: vec![
-                PositionIndexRecord { segment: 1, offset: 100, type_hash: hash_type("User") },
-                PositionIndexRecord { segment: 2, offset: 200, type_hash: hash_type("Product") },
-                PositionIndexRecord { segment: 3, offset: 300, type_hash: hash_type("Order") },
+                PositionIndexRecord {
+                    segment: 1,
+                    offset: 100,
+                    type_hash: hash_type("User"),
+                },
+                PositionIndexRecord {
+                    segment: 2,
+                    offset: 200,
+                    type_hash: hash_type("Product"),
+                },
+                PositionIndexRecord {
+                    segment: 3,
+                    offset: 300,
+                    type_hash: hash_type("Order"),
+                },
             ],
             next_leaf_id: Some(PageID(42)),
         };
@@ -950,14 +1020,17 @@ mod tests {
         // Calculate the serialized page size
         let page_size = leaf_node.calc_serialized_page_size();
 
-        // Calculate the expected size: 
-        // 4 bytes for next_leaf_id + 2 bytes for keys length + 
+        // Calculate the expected size:
+        // 4 bytes for next_leaf_id + 2 bytes for keys length +
         // (3 keys * 8 bytes) + (3 values * 24 bytes) + 9 bytes for page overhead
         let expected_size = 4 + 2 + (3 * 8) + (3 * 24) + 9;
 
         // Verify that the page size is correct
-        assert_eq!(page_size, expected_size, 
-                   "Page size should be {} bytes", expected_size);
+        assert_eq!(
+            page_size, expected_size,
+            "Page size should be {} bytes",
+            expected_size
+        );
 
         // Serialize the LeafNode to a page format
         let page_data = leaf_node.serialize_page();
@@ -966,27 +1039,26 @@ mod tests {
         assert!(!page_data.is_empty(), "Page data should not be empty");
 
         // Verify that the page data has the correct length
-        assert_eq!(page_data.len(), expected_size, "Page data should be {} bytes", expected_size);
+        assert_eq!(
+            page_data.len(),
+            expected_size,
+            "Page data should be {} bytes",
+            expected_size
+        );
 
         // Verify that the page data starts with the correct node type byte
-        assert_eq!(page_data[0], LEAF_NODE_TYPE, "Page data should start with the leaf node type byte");
+        assert_eq!(
+            page_data[0], LEAF_NODE_TYPE,
+            "Page data should start with the leaf node type byte"
+        );
     }
 
     #[test]
     fn test_internal_node_serialization() {
         // Create a non-trivial InternalNode instance
         let internal_node = InternalNode {
-            keys: vec![
-                1000, // Position is just an u64
-                2000,
-                3000,
-            ],
-            child_ids: vec![
-                PageID(10),
-                PageID(20),
-                PageID(30),
-                PageID(40),
-            ],
+            keys: vec![1000, 2000, 3000], // Position is just an u64
+            child_ids: vec![PageID(10), PageID(20), PageID(30), PageID(40)],
         };
 
         // Serialize the node
@@ -1013,14 +1085,17 @@ mod tests {
         // Calculate the serialized page size
         let page_size = internal_node.calc_serialized_page_size();
 
-        // Calculate the expected size: 
-        // 2 bytes for keys length + 
+        // Calculate the expected size:
+        // 2 bytes for keys length +
         // (3 keys * 8 bytes) + (4 child_ids * 4 bytes) + 9 bytes for page overhead
         let expected_size = 2 + (3 * 8) + (4 * 4) + 9;
 
         // Verify that the page size is correct
-        assert_eq!(page_size, expected_size, 
-                   "Page size should be {} bytes", expected_size);
+        assert_eq!(
+            page_size, expected_size,
+            "Page size should be {} bytes",
+            expected_size
+        );
 
         // Serialize the InternalNode to a page format
         let page_data = internal_node.serialize_page();
@@ -1029,10 +1104,18 @@ mod tests {
         assert!(!page_data.is_empty(), "Page data should not be empty");
 
         // Verify that the page data has the correct length
-        assert_eq!(page_data.len(), expected_size, "Page data should be {} bytes", expected_size);
+        assert_eq!(
+            page_data.len(),
+            expected_size,
+            "Page data should be {} bytes",
+            expected_size
+        );
 
         // Verify that the page data starts with the correct node type byte
-        assert_eq!(page_data[0], INTERNAL_NODE_TYPE, "Page data should start with the internal node type byte");
+        assert_eq!(
+            page_data[0], INTERNAL_NODE_TYPE,
+            "Page data should start with the internal node type byte"
+        );
     }
 
     #[test]
@@ -1050,8 +1133,16 @@ mod tests {
         let leaf_node = LeafNode {
             keys: vec![1000, 2000],
             values: vec![
-                PositionIndexRecord { segment: 1, offset: 100, type_hash: hash_type("User") },
-                PositionIndexRecord { segment: 2, offset: 200, type_hash: hash_type("Product") },
+                PositionIndexRecord {
+                    segment: 1,
+                    offset: 100,
+                    type_hash: hash_type("User"),
+                },
+                PositionIndexRecord {
+                    segment: 2,
+                    offset: 200,
+                    type_hash: hash_type("Product"),
+                },
             ],
             next_leaf_id: Some(PageID(42)),
         };
@@ -1077,22 +1168,44 @@ mod tests {
         let internal_serialized = internal_page.node.serialize_page();
 
         // Deserialize the pages using the registered deserializers
-        let deserialized_leaf_page = position_index.index_pages.deserializer.deserialize_page(&leaf_serialized, PageID(1)).unwrap();
-        let deserialized_internal_page = position_index.index_pages.deserializer.deserialize_page(&internal_serialized, PageID(2)).unwrap();
+        let deserialized_leaf_page = position_index
+            .index_pages
+            .deserializer
+            .deserialize_page(&leaf_serialized, PageID(1))
+            .unwrap();
+        let deserialized_internal_page = position_index
+            .index_pages
+            .deserializer
+            .deserialize_page(&internal_serialized, PageID(2))
+            .unwrap();
 
         // Verify that the deserialized nodes have the correct type
         assert_eq!(deserialized_leaf_page.node.node_type_byte(), LEAF_NODE_TYPE);
-        assert_eq!(deserialized_internal_page.node.node_type_byte(), INTERNAL_NODE_TYPE);
+        assert_eq!(
+            deserialized_internal_page.node.node_type_byte(),
+            INTERNAL_NODE_TYPE
+        );
 
         // Downcast and verify the leaf node
-        let deserialized_leaf = deserialized_leaf_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+        let deserialized_leaf = deserialized_leaf_page
+            .node
+            .as_any()
+            .downcast_ref::<LeafNode>()
+            .unwrap();
         assert_eq!(deserialized_leaf.keys.len(), leaf_node.keys.len());
         assert_eq!(deserialized_leaf.values.len(), leaf_node.values.len());
 
         // Downcast and verify the internal node
-        let deserialized_internal = deserialized_internal_page.node.as_any().downcast_ref::<InternalNode>().unwrap();
+        let deserialized_internal = deserialized_internal_page
+            .node
+            .as_any()
+            .downcast_ref::<InternalNode>()
+            .unwrap();
         assert_eq!(deserialized_internal.keys.len(), internal_node.keys.len());
-        assert_eq!(deserialized_internal.child_ids.len(), internal_node.child_ids.len());
+        assert_eq!(
+            deserialized_internal.child_ids.len(),
+            internal_node.child_ids.len()
+        );
 
         // No need to clean up the test file, it will be removed when temp_dir goes out of scope
     }
@@ -1115,8 +1228,16 @@ mod tests {
         let leaf_node = LeafNode {
             keys: vec![1000, 2000],
             values: vec![
-                PositionIndexRecord { segment: 1, offset: 100, type_hash: hash_type("User") },
-                PositionIndexRecord { segment: 2, offset: 200, type_hash: hash_type("Product") },
+                PositionIndexRecord {
+                    segment: 1,
+                    offset: 100,
+                    type_hash: hash_type("User"),
+                },
+                PositionIndexRecord {
+                    segment: 2,
+                    offset: 200,
+                    type_hash: hash_type("Product"),
+                },
             ],
             next_leaf_id: None,
         };
@@ -1135,7 +1256,11 @@ mod tests {
         assert_eq!(retrieved_page.node.node_type_byte(), LEAF_NODE_TYPE);
 
         // Downcast to LeafNode and check contents
-        let leaf_node = retrieved_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+        let leaf_node = retrieved_page
+            .node
+            .as_any()
+            .downcast_ref::<LeafNode>()
+            .unwrap();
         assert_eq!(leaf_node.keys.len(), 2);
         assert_eq!(leaf_node.values.len(), 2);
         assert_eq!(leaf_node.keys[0], 1000);
@@ -1147,12 +1272,16 @@ mod tests {
 
         // Get a mutable reference to the page and append a key and value
         let mut_page = position_index.index_pages.get_page_mut(page_id).unwrap();
-        let leaf_node_mut = mut_page.node.as_any_mut().downcast_mut::<LeafNode>().unwrap();
+        let leaf_node_mut = mut_page
+            .node
+            .as_any_mut()
+            .downcast_mut::<LeafNode>()
+            .unwrap();
         leaf_node_mut.keys.push(3000);
-        leaf_node_mut.values.push(PositionIndexRecord { 
-            segment: 3, 
-            offset: 300, 
-            type_hash: hash_type("Order") 
+        leaf_node_mut.values.push(PositionIndexRecord {
+            segment: 3,
+            offset: 300,
+            type_hash: hash_type("Order"),
         });
 
         // Flush changes to disk
@@ -1166,7 +1295,11 @@ mod tests {
         assert_eq!(retrieved_page2.node.node_type_byte(), LEAF_NODE_TYPE);
 
         // Downcast to LeafNode and check contents
-        let leaf_node2 = retrieved_page2.node.as_any().downcast_ref::<LeafNode>().unwrap();
+        let leaf_node2 = retrieved_page2
+            .node
+            .as_any()
+            .downcast_ref::<LeafNode>()
+            .unwrap();
         assert_eq!(leaf_node2.keys.len(), 3);
         assert_eq!(leaf_node2.values.len(), 3);
         assert_eq!(leaf_node2.keys[0], 1000);
@@ -1181,12 +1314,16 @@ mod tests {
 
         // Get a mutable reference to the page and add another key and value
         let mut_page2 = position_index2.index_pages.get_page_mut(page_id).unwrap();
-        let leaf_node_mut2 = mut_page2.node.as_any_mut().downcast_mut::<LeafNode>().unwrap();
+        let leaf_node_mut2 = mut_page2
+            .node
+            .as_any_mut()
+            .downcast_mut::<LeafNode>()
+            .unwrap();
         leaf_node_mut2.keys.push(4000);
-        leaf_node_mut2.values.push(PositionIndexRecord { 
-            segment: 4, 
-            offset: 400, 
-            type_hash: hash_type("Category") 
+        leaf_node_mut2.values.push(PositionIndexRecord {
+            segment: 4,
+            offset: 400,
+            type_hash: hash_type("Category"),
         });
 
         // Mark the page as dirty
@@ -1203,7 +1340,11 @@ mod tests {
         assert_eq!(retrieved_page3.node.node_type_byte(), LEAF_NODE_TYPE);
 
         // Downcast to LeafNode and check contents
-        let leaf_node3 = retrieved_page3.node.as_any().downcast_ref::<LeafNode>().unwrap();
+        let leaf_node3 = retrieved_page3
+            .node
+            .as_any()
+            .downcast_ref::<LeafNode>()
+            .unwrap();
         assert_eq!(leaf_node3.keys.len(), 4);
         assert_eq!(leaf_node3.values.len(), 4);
         assert_eq!(leaf_node3.keys[0], 1000);
@@ -1256,7 +1397,11 @@ mod tests {
         assert_eq!(retrieved_page.node.node_type_byte(), INTERNAL_NODE_TYPE);
 
         // Downcast to InternalNode and check contents
-        let internal_node = retrieved_page.node.as_any().downcast_ref::<InternalNode>().unwrap();
+        let internal_node = retrieved_page
+            .node
+            .as_any()
+            .downcast_ref::<InternalNode>()
+            .unwrap();
         assert_eq!(internal_node.keys.len(), 2);
         assert_eq!(internal_node.child_ids.len(), 3);
         assert_eq!(internal_node.keys[0], 1000);
@@ -1267,7 +1412,11 @@ mod tests {
 
         // Get a mutable reference to the page and append a key and child_id
         let mut_page = position_index.index_pages.get_page_mut(page_id).unwrap();
-        let internal_node_mut = mut_page.node.as_any_mut().downcast_mut::<InternalNode>().unwrap();
+        let internal_node_mut = mut_page
+            .node
+            .as_any_mut()
+            .downcast_mut::<InternalNode>()
+            .unwrap();
         internal_node_mut.keys.push(3000);
         internal_node_mut.child_ids.push(PageID(400));
 
@@ -1282,7 +1431,11 @@ mod tests {
         assert_eq!(retrieved_page2.node.node_type_byte(), INTERNAL_NODE_TYPE);
 
         // Downcast to InternalNode and check contents
-        let internal_node2 = retrieved_page2.node.as_any().downcast_ref::<InternalNode>().unwrap();
+        let internal_node2 = retrieved_page2
+            .node
+            .as_any()
+            .downcast_ref::<InternalNode>()
+            .unwrap();
         assert_eq!(internal_node2.keys.len(), 3);
         assert_eq!(internal_node2.child_ids.len(), 4);
         assert_eq!(internal_node2.keys[0], 1000);
@@ -1295,7 +1448,11 @@ mod tests {
 
         // Get a mutable reference to the page and add another key and child_id
         let mut_page2 = position_index2.index_pages.get_page_mut(page_id).unwrap();
-        let internal_node_mut2 = mut_page2.node.as_any_mut().downcast_mut::<InternalNode>().unwrap();
+        let internal_node_mut2 = mut_page2
+            .node
+            .as_any_mut()
+            .downcast_mut::<InternalNode>()
+            .unwrap();
         internal_node_mut2.keys.push(4000);
         internal_node_mut2.child_ids.push(PageID(500));
 
@@ -1313,7 +1470,11 @@ mod tests {
         assert_eq!(retrieved_page3.node.node_type_byte(), INTERNAL_NODE_TYPE);
 
         // Downcast to InternalNode and check contents
-        let internal_node3 = retrieved_page3.node.as_any().downcast_ref::<InternalNode>().unwrap();
+        let internal_node3 = retrieved_page3
+            .node
+            .as_any()
+            .downcast_ref::<InternalNode>()
+            .unwrap();
         assert_eq!(internal_node3.keys.len(), 4);
         assert_eq!(internal_node3.child_ids.len(), 5);
         assert_eq!(internal_node3.keys[0], 1000);
@@ -1393,7 +1554,11 @@ mod tests {
 
         // Get the original page and verify it has 10 keys and values
         let original_page = position_index.index_pages.get_page(page_id).unwrap();
-        let original_leaf = original_page.node.as_any().downcast_ref::<LeafNode>().unwrap();
+        let original_leaf = original_page
+            .node
+            .as_any()
+            .downcast_ref::<LeafNode>()
+            .unwrap();
         assert_eq!(original_leaf.keys.len(), 10);
         assert_eq!(original_leaf.values.len(), 10);
         assert_eq!(original_leaf.next_leaf_id, Some(new_page_id));
@@ -1515,10 +1680,7 @@ mod tests {
         }
         child_ids.push(PageID(500)); // One more child_id than keys
 
-        let internal_node = InternalNode {
-            keys,
-            child_ids,
-        };
+        let internal_node = InternalNode { keys, child_ids };
 
         // Create an IndexPage with the InternalNode
         let internal_page = IndexPage {
@@ -1542,7 +1704,8 @@ mod tests {
         let new_child_id = PageID(600);
 
         // Call append_internal_key_and_value with the page_id, key, and child_id
-        let split_result = position_index.append_internal_key_and_value(page_id, new_key, new_child_id);
+        let split_result =
+            position_index.append_internal_key_and_value(page_id, new_key, new_child_id);
 
         // Verify that the internal node was split
         assert!(split_result.is_some());
@@ -1553,7 +1716,11 @@ mod tests {
 
         // Get the original page and verify it has 4 keys and 5 child_ids
         let original_page = position_index.index_pages.get_page(page_id).unwrap();
-        let original_internal = original_page.node.as_any().downcast_ref::<InternalNode>().unwrap();
+        let original_internal = original_page
+            .node
+            .as_any()
+            .downcast_ref::<InternalNode>()
+            .unwrap();
         assert_eq!(original_internal.keys.len(), 4);
         assert_eq!(original_internal.child_ids.len(), 5);
         assert_eq!(original_internal.keys[0], 0u64);
@@ -1568,7 +1735,11 @@ mod tests {
 
         // Get the new page and verify it has 1 key and 2 child_ids
         let new_page = position_index.index_pages.get_page(new_page_id).unwrap();
-        let new_internal = new_page.node.as_any().downcast_ref::<InternalNode>().unwrap();
+        let new_internal = new_page
+            .node
+            .as_any()
+            .downcast_ref::<InternalNode>()
+            .unwrap();
         assert_eq!(new_internal.keys.len(), 1);
         assert_eq!(new_internal.child_ids.len(), 2);
         assert_eq!(new_internal.keys[0], 5000u64);
@@ -1583,7 +1754,11 @@ mod tests {
 
         // Get the original page and verify it has 4 keys and 5 child_ids
         let original_page = position_index2.index_pages.get_page(page_id).unwrap();
-        let original_internal = original_page.node.as_any().downcast_ref::<InternalNode>().unwrap();
+        let original_internal = original_page
+            .node
+            .as_any()
+            .downcast_ref::<InternalNode>()
+            .unwrap();
         assert_eq!(original_internal.keys.len(), 4);
         assert_eq!(original_internal.child_ids.len(), 5);
         assert_eq!(original_internal.keys[0], 0u64);
@@ -1598,7 +1773,11 @@ mod tests {
 
         // Get the new page and verify it has 1 key and 2 child_ids
         let new_page = position_index2.index_pages.get_page(new_page_id).unwrap();
-        let new_internal = new_page.node.as_any().downcast_ref::<InternalNode>().unwrap();
+        let new_internal = new_page
+            .node
+            .as_any()
+            .downcast_ref::<InternalNode>()
+            .unwrap();
         assert_eq!(new_internal.keys.len(), 1);
         assert_eq!(new_internal.child_ids.len(), 2);
         assert_eq!(new_internal.keys[0], 5000u64);
@@ -1630,10 +1809,7 @@ mod tests {
         }
         child_ids.push(PageID(400)); // One more child_id than keys
 
-        let internal_node = InternalNode {
-            keys,
-            child_ids,
-        };
+        let internal_node = InternalNode { keys, child_ids };
 
         // Create an IndexPage with the InternalNode
         let internal_page = IndexPage {
@@ -1649,7 +1825,8 @@ mod tests {
         let new_child_id = PageID(500);
 
         // Call append_internal_key_and_value with the page_id, key, and child_id
-        let split_result = position_index.append_internal_key_and_value(page_id, new_key, new_child_id);
+        let split_result =
+            position_index.append_internal_key_and_value(page_id, new_key, new_child_id);
 
         // Verify that the internal node was not split
         assert!(split_result.is_none());
@@ -1689,7 +1866,6 @@ mod tests {
 
         // Create a new PositionIndex instance with a large page size to avoid splitting
         let mut position_index = PositionIndex::new(&test_path, 4096).unwrap();
-
 
         // Insert a few records
         let mut inserted: Vec<(Position, PositionIndexRecord)> = Vec::new();
@@ -1749,7 +1925,6 @@ mod tests {
         // Create another instance of PositionIndex
         let mut position_index2 = PositionIndex::new(&test_path, 4096).unwrap();
 
-
         // Check lookup after flush
         for (position, record) in &inserted {
             let result = position_index2.lookup(*position).unwrap();
@@ -1764,7 +1939,7 @@ mod tests {
             assert_eq!(all_records2[i].0, inserted[i].0);
             assert_eq!(all_records2[i].1, inserted[i].1);
         }
-    }    
+    }
 
     #[test]
     fn test_insert_lookup_split_leaf_node() {
@@ -1777,7 +1952,6 @@ mod tests {
         // Create a new PositionIndex instance with a large page size to avoid splitting
         let page_size = 256;
         let mut position_index = PositionIndex::new(&test_path, page_size).unwrap();
-
 
         // Insert a few records
         let mut inserted: Vec<(Position, PositionIndexRecord)> = Vec::new();
@@ -1837,7 +2011,6 @@ mod tests {
         // Create another instance of PositionIndex
         let mut position_index2 = PositionIndex::new(&test_path, page_size).unwrap();
 
-
         // Check lookup after flush
         for (position, record) in &inserted {
             let result = position_index2.lookup(*position).unwrap();
@@ -1865,7 +2038,6 @@ mod tests {
         // Create a new PositionIndex instance with a large page size to avoid splitting
         let page_size = 256;
         let mut position_index = PositionIndex::new(&test_path, page_size).unwrap();
-
 
         // Insert a few records
         let mut inserted: Vec<(Position, PositionIndexRecord)> = Vec::new();
@@ -1924,7 +2096,6 @@ mod tests {
 
         // Create another instance of PositionIndex
         let mut position_index2 = PositionIndex::new(&test_path, page_size).unwrap();
-
 
         // Check lookup after flush
         for (position, record) in &inserted {
@@ -1995,7 +2166,10 @@ mod tests {
         let key_count = leaf_node.keys.iter().filter(|&k| *k == position).count();
 
         // Verify there's only one occurrence of the key
-        assert_eq!(key_count, 1, "Duplicate keys should not be added to leaf nodes");
+        assert_eq!(
+            key_count, 1,
+            "Duplicate keys should not be added to leaf nodes"
+        );
     }
 
     #[test]

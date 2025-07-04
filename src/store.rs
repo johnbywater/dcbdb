@@ -1,10 +1,13 @@
-use std::path::{Path};
-use std::sync::{Mutex};
-use std::collections::HashMap;
 use itertools::Itertools;
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Mutex;
 
-use crate::api::{DCBEvent, DCBEventStoreAPI, DCBQuery, DCBQueryItem, DCBSequencedEvent, DCBAppendCondition, EventStoreError, Result, DCBReadResponse};
-use crate::transactions::{TransactionManager};
+use crate::api::{
+    DCBAppendCondition, DCBEvent, DCBEventStoreAPI, DCBQuery, DCBQueryItem, DCBReadResponse,
+    DCBSequencedEvent, EventStoreError, Result,
+};
+use crate::transactions::TransactionManager;
 use crate::wal::Position;
 
 /// Iterator that yields (position, tag, query item indices)
@@ -23,11 +26,7 @@ impl<I> PositionTagQiidIterator<I>
 where
     I: Iterator<Item = crate::transactions::Result<Position>>,
 {
-    fn new(
-        positions: I,
-        tag: String,
-        qiids: Vec<usize>
-    ) -> Self {
+    fn new(positions: I, tag: String, qiids: Vec<usize>) -> Self {
         Self {
             positions,
             tag,
@@ -44,9 +43,9 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         self.positions.next().and_then(|position_result| {
-            position_result.ok().map(|position| {
-                (position, self.tag.clone(), self.qiids.clone())
-            })
+            position_result
+                .ok()
+                .map(|position| (position, self.tag.clone(), self.qiids.clone()))
         })
     }
 }
@@ -96,12 +95,9 @@ impl<'a> EventStoreDCBReadResponse<'a> {
 
         // Read a batch of events
         let max_batch_size = 100;
-        let (batch, _) = event_store.read_internal(
-            &mut tm,
-            query.clone(),
-            after,
-            Some(max_batch_size),
-        ).unwrap();
+        let (batch, _) = event_store
+            .read_internal(&mut tm, query.clone(), after, Some(max_batch_size))
+            .unwrap();
 
         let head = {
             if limit.is_none() && last_committed_position > 0 {
@@ -208,12 +204,13 @@ impl<'a> DCBReadResponse for EventStoreDCBReadResponse<'a> {
         let mut head: Option<u64> = self.head;
         let is_limit_some = self.limit.is_some();
 
-        let events: Vec<DCBSequencedEvent> = self.map(|event| {
-            if is_limit_some {
-                head = Some(event.position);
-            }
-            event
-        })
+        let events: Vec<DCBSequencedEvent> = self
+            .map(|event| {
+                if is_limit_some {
+                    head = Some(event.position);
+                }
+                event
+            })
             .collect();
         (events, head)
     }
@@ -288,7 +285,10 @@ impl EventStore {
 
     /// Flushes all pending changes to disk and creates a checkpoint
     pub fn flush_and_checkpoint(&self) -> Result<()> {
-        self.transaction_manager.lock().unwrap().flush_and_checkpoint()
+        self.transaction_manager
+            .lock()
+            .unwrap()
+            .flush_and_checkpoint()
             .map_err(|e| EventStoreError::Io(e.into()))
     }
 
@@ -312,8 +312,8 @@ impl EventStore {
     fn event_matches_query_item(event: &DCBEvent, query_item: &DCBQueryItem) -> bool {
         // If query_item.types is empty, any event type matches
         // Otherwise, the event type must be in the query_item.types list
-        let type_matches = query_item.types.is_empty() || 
-                          query_item.types.iter().any(|t| t == &event.event_type);
+        let type_matches =
+            query_item.types.is_empty() || query_item.types.iter().any(|t| t == &event.event_type);
 
         // All tags in query_item.tags must be present in event.tags
         let tags_match = query_item.tags.iter().all(|tag| event.tags.contains(tag));
@@ -341,9 +341,7 @@ impl EventStore {
         let after_position = after.unwrap_or(0);
 
         // Get the last issued position and check if there are any events
-        let last_issued_position = {
-            tm.get_last_issued_position()
-        };
+        let last_issued_position = { tm.get_last_issued_position() };
 
         if last_issued_position == 0 {
             return Ok((Vec::new(), None));
@@ -356,7 +354,8 @@ impl EventStore {
         // Check if we can use the optimized path with tag indexes
         if let Some(ref q) = query {
             // Check if all query items have tags
-            let all_items_have_tags = !q.items.is_empty() && q.items.iter().all(|item| !item.tags.is_empty());
+            let all_items_have_tags =
+                !q.items.is_empty() && q.items.iter().all(|item| !item.tags.is_empty());
 
             if all_items_have_tags {
                 // Invert the query items
@@ -370,14 +369,18 @@ impl EventStore {
                     qis.insert(qiid, item);
 
                     // Create sets of tags and types for this query item
-                    let tags_set: std::collections::HashSet<String> = item.tags.iter().cloned().collect();
+                    let tags_set: std::collections::HashSet<String> =
+                        item.tags.iter().cloned().collect();
                     qi_tags.push(tags_set);
 
-                    let types_set: std::collections::HashSet<String> = item.types.iter().cloned().collect();
+                    let types_set: std::collections::HashSet<String> =
+                        item.types.iter().cloned().collect();
                     qi_types.push(types_set);
 
                     // Create set of type hashes for this query item
-                    let type_hashes_set: std::collections::HashSet<Vec<u8>> = item.types.iter()
+                    let type_hashes_set: std::collections::HashSet<Vec<u8>> = item
+                        .types
+                        .iter()
                         .map(|t| crate::positions::hash_type(t))
                         .collect();
                     qi_type_hashes.push(type_hashes_set);
@@ -388,24 +391,20 @@ impl EventStore {
                     }
                 }
 
-
                 // Create iterators for each tag
                 let mut tag_iterators = Vec::new();
                 for tag in tag_qiis.keys() {
                     let qiids = tag_qiis.get(tag).cloned().unwrap_or_default();
                     let tag_owned = tag.to_string();
 
-
                     // Call lookup to get an iterator of positions
-                    let positions_iter = tm.lookup_positions_for_tag_after_iter(tag, after_position)
+                    let positions_iter = tm
+                        .lookup_positions_for_tag_after_iter(tag, after_position)
                         .unwrap();
 
                     // Now create an iterator that yields (position, tag, qiids)
-                    let position_tag_qiids_iter = PositionTagQiidIterator::new(
-                        positions_iter,
-                        tag_owned,
-                        qiids
-                    );
+                    let position_tag_qiids_iter =
+                        PositionTagQiidIterator::new(positions_iter, tag_owned, qiids);
 
                     tag_iterators.push(position_tag_qiids_iter);
                 }
@@ -413,14 +412,12 @@ impl EventStore {
                 // Merge the iterators and group by position
 
                 // Merge the iterators by position using itertools::merge_by
-                let all_tuples_iter = tag_iterators
-                    .into_iter()
-                    .kmerge_by(|a, b| a.0 < b.0);
+                let all_tuples_iter = tag_iterators.into_iter().kmerge_by(|a, b| a.0 < b.0);
 
                 // Iterator that groups tuples by position
                 struct GroupByPositionIterator<I>
                 where
-                    I: Iterator<Item = (Position, String, Vec<usize>)>
+                    I: Iterator<Item = (Position, String, Vec<usize>)>,
                 {
                     all_tuples_iter: I,
                     current_position: Option<Position>,
@@ -431,7 +428,7 @@ impl EventStore {
 
                 impl<I> GroupByPositionIterator<I>
                 where
-                    I: Iterator<Item = (Position, String, Vec<usize>)>
+                    I: Iterator<Item = (Position, String, Vec<usize>)>,
                 {
                     fn new(iter: I) -> Self {
                         Self {
@@ -446,9 +443,13 @@ impl EventStore {
 
                 impl<I> Iterator for GroupByPositionIterator<I>
                 where
-                    I: Iterator<Item = (Position, String, Vec<usize>)>
+                    I: Iterator<Item = (Position, String, Vec<usize>)>,
                 {
-                    type Item = (Position, std::collections::HashSet<String>, std::collections::HashSet<usize>);
+                    type Item = (
+                        Position,
+                        std::collections::HashSet<String>,
+                        std::collections::HashSet<usize>,
+                    );
 
                     fn next(&mut self) -> Option<Self::Item> {
                         // If we've already processed the last group, return None
@@ -507,7 +508,13 @@ impl EventStore {
                 // Iterator that filters positions based on tag matching
                 struct TagMatchingIterator<'a, I>
                 where
-                    I: Iterator<Item = (Position, std::collections::HashSet<String>, std::collections::HashSet<usize>)>
+                    I: Iterator<
+                        Item = (
+                            Position,
+                            std::collections::HashSet<String>,
+                            std::collections::HashSet<usize>,
+                        ),
+                    >,
                 {
                     positions_with_tags_iter: I,
                     qi_tags: &'a Vec<std::collections::HashSet<String>>,
@@ -516,15 +523,26 @@ impl EventStore {
 
                 impl<'a, I> Iterator for TagMatchingIterator<'a, I>
                 where
-                    I: Iterator<Item = (Position, std::collections::HashSet<String>, std::collections::HashSet<usize>)>
+                    I: Iterator<
+                        Item = (
+                            Position,
+                            std::collections::HashSet<String>,
+                            std::collections::HashSet<usize>,
+                        ),
+                    >,
                 {
-                    type Item = (Position, crate::positions::PositionIndexRecord, std::collections::HashSet<usize>);
+                    type Item = (
+                        Position,
+                        crate::positions::PositionIndexRecord,
+                        std::collections::HashSet<usize>,
+                    );
 
                     fn next(&mut self) -> Option<Self::Item> {
                         loop {
                             let (position, tags, qiis) = self.positions_with_tags_iter.next()?;
 
-                            let matching_qiis: std::collections::HashSet<usize> = qiis.into_iter()
+                            let matching_qiis: std::collections::HashSet<usize> = qiis
+                                .into_iter()
                                 .filter(|&qii| {
                                     // Check if all tags in the query item are in the position's tags
                                     self.qi_tags[qii].is_subset(&tags)
@@ -533,7 +551,11 @@ impl EventStore {
 
                             if !matching_qiis.is_empty() {
                                 // Lookup the position index record
-                                if let Ok(Some(record)) = self.tm.lookup_position_record(position).map_err(|e| EventStoreError::Io(e.into())) {
+                                if let Ok(Some(record)) = self
+                                    .tm
+                                    .lookup_position_record(position)
+                                    .map_err(|e| EventStoreError::Io(e.into()))
+                                {
                                     return Some((position, record, matching_qiis));
                                 }
                             }
@@ -558,7 +580,13 @@ impl EventStore {
                 // Iterator that filters positions based on type matching
                 struct TypeMatchingIterator<'a, I>
                 where
-                    I: Iterator<Item = (Position, crate::positions::PositionIndexRecord, std::collections::HashSet<usize>)>
+                    I: Iterator<
+                        Item = (
+                            Position,
+                            crate::positions::PositionIndexRecord,
+                            std::collections::HashSet<usize>,
+                        ),
+                    >,
                 {
                     positions_matching_tags_iter: I,
                     qi_type_hashes: &'a Vec<std::collections::HashSet<Vec<u8>>>,
@@ -566,16 +594,25 @@ impl EventStore {
 
                 impl<'a, I> Iterator for TypeMatchingIterator<'a, I>
                 where
-                    I: Iterator<Item = (Position, crate::positions::PositionIndexRecord, std::collections::HashSet<usize>)>
+                    I: Iterator<
+                        Item = (
+                            Position,
+                            crate::positions::PositionIndexRecord,
+                            std::collections::HashSet<usize>,
+                        ),
+                    >,
                 {
                     type Item = (Position, crate::positions::PositionIndexRecord);
 
                     fn next(&mut self) -> Option<Self::Item> {
                         loop {
-                            let (position, position_idx_record, qiis) = self.positions_matching_tags_iter.next()?;
+                            let (position, position_idx_record, qiis) =
+                                self.positions_matching_tags_iter.next()?;
 
                             let type_matches = qiis.iter().any(|&qii| {
-                                self.qi_type_hashes[qii].is_empty() || self.qi_type_hashes[qii].contains(&position_idx_record.type_hash)
+                                self.qi_type_hashes[qii].is_empty()
+                                    || self.qi_type_hashes[qii]
+                                        .contains(&position_idx_record.type_hash)
                             });
 
                             if type_matches {
@@ -601,16 +638,22 @@ impl EventStore {
                 // Convert positions and index records to DCBSequencedEvent objects
                 struct ReadEventAtPositionIterator<'a> {
                     tm: &'a mut TransactionManager,
-                    positions_and_idx_records_iter: std::vec::IntoIter<(Position, crate::positions::PositionIndexRecord)>,
+                    positions_and_idx_records_iter:
+                        std::vec::IntoIter<(Position, crate::positions::PositionIndexRecord)>,
                 }
 
                 impl<'a> Iterator for ReadEventAtPositionIterator<'a> {
                     type Item = Result<DCBSequencedEvent>;
 
                     fn next(&mut self) -> Option<Self::Item> {
-                        if let Some((position, idx_record)) = self.positions_and_idx_records_iter.next() {
-                            Some(self.tm.read_event_at_position_with_record(position, Some(idx_record))
-                                .map_err(|e| EventStoreError::Io(e.into())))
+                        if let Some((position, idx_record)) =
+                            self.positions_and_idx_records_iter.next()
+                        {
+                            Some(
+                                self.tm
+                                    .read_event_at_position_with_record(position, Some(idx_record))
+                                    .map_err(|e| EventStoreError::Io(e.into())),
+                            )
                         } else {
                             None
                         }
@@ -632,15 +675,15 @@ impl EventStore {
                             match self.events_iter.next()? {
                                 Ok(event) => {
                                     // Check if the event matches the query
-                                    let matches = self.query_items.iter().any(|item|
+                                    let matches = self.query_items.iter().any(|item| {
                                         EventStore::event_matches_query_item(&event.event, item)
-                                    );
+                                    });
 
                                     if matches {
                                         return Some(event);
                                     }
                                     // If no match, continue to next event
-                                },
+                                }
                                 Err(_) => {
                                     // Skip this event if we can't read it
                                     continue;
@@ -665,7 +708,8 @@ impl EventStore {
                 result = filtered_events_iter.collect();
 
                 // Apply limit using itertools functionality
-                let mut events_iter: Box<dyn Iterator<Item = DCBSequencedEvent>> = Box::new(result.into_iter());
+                let mut events_iter: Box<dyn Iterator<Item = DCBSequencedEvent>> =
+                    Box::new(result.into_iter());
 
                 if let Some(limit) = limit {
                     // Get only a limited number of events
@@ -689,7 +733,9 @@ impl EventStore {
 
         // Fall back to a sequential scan to match query items without tags.
         // Use scan() on PositionIndex to get all positions and position index records
-        let position_records = tm.scan_positions(after_optional).map_err(|e| EventStoreError::Io(e.into()))?;
+        let position_records = tm
+            .scan_positions(after_optional)
+            .map_err(|e| EventStoreError::Io(e.into()))?;
 
         // Process each position and position index record
         for (position, record) in position_records {
@@ -705,7 +751,9 @@ impl EventStore {
                                 true
                             } else {
                                 // Event matches if it matches any query item
-                                q.items.iter().any(|item| Self::event_matches_query_item(&event.event, item))
+                                q.items
+                                    .iter()
+                                    .any(|item| Self::event_matches_query_item(&event.event, item))
                             }
                         }
                     };
@@ -713,7 +761,7 @@ impl EventStore {
                     if matches {
                         result.push(event);
                     }
-                },
+                }
                 Err(_) => {
                     // Skip this event if we can't read it
                     continue;
@@ -738,7 +786,6 @@ impl EventStore {
 
         Ok((result, head))
     }
-
 }
 
 impl DCBEventStoreAPI for EventStore {
@@ -772,7 +819,12 @@ impl DCBEventStoreAPI for EventStore {
 
         if let Some(condition) = condition {
             // Check if any events match the fail_if_events_match query
-            let (matching_events, _) = self.read_internal(&mut tm, Some(condition.fail_if_events_match), condition.after, None)?;
+            let (matching_events, _) = self.read_internal(
+                &mut tm,
+                Some(condition.fail_if_events_match),
+                condition.after,
+                None,
+            )?;
 
             if !matching_events.is_empty() {
                 return Err(EventStoreError::IntegrityError);
@@ -790,17 +842,20 @@ impl DCBEventStoreAPI for EventStore {
         // Append each event
         for event in events {
             // let start = std::time::Instant::now();
-            last_position = tm.append_event(txn_id, event).map_err(|e| EventStoreError::Io(e.into()))?;
+            last_position = tm
+                .append_event(txn_id, event)
+                .map_err(|e| EventStoreError::Io(e.into()))?;
             // let duration = start.elapsed();
             // println!("Append took: {:?}", duration);
         }
 
         // Commit the transaction
-        tm.commit(txn_id).map_err(|e| EventStoreError::Io(e.into()))?;
+        tm.commit(txn_id)
+            .map_err(|e| EventStoreError::Io(e.into()))?;
 
         // // Flush and checkpoint
         // tm.flush_and_checkpoint().map_err(|e| EventStoreError::Io(e.into()))?;
-        // 
+        //
         Ok(last_position)
     }
 }
@@ -813,7 +868,9 @@ mod tests {
     /// Helper function to convert a DCBReadResponse to a tuple of (Vec<DCBSequencedEvent>, Option<u64>)
     /// This function is no longer needed since the read method now returns a tuple directly
     #[allow(dead_code)]
-    fn response_to_tuple(response: Box<dyn DCBReadResponse>) -> (Vec<DCBSequencedEvent>, Option<u64>) {
+    fn response_to_tuple(
+        response: Box<dyn DCBReadResponse>,
+    ) -> (Vec<DCBSequencedEvent>, Option<u64>) {
         let head = response.head().map(|h| h as u64);
         let events: Vec<DCBSequencedEvent> = response.collect();
         (events, head)
@@ -843,7 +900,9 @@ mod tests {
         };
 
         // Append events
-        let position = store.append(vec![event1.clone(), event2.clone()], None).unwrap();
+        let position = store
+            .append(vec![event1.clone(), event2.clone()], None)
+            .unwrap();
         assert_eq!(position, 2);
 
         // Read all events
@@ -882,7 +941,9 @@ mod tests {
         };
 
         // Append events
-        store.append(vec![event1.clone(), event2.clone()], None).unwrap();
+        store
+            .append(vec![event1.clone(), event2.clone()], None)
+            .unwrap();
 
         // Query by tag1
         let query1 = DCBQuery {
@@ -892,13 +953,17 @@ mod tests {
             }],
         };
 
-        let (events, head) = store.read_with_head(Some(query1.clone()), None, None).unwrap();
+        let (events, head) = store
+            .read_with_head(Some(query1.clone()), None, None)
+            .unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event.event_type, "test_event");
         assert_eq!(head, Some(2));
 
         // Query by tag1 - limit 0
-        let (events, head) = store.read_with_head(Some(query1.clone()), None, Some(0)).unwrap();
+        let (events, head) = store
+            .read_with_head(Some(query1.clone()), None, Some(0))
+            .unwrap();
         assert_eq!(events.len(), 0);
         assert_eq!(head, None);
 
@@ -910,18 +975,24 @@ mod tests {
         assert_eq!(head, Some(1));
 
         // Query by tag1 - after 0
-        let (events, head) = store.read_with_head(Some(query1.clone()), Some(0), None).unwrap();
+        let (events, head) = store
+            .read_with_head(Some(query1.clone()), Some(0), None)
+            .unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event.event_type, "test_event");
         assert_eq!(head, Some(2));
 
         // Query by tag1 - after 1
-        let (events, head) = store.read_with_head(Some(query1.clone()), Some(1), None).unwrap();
+        let (events, head) = store
+            .read_with_head(Some(query1.clone()), Some(1), None)
+            .unwrap();
         assert_eq!(events.len(), 0);
         assert_eq!(head, Some(2));
 
         // Query by tag1 - after 1, limit 1
-        let (events, head) = store.read_with_head(Some(query1.clone()), Some(1), Some(1)).unwrap();
+        let (events, head) = store
+            .read_with_head(Some(query1.clone()), Some(1), Some(1))
+            .unwrap();
         assert_eq!(events.len(), 0);
         assert_eq!(head, None);
 
@@ -974,7 +1045,6 @@ mod tests {
         assert_eq!(events[0].event.event_type, "test_event");
         assert_eq!(events[1].event.event_type, "another_event");
 
-
         // Query by tag3
         let query3 = DCBQuery {
             items: vec![DCBQueryItem {
@@ -1021,7 +1091,9 @@ mod tests {
         };
 
         // Append events
-        store.append(vec![event1.clone(), event2.clone()], None).unwrap();
+        store
+            .append(vec![event1.clone(), event2.clone()], None)
+            .unwrap();
 
         // Query by type
         let query = DCBQuery {
@@ -1031,34 +1103,46 @@ mod tests {
             }],
         };
 
-        let (events, _) = store.read_with_head(Some(query.clone()), None, None).unwrap();
+        let (events, _) = store
+            .read_with_head(Some(query.clone()), None, None)
+            .unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event.event_type, "test_event");
 
         // Query by tag1 - limit 0
-        let (events, head) = store.read_with_head(Some(query.clone()), None, Some(0)).unwrap();
+        let (events, head) = store
+            .read_with_head(Some(query.clone()), None, Some(0))
+            .unwrap();
         assert_eq!(events.len(), 0);
         assert_eq!(head, None);
 
         // Query by tag1 - limit 1
-        let (events, head) = store.read_with_head(Some(query.clone()), None, Some(1)).unwrap();
+        let (events, head) = store
+            .read_with_head(Some(query.clone()), None, Some(1))
+            .unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event.event_type, "test_event");
         assert_eq!(head, Some(1));
 
         // Query by tag1 - after 0
-        let (events, head) = store.read_with_head(Some(query.clone()), Some(0), None).unwrap();
+        let (events, head) = store
+            .read_with_head(Some(query.clone()), Some(0), None)
+            .unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event.event_type, "test_event");
         assert_eq!(head, Some(2));
 
         // Query by tag1 - after 1
-        let (events, head) = store.read_with_head(Some(query.clone()), Some(1), None).unwrap();
+        let (events, head) = store
+            .read_with_head(Some(query.clone()), Some(1), None)
+            .unwrap();
         assert_eq!(events.len(), 0);
         assert_eq!(head, Some(2));
 
         // Query by tag1 - after 1, limit 1
-        let (events, head) = store.read_with_head(Some(query.clone()), Some(1), Some(1)).unwrap();
+        let (events, head) = store
+            .read_with_head(Some(query.clone()), Some(1), Some(1))
+            .unwrap();
         assert_eq!(events.len(), 0);
         assert_eq!(head, None);
 
@@ -1084,7 +1168,9 @@ mod tests {
         };
 
         // Append events
-        store.append(vec![event1.clone(), event2.clone()], None).unwrap();
+        store
+            .append(vec![event1.clone(), event2.clone()], None)
+            .unwrap();
 
         // Query by test_event and tag2
         let query = DCBQuery {
@@ -1258,29 +1344,52 @@ mod tests {
         };
 
         // Read events with the query
-        let (events, head) = store.read_with_head(Some(query.clone()), None, None).unwrap();
+        let (events, head) = store
+            .read_with_head(Some(query.clone()), None, None)
+            .unwrap();
 
         // Check that we got the expected number of events
-        assert_eq!(events.len(), num_events, "Expected {}, got {}", num_events, events.len());
+        assert_eq!(
+            events.len(),
+            num_events,
+            "Expected {}, got {}",
+            num_events,
+            events.len()
+        );
 
         // Check that the head position is correct
-        assert_eq!(head, Some(num_events as u64), "Expected head position to be {}, got {:?}", num_events, head);
+        assert_eq!(
+            head,
+            Some(num_events as u64),
+            "Expected head position to be {}, got {:?}",
+            num_events,
+            head
+        );
 
         // Check that positions are in order and tags alternate correctly
         for (i, event) in events.iter().enumerate() {
             // Check position
-            assert_eq!(event.position, expected_positions[i],
-                       "Event at index {} has position {}, expected {}",
-                       i, event.position, expected_positions[i]);
+            assert_eq!(
+                event.position, expected_positions[i],
+                "Event at index {} has position {}, expected {}",
+                i, event.position, expected_positions[i]
+            );
 
             // Check tag
             let tag = &event.event.tags[0];
-            assert_eq!(tag, &expected_tags[i],
-                       "Event at index {} has tag {}, expected {}",
-                       i, tag, expected_tags[i]);
+            assert_eq!(
+                tag, &expected_tags[i],
+                "Event at index {} has tag {}, expected {}",
+                i, tag, expected_tags[i]
+            );
         }
 
-        store.transaction_manager.lock().unwrap().flush_and_checkpoint().unwrap();
+        store
+            .transaction_manager
+            .lock()
+            .unwrap()
+            .flush_and_checkpoint()
+            .unwrap();
 
         // Read events with the query using next_batch
         let mut read_response = store.read(Some(query.clone()), None, None).unwrap();
@@ -1298,28 +1407,41 @@ mod tests {
         let head = read_response.head();
 
         // Check that we got the expected number of events
-        assert_eq!(events.len(), num_events, "Expected {}, got {}", num_events, events.len());
+        assert_eq!(
+            events.len(),
+            num_events,
+            "Expected {}, got {}",
+            num_events,
+            events.len()
+        );
 
         // Check that the head position is correct
-        assert_eq!(head, Some(num_events as u64), "Expected head position to be {}, got {:?}", num_events, head);
+        assert_eq!(
+            head,
+            Some(num_events as u64),
+            "Expected head position to be {}, got {:?}",
+            num_events,
+            head
+        );
 
         // Check that positions are in order and tags alternate correctly
         for (i, event) in events.iter().enumerate() {
             // Check position
-            assert_eq!(event.position, expected_positions[i],
-                       "Event at index {} has position {}, expected {}",
-                       i, event.position, expected_positions[i]);
+            assert_eq!(
+                event.position, expected_positions[i],
+                "Event at index {} has position {}, expected {}",
+                i, event.position, expected_positions[i]
+            );
 
             // Check tag
             let tag = &event.event.tags[0];
-            assert_eq!(tag, &expected_tags[i],
-                       "Event at index {} has tag {}, expected {}",
-                       i, tag, expected_tags[i]);
+            assert_eq!(
+                tag, &expected_tags[i],
+                "Event at index {} has tag {}, expected {}",
+                i, tag, expected_tags[i]
+            );
         }
-
-
 
         Ok(())
     }
-
 }

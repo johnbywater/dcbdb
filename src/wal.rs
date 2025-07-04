@@ -5,7 +5,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::path::{Path};
+use std::path::Path;
 use std::sync::Mutex;
 
 use crc32fast::Hasher;
@@ -60,11 +60,23 @@ impl From<WalError> for std::io::Error {
     fn from(error: WalError) -> Self {
         match error {
             WalError::Io(io_error) => io_error,
-            WalError::EventTooLarge => std::io::Error::new(std::io::ErrorKind::InvalidInput, "Event too large"),
-            WalError::InvalidRecord(msg) => std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Invalid record: {}", msg)),
-            WalError::InvalidMagic => std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid magic number"),
-            WalError::InvalidChecksum => std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid checksum"),
-            WalError::Serialization(msg) => std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Serialization error: {}", msg)),
+            WalError::EventTooLarge => {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "Event too large")
+            }
+            WalError::InvalidRecord(msg) => std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Invalid record: {}", msg),
+            ),
+            WalError::InvalidMagic => {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid magic number")
+            }
+            WalError::InvalidChecksum => {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid checksum")
+            }
+            WalError::Serialization(msg) => std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Serialization error: {}", msg),
+            ),
         }
     }
 }
@@ -111,8 +123,7 @@ impl RecordHeader {
 
         let record_type = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
         let txn_id = u64::from_le_bytes([
-            bytes[8], bytes[9], bytes[10], bytes[11],
-            bytes[12], bytes[13], bytes[14], bytes[15],
+            bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
         ]);
         let length = u32::from_le_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
 
@@ -259,7 +270,8 @@ impl TransactionWAL {
     pub fn read_committed_transactions(&mut self) -> WalResult<Vec<(u64, Vec<Vec<u8>>)>> {
         self.file.seek(SeekFrom::Start(0))?;
 
-        let mut txn_events: std::collections::HashMap<u64, Vec<Vec<u8>>> = std::collections::HashMap::new();
+        let mut txn_events: std::collections::HashMap<u64, Vec<Vec<u8>>> =
+            std::collections::HashMap::new();
         let mut committed_txns: std::collections::HashSet<u64> = std::collections::HashSet::new();
         let mut last_good_offset: u64 = 0;
 
@@ -300,7 +312,9 @@ impl TransactionWAL {
         let result: Vec<(u64, Vec<Vec<u8>>)> = committed_txns
             .into_iter()
             .filter_map(|txn_id| {
-                txn_events.get(&txn_id).map(|events| (txn_id, events.clone()))
+                txn_events
+                    .get(&txn_id)
+                    .map(|events| (txn_id, events.clone()))
             })
             .collect();
 
@@ -326,7 +340,9 @@ impl TransactionWAL {
         match self.file.read_exact(&mut header_bytes) {
             Ok(_) => {}
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
-                return Err(WalError::InvalidRecord("Unexpected EOF during header read".to_string()));
+                return Err(WalError::InvalidRecord(
+                    "Unexpected EOF during header read".to_string(),
+                ));
             }
             Err(e) => return Err(WalError::Io(e)),
         }
@@ -450,7 +466,8 @@ pub fn pack_dcb_event_with_crc(position: Position, dcb_event: DCBEvent) -> Vec<u
 /// Serialize a DCB event with position
 fn serialize_dcb_event(event: &DCBEventWithPosition) -> WalResult<Vec<u8>> {
     let mut buf = Vec::new();
-    event.serialize(&mut Serializer::new(&mut buf))
+    event
+        .serialize(&mut Serializer::new(&mut buf))
         .map_err(|e| WalError::Serialization(e.to_string()))?;
     Ok(buf)
 }
@@ -549,13 +566,14 @@ mod tests {
 
         // First add some events
         let txn_id = 42;
-        wal.write_event(txn_id, br#"{"event_type": "test_event"}"#).unwrap();
+        wal.write_event(txn_id, br#"{"event_type": "test_event"}"#)
+            .unwrap();
 
         wal.commit_transaction(txn_id).unwrap();
 
         // Commit should clear the buffer
         wal.write_flush_and_sync().unwrap();
-        
+
         assert!(wal.buffered.lock().unwrap().is_empty());
 
         // Verify file contains the records
@@ -582,7 +600,8 @@ mod tests {
 
         let txn_id = 42;
         wal.begin_transaction(txn_id).unwrap();
-        wal.write_event(txn_id, br#"{"event_type": "test_event"}"#).unwrap();
+        wal.write_event(txn_id, br#"{"event_type": "test_event"}"#)
+            .unwrap();
 
         // Buffer should have records
         assert_eq!(wal.buffered.lock().unwrap().len(), 2);
@@ -765,7 +784,7 @@ mod tests {
         wal.begin_transaction(txn_id_3).unwrap();
         wal.write_event(txn_id_3, &payload3).unwrap();
         wal.commit_transaction(txn_id_3).unwrap();
-        
+
         wal.write_flush_and_sync().unwrap();
 
         // Truncate before checkpoint

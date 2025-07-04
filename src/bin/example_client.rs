@@ -1,12 +1,17 @@
+use clap::Parser;
 use dcbdb::api::{DCBEvent, DCBEventStoreAPI, DCBQuery, DCBQueryItem};
 use dcbdb::grpc::GrpcEventStoreClient;
-use clap::Parser;
 
 #[derive(Parser)]
 #[command(author, version, about = "DCBDB Example Client", long_about = None)]
 struct Args {
     /// Address of the gRPC server (e.g., "http://127.0.0.1:50051")
-    #[arg(short, long, value_name = "ADDR", default_value = "http://127.0.0.1:50051")]
+    #[arg(
+        short,
+        long,
+        value_name = "ADDR",
+        default_value = "http://127.0.0.1:50051"
+    )]
     address: String,
 }
 
@@ -45,11 +50,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Iterate through the events
     println!("Events:");
     for event in response {
-        println!("  Position {}: Type={}, Tags={:?}, Data={:?}", 
-            event.position, 
-            event.event.event_type, 
-            event.event.tags, 
-            String::from_utf8_lossy(&event.event.data));
+        println!(
+            "  Position {}: Type={}, Tags={:?}, Data={:?}",
+            event.position,
+            event.event.event_type,
+            event.event.tags,
+            String::from_utf8_lossy(&event.event.data)
+        );
     }
 
     println!("Example completed successfully!");

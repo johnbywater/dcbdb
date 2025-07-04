@@ -66,10 +66,21 @@ impl From<SegmentError> for std::io::Error {
     fn from(error: SegmentError) -> Self {
         match error {
             SegmentError::Io(io_error) => io_error,
-            SegmentError::NotEnoughData(msg) => std::io::Error::new(std::io::ErrorKind::UnexpectedEof, msg),
-            SegmentError::SegmentNotFound(path) => std::io::Error::new(std::io::ErrorKind::NotFound, format!("Segment not found: {:?}", path)),
-            SegmentError::DatabaseCorrupted(msg) => std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Database corrupted: {}", msg)),
-            SegmentError::Serialization(msg) => std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Serialization error: {}", msg)),
+            SegmentError::NotEnoughData(msg) => {
+                std::io::Error::new(std::io::ErrorKind::UnexpectedEof, msg)
+            }
+            SegmentError::SegmentNotFound(path) => std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Segment not found: {:?}", path),
+            ),
+            SegmentError::DatabaseCorrupted(msg) => std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Database corrupted: {}", msg),
+            ),
+            SegmentError::Serialization(msg) => std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Serialization error: {}", msg),
+            ),
         }
     }
 }
@@ -171,7 +182,9 @@ impl Segment {
     }
 
     /// Iterate over event records in the segment
-    pub fn iter_event_records(&mut self) -> impl Iterator<Item = SegmentResult<(Position, DCBEvent, u64)>> + '_ {
+    pub fn iter_event_records(
+        &mut self,
+    ) -> impl Iterator<Item = SegmentResult<(Position, DCBEvent, u64)>> + '_ {
         EventRecordIterator {
             segment: self,
             offset: 0,
@@ -247,7 +260,10 @@ impl SegmentManager {
             let file_name_str = file_name.to_string_lossy();
 
             if file_name_str.starts_with("segment-") && file_name_str.ends_with(".dat") {
-                if let Some(num_str) = file_name_str.strip_prefix("segment-").and_then(|s| s.strip_suffix(".dat")) {
+                if let Some(num_str) = file_name_str
+                    .strip_prefix("segment-")
+                    .and_then(|s| s.strip_suffix(".dat"))
+                {
                     if let Ok(num) = num_str.parse::<u64>() {
                         current_segment_number = current_segment_number.max(num);
                     }
@@ -426,8 +442,8 @@ impl<'a> Iterator for SegmentIterator<'a> {
 
 /// Deserialize a DCB event from bytes
 pub fn deserialize_dcb_event(data: &[u8]) -> SegmentResult<(Position, DCBEvent)> {
-    let event_with_pos: DCBEventWithPosition = decode::from_slice(data)
-        .map_err(|e| SegmentError::Serialization(e.to_string()))?;
+    let event_with_pos: DCBEventWithPosition =
+        decode::from_slice(data).map_err(|e| SegmentError::Serialization(e.to_string()))?;
 
     let position = event_with_pos.position;
     let event = DCBEvent {
@@ -440,7 +456,10 @@ pub fn deserialize_dcb_event(data: &[u8]) -> SegmentResult<(Position, DCBEvent)>
 }
 
 /// Read an event record from a file
-pub fn read_event_record(file: &mut File, offset: u64) -> SegmentResult<(Position, DCBEvent, usize)> {
+pub fn read_event_record(
+    file: &mut File,
+    offset: u64,
+) -> SegmentResult<(Position, DCBEvent, usize)> {
     // Get file path for better error messages
     let file_path = match file.metadata() {
         Ok(metadata) => {
@@ -449,7 +468,7 @@ pub fn read_event_record(file: &mut File, offset: u64) -> SegmentResult<(Positio
             } else {
                 PathBuf::from(format!("unknown_file_{}", metadata.len()))
             }
-        },
+        }
         Err(_) => PathBuf::from("unknown_file"),
     };
 
@@ -457,7 +476,10 @@ pub fn read_event_record(file: &mut File, offset: u64) -> SegmentResult<(Positio
     if let Err(e) = file.seek(SeekFrom::Start(offset)) {
         return Err(SegmentError::Io(io::Error::new(
             e.kind(),
-            format!("Failed to seek to offset {} in file {:?}: {}", offset, file_path, e)
+            format!(
+                "Failed to seek to offset {} in file {:?}: {}",
+                offset, file_path, e
+            ),
         )));
     }
 
@@ -466,28 +488,55 @@ pub fn read_event_record(file: &mut File, offset: u64) -> SegmentResult<(Positio
     match file.read_exact(&mut crc_len_bytes) {
         Ok(_) => {}
         Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
-            let msg = format!("Not enough data for event crc and blob length at offset {} in file {:?}", offset, file_path);
+            let msg = format!(
+                "Not enough data for event crc and blob length at offset {} in file {:?}",
+                offset, file_path
+            );
             return Err(SegmentError::NotEnoughData(msg));
         }
         Err(e) => {
-            let msg = format!("Failed to read crc and length at offset {} in file {:?}: {}", offset, file_path, e);
+            let msg = format!(
+                "Failed to read crc and length at offset {} in file {:?}: {}",
+                offset, file_path, e
+            );
             return Err(SegmentError::Io(io::Error::new(e.kind(), msg)));
         }
     }
 
-    let crc = u32::from_le_bytes([crc_len_bytes[0], crc_len_bytes[1], crc_len_bytes[2], crc_len_bytes[3]]);
-    let blob_len = u32::from_le_bytes([crc_len_bytes[4], crc_len_bytes[5], crc_len_bytes[6], crc_len_bytes[7]]);
+    let crc = u32::from_le_bytes([
+        crc_len_bytes[0],
+        crc_len_bytes[1],
+        crc_len_bytes[2],
+        crc_len_bytes[3],
+    ]);
+    let blob_len = u32::from_le_bytes([
+        crc_len_bytes[4],
+        crc_len_bytes[5],
+        crc_len_bytes[6],
+        crc_len_bytes[7],
+    ]);
 
     // Read blob
     let mut blob = vec![0u8; blob_len as usize];
     match file.read_exact(&mut blob) {
         Ok(_) => {}
         Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
-            let msg = format!("Not enough data for blob (expected {} bytes) at offset {} in file {:?}", blob_len, offset + EVENT_CRC_LEN_SIZE as u64, file_path);
+            let msg = format!(
+                "Not enough data for blob (expected {} bytes) at offset {} in file {:?}",
+                blob_len,
+                offset + EVENT_CRC_LEN_SIZE as u64,
+                file_path
+            );
             return Err(SegmentError::NotEnoughData(msg));
         }
         Err(e) => {
-            let msg = format!("Failed to read blob (size {}) at offset {} in file {:?}: {}", blob_len, offset + EVENT_CRC_LEN_SIZE as u64, file_path, e);
+            let msg = format!(
+                "Failed to read blob (size {}) at offset {} in file {:?}: {}",
+                blob_len,
+                offset + EVENT_CRC_LEN_SIZE as u64,
+                file_path,
+                e
+            );
             return Err(SegmentError::Io(io::Error::new(e.kind(), msg)));
         }
     }
@@ -512,9 +561,9 @@ pub fn check_crc(blob: &[u8], crc: u32) -> SegmentResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use crate::api::DCBEvent;
-    use crate::wal::{pack_dcb_event_with_crc};
+    use crate::wal::pack_dcb_event_with_crc;
+    use tempfile::TempDir;
 
     #[test]
     fn test_segment_initialization() {
@@ -592,13 +641,19 @@ mod tests {
         ];
 
         assert_eq!(offsets, expected_offsets);
-        assert_eq!(segment.buffer_size(), payloads.iter().map(|p| p.len()).sum());
+        assert_eq!(
+            segment.buffer_size(),
+            payloads.iter().map(|p| p.len()).sum()
+        );
 
         // Flush to disk
         segment.flush().unwrap();
 
         // Check file size after flush
-        assert_eq!(segment.file_size(), payloads.iter().map(|p| p.len()).sum::<usize>() as u64);
+        assert_eq!(
+            segment.file_size(),
+            payloads.iter().map(|p| p.len()).sum::<usize>() as u64
+        );
 
         // Verify file content
         let content = std::fs::read(&segment_path).unwrap();
@@ -648,7 +703,8 @@ mod tests {
         segment.flush().unwrap();
 
         // Retrieve the event record
-        let (retrieved_position, retrieved_event, _length) = segment.get_event_record(offset).unwrap();
+        let (retrieved_position, retrieved_event, _length) =
+            segment.get_event_record(offset).unwrap();
 
         // Check the retrieved data
         assert_eq!(retrieved_position, position);
@@ -666,21 +722,30 @@ mod tests {
 
         // Create test events
         let events = vec![
-            (1, DCBEvent {
-                event_type: "event1".to_string(),
-                data: br#"{"msg": "hello"}"#.to_vec(),
-                tags: Vec::new(),
-            }),
-            (2, DCBEvent {
-                event_type: "event2".to_string(),
-                data: br#"{"msg": "world"}"#.to_vec(),
-                tags: Vec::new(),
-            }),
-            (3, DCBEvent {
-                event_type: "event3".to_string(),
-                data: br#"{"msg": "!"}"#.to_vec(),
-                tags: Vec::new(),
-            }),
+            (
+                1,
+                DCBEvent {
+                    event_type: "event1".to_string(),
+                    data: br#"{"msg": "hello"}"#.to_vec(),
+                    tags: Vec::new(),
+                },
+            ),
+            (
+                2,
+                DCBEvent {
+                    event_type: "event2".to_string(),
+                    data: br#"{"msg": "world"}"#.to_vec(),
+                    tags: Vec::new(),
+                },
+            ),
+            (
+                3,
+                DCBEvent {
+                    event_type: "event3".to_string(),
+                    data: br#"{"msg": "!"}"#.to_vec(),
+                    tags: Vec::new(),
+                },
+            ),
         ];
 
         // Pack and add each event
@@ -855,7 +920,8 @@ mod tests {
         let serialized = rmp_serde::to_vec(&event_with_pos).unwrap();
 
         // Deserialize the event
-        let (deserialized_position, deserialized_event) = deserialize_dcb_event(&serialized).unwrap();
+        let (deserialized_position, deserialized_event) =
+            deserialize_dcb_event(&serialized).unwrap();
 
         // Check the deserialized data
         assert_eq!(deserialized_position, position);
@@ -885,7 +951,8 @@ mod tests {
 
         // Open the file and read the event record
         let mut file = File::open(&file_path).unwrap();
-        let (retrieved_position, retrieved_event, length) = read_event_record(&mut file, 0).unwrap();
+        let (retrieved_position, retrieved_event, length) =
+            read_event_record(&mut file, 0).unwrap();
 
         // Check the retrieved data
         assert_eq!(retrieved_position, position);

@@ -1,5 +1,5 @@
 //! API for Dynamic Consistency Boundaries (DCB) event store
-//! 
+//!
 //! This module provides the core interfaces and data structures for working with
 //! an event store that supports dynamic consistency boundaries.
 
@@ -86,7 +86,7 @@ pub trait DCBEventStoreAPI {
     ) -> Result<(Vec<DCBSequencedEvent>, Option<u64>)> {
         let mut response = self.read(query, after, limit)?;
         Ok(response.collect_with_head())
-    }    
+    }
 
     /// Returns the current head position of the event store, or None if empty
     ///
@@ -98,7 +98,6 @@ pub trait DCBEventStoreAPI {
     /// Returns the position of the last appended event
     fn append(&self, events: Vec<DCBEvent>, condition: Option<DCBAppendCondition>) -> Result<u64>;
 }
-
 
 // Error types
 #[derive(Error, Debug)]
@@ -112,7 +111,6 @@ pub enum EventStoreError {
     #[error("Corruption detected: {0}")]
     Corruption(String),
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -193,10 +191,8 @@ mod tests {
         };
 
         // Create a test response
-        let mut response = TestReadResponse::new(
-            vec![seq_event1.clone(), seq_event2.clone()],
-            Some(2),
-        );
+        let mut response =
+            TestReadResponse::new(vec![seq_event1.clone(), seq_event2.clone()], Some(2));
 
         // Test head position
         assert_eq!(response.head(), Some(2));

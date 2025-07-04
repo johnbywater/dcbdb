@@ -1,10 +1,12 @@
-use tempfile::tempdir;
-use uuid::Uuid;
+use dcbdb::api::{
+    DCBAppendCondition, DCBEvent, DCBEventStoreAPI, DCBQuery, DCBQueryItem, EventStoreError,
+};
+use dcbdb::grpc::GrpcEventStoreClient;
+use dcbdb::store::EventStore;
 use std::thread;
 use std::time::Duration;
-use dcbdb::api::{DCBAppendCondition, DCBQuery, DCBEvent, EventStoreError, DCBQueryItem, DCBEventStoreAPI};
-use dcbdb::store::EventStore;
-use dcbdb::grpc::GrpcEventStoreClient;
+use tempfile::tempdir;
+use uuid::Uuid;
 // Import the EventStore and related types from the main crate
 
 #[test]
@@ -29,7 +31,9 @@ fn test_grpc_event_store() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             use dcbdb::grpc::start_grpc_server_with_shutdown;
-            start_grpc_server_with_shutdown(temp_path, server_addr, shutdown_rx).await.unwrap();
+            start_grpc_server_with_shutdown(temp_path, server_addr, shutdown_rx)
+                .await
+                .unwrap();
         });
     });
 
@@ -39,7 +43,9 @@ fn test_grpc_event_store() {
     // Create a gRPC client
     let rt = tokio::runtime::Runtime::new().unwrap();
     let client = rt.block_on(async {
-        GrpcEventStoreClient::connect(format!("http://{}", server_addr)).await.unwrap()
+        GrpcEventStoreClient::connect(format!("http://{}", server_addr))
+            .await
+            .unwrap()
     });
 
     // Run the test with the gRPC client
@@ -52,10 +58,8 @@ fn test_grpc_event_store() {
     server_thread.join().unwrap();
 }
 
-
 // Helper function to run the test with a given EventStoreApi implementation
 pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
-
     // Test head() method on empty store
     let head_position = event_store.head().unwrap();
     assert_eq!(None, head_position);
@@ -109,7 +113,9 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             tags: vec![],
         }],
     };
-    let (result, head) = event_store.read_with_head(Some(query_type1.clone()), None, None).unwrap();
+    let (result, head) = event_store
+        .read_with_head(Some(query_type1.clone()), None, None)
+        .unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event1.data, result[0].event.data);
     assert_eq!(Some(1), head);
@@ -121,7 +127,9 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             tags: vec![],
         }],
     };
-    let (result, head) = event_store.read_with_head(Some(query_type2.clone()), None, None).unwrap();
+    let (result, head) = event_store
+        .read_with_head(Some(query_type2.clone()), None, None)
+        .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(1), head);
 
@@ -132,7 +140,9 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             tags: vec!["tagX".to_string()],
         }],
     };
-    let (result, head) = event_store.read_with_head(Some(query_tag_x.clone()), None, None).unwrap();
+    let (result, head) = event_store
+        .read_with_head(Some(query_tag_x.clone()), None, None)
+        .unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event1.data, result[0].event.data);
     assert_eq!(Some(1), head);
@@ -144,7 +154,9 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             tags: vec!["tagY".to_string()],
         }],
     };
-    let (result, head) = event_store.read_with_head(Some(query_tag_y.clone()), None, None).unwrap();
+    let (result, head) = event_store
+        .read_with_head(Some(query_tag_y.clone()), None, None)
+        .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(1), head);
 
@@ -155,7 +167,9 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             tags: vec!["tagX".to_string()],
         }],
     };
-    let (result, head) = event_store.read_with_head(Some(query_type1_tag_x.clone()), None, None).unwrap();
+    let (result, head) = event_store
+        .read_with_head(Some(query_type1_tag_x.clone()), None, None)
+        .unwrap();
     assert_eq!(1, result.len());
     assert_eq!(Some(1), head);
 
@@ -166,7 +180,9 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             tags: vec!["tagY".to_string()],
         }],
     };
-    let (result, head) = event_store.read_with_head(Some(query_type1_tag_y), None, None).unwrap();
+    let (result, head) = event_store
+        .read_with_head(Some(query_type1_tag_y), None, None)
+        .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(1), head);
 
@@ -177,7 +193,9 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             tags: vec!["tagX".to_string()],
         }],
     };
-    let (result, head) = event_store.read_with_head(Some(query_type2_tag_x), None, None).unwrap();
+    let (result, head) = event_store
+        .read_with_head(Some(query_type2_tag_x), None, None)
+        .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(1), head);
 
@@ -192,7 +210,9 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
         data: b"data3".to_vec(),
         tags: vec!["tagA".to_string(), "tagC".to_string()],
     };
-    let position = event_store.append(vec![event2.clone(), event3.clone()], None).unwrap();
+    let position = event_store
+        .append(vec![event2.clone(), event3.clone()], None)
+        .unwrap();
 
     // Check the returned position is 3
     assert_eq!(3, position);
@@ -229,27 +249,37 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
     assert_eq!(Some(2), head);
 
     // Read all after 10, limit 10, expect zero events.
-    let (result, head) = event_store.read_with_head(None, Some(10), Some(10)).unwrap();
+    let (result, head) = event_store
+        .read_with_head(None, Some(10), Some(10))
+        .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(None, head);
 
     // Read type1 after 1, expect no events.
-    let (result, head) = event_store.read_with_head(Some(query_type1.clone()), Some(1), None).unwrap();
+    let (result, head) = event_store
+        .read_with_head(Some(query_type1.clone()), Some(1), None)
+        .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(3), head);
 
     // Read tagX after 1, expect no events.
-    let (result, head) = event_store.read_with_head(Some(query_tag_x.clone()), Some(1), None).unwrap();
+    let (result, head) = event_store
+        .read_with_head(Some(query_tag_x.clone()), Some(1), None)
+        .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(3), head);
 
     // Read tagX after 1, limit 1 expect no events.
-    let (result, head) = event_store.read_with_head(Some(query_tag_x.clone()), Some(1), Some(1)).unwrap();
+    let (result, head) = event_store
+        .read_with_head(Some(query_tag_x.clone()), Some(1), Some(1))
+        .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(None, head);
 
     // Read type1 and tagX after 1, expect no events.
-    let (result, head) = event_store.read_with_head(Some(query_type1_tag_x.clone()), Some(1), None).unwrap();
+    let (result, head) = event_store
+        .read_with_head(Some(query_type1_tag_x.clone()), Some(1), None)
+        .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(3), head);
 
@@ -260,7 +290,9 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             tags: vec!["tagA".to_string()],
         }],
     };
-    let (result, head) = event_store.read_with_head(Some(query_tag_a.clone()), None, None).unwrap();
+    let (result, head) = event_store
+        .read_with_head(Some(query_tag_a.clone()), None, None)
+        .unwrap();
     assert_eq!(2, result.len());
     assert_eq!(event2.data, result[0].event.data);
     assert_eq!(event3.data, result[1].event.data);
@@ -273,7 +305,9 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             tags: vec!["tagA".to_string(), "tagB".to_string()],
         }],
     };
-    let (result, head) = event_store.read_with_head(Some(query_tag_a_and_b.clone()), None, None).unwrap();
+    let (result, head) = event_store
+        .read_with_head(Some(query_tag_a_and_b.clone()), None, None)
+        .unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event2.data, result[0].event.data);
     assert_eq!(Some(3), head);
@@ -291,7 +325,9 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             },
         ],
     };
-    let (result, head) = event_store.read_with_head(Some(query_tag_b_or_c.clone()), None, None).unwrap();
+    let (result, head) = event_store
+        .read_with_head(Some(query_tag_b_or_c.clone()), None, None)
+        .unwrap();
     assert_eq!(2, result.len());
     assert_eq!(event2.data, result[0].event.data);
     assert_eq!(event3.data, result[1].event.data);
@@ -310,7 +346,9 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             },
         ],
     };
-    let (result, head) = event_store.read_with_head(Some(query_tag_x_or_y.clone()), None, None).unwrap();
+    let (result, head) = event_store
+        .read_with_head(Some(query_tag_x_or_y.clone()), None, None)
+        .unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event1.data, result[0].event.data);
     assert_eq!(Some(3), head);
@@ -322,13 +360,17 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             tags: vec!["tagA".to_string()],
         }],
     };
-    let (result, head) = event_store.read_with_head(Some(query_type2_tag_a.clone()), None, None).unwrap();
+    let (result, head) = event_store
+        .read_with_head(Some(query_type2_tag_a.clone()), None, None)
+        .unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event2.data, result[0].event.data);
     assert_eq!(Some(3), head);
 
     // Read events with type2 and tagA after 2, expect no events.
-    let (result, head) = event_store.read_with_head(Some(query_type2_tag_a.clone()), Some(2), None).unwrap();
+    let (result, head) = event_store
+        .read_with_head(Some(query_type2_tag_a.clone()), Some(2), None)
+        .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(3), head);
 
@@ -345,7 +387,9 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             },
         ],
     };
-    let (result, head) = event_store.read_with_head(Some(query_type2_tag_b_or_type3_tagc.clone()), None, None).unwrap();
+    let (result, head) = event_store
+        .read_with_head(Some(query_type2_tag_b_or_type3_tagc.clone()), None, None)
+        .unwrap();
     assert_eq!(2, result.len());
     assert_eq!(event2.data, result[0].event.data);
     assert_eq!(event3.data, result[1].event.data);
@@ -364,7 +408,9 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             },
         ],
     };
-    let (result, head) = event_store.read_with_head(Some(query_type3_tag_c_or_type2_tag_b), None, None).unwrap();
+    let (result, head) = event_store
+        .read_with_head(Some(query_type3_tag_c_or_type2_tag_b), None, None)
+        .unwrap();
     assert_eq!(2, result.len());
     assert_eq!(event2.data, result[0].event.data);
     assert_eq!(event3.data, result[1].event.data);
@@ -393,10 +439,13 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
     assert!(matches!(result, Err(EventStoreError::IntegrityError)));
 
     // Fail because condition matches type1.
-    let result = event_store.append(new.clone(), Some(DCBAppendCondition {
-        fail_if_events_match: query_type1.clone(),
-        after: None,
-    }));
+    let result = event_store.append(
+        new.clone(),
+        Some(DCBAppendCondition {
+            fail_if_events_match: query_type1.clone(),
+            after: None,
+        }),
+    );
     assert!(matches!(result, Err(EventStoreError::IntegrityError)));
 
     // Fail because condition matches type2 after 1.
@@ -500,63 +549,75 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
             tags: vec![],
         }],
     };
-    let position = event_store.append(
-        new.clone(),
-        Some(DCBAppendCondition {
-            fail_if_events_match: query_type_n,
-            after: None,
-        }),
-    ).unwrap();
+    let position = event_store
+        .append(
+            new.clone(),
+            Some(DCBAppendCondition {
+                fail_if_events_match: query_type_n,
+                after: None,
+            }),
+        )
+        .unwrap();
     assert_eq!(5, position);
 
     // Can append match tagY.
-    let position = event_store.append(
-        new.clone(),
-        Some(DCBAppendCondition {
-            fail_if_events_match: query_tag_y.clone(),
-            after: None,
-        }),
-    ).unwrap();
+    let position = event_store
+        .append(
+            new.clone(),
+            Some(DCBAppendCondition {
+                fail_if_events_match: query_tag_y.clone(),
+                after: None,
+            }),
+        )
+        .unwrap();
     assert_eq!(6, position);
 
     // Can append match type1 after 1.
-    let position = event_store.append(
-        new.clone(),
-        Some(DCBAppendCondition {
-            fail_if_events_match: query_type1.clone(),
-            after: Some(1),
-        }),
-    ).unwrap();
+    let position = event_store
+        .append(
+            new.clone(),
+            Some(DCBAppendCondition {
+                fail_if_events_match: query_type1.clone(),
+                after: Some(1),
+            }),
+        )
+        .unwrap();
     assert_eq!(7, position);
 
     // Can append match tagX after 1.
-    let position = event_store.append(
-        new.clone(),
-        Some(DCBAppendCondition {
-            fail_if_events_match: query_tag_x.clone(),
-            after: Some(1),
-        }),
-    ).unwrap();
+    let position = event_store
+        .append(
+            new.clone(),
+            Some(DCBAppendCondition {
+                fail_if_events_match: query_tag_x.clone(),
+                after: Some(1),
+            }),
+        )
+        .unwrap();
     assert_eq!(8, position);
 
     // Can append match type1 and tagX after 1.
-    let position = event_store.append(
-        new.clone(),
-        Some(DCBAppendCondition {
-            fail_if_events_match: query_type1_tag_x.clone(),
-            after: Some(1),
-        }),
-    ).unwrap();
+    let position = event_store
+        .append(
+            new.clone(),
+            Some(DCBAppendCondition {
+                fail_if_events_match: query_type1_tag_x.clone(),
+                after: Some(1),
+            }),
+        )
+        .unwrap();
     assert_eq!(9, position);
 
     // Can append match tagX, after 1.
-    let position = event_store.append(
-        new.clone(),
-        Some(DCBAppendCondition {
-            fail_if_events_match: query_tag_x.clone(),
-            after: Some(1),
-        }),
-    ).unwrap();
+    let position = event_store
+        .append(
+            new.clone(),
+            Some(DCBAppendCondition {
+                fail_if_events_match: query_tag_x.clone(),
+                after: Some(1),
+            }),
+        )
+        .unwrap();
     assert_eq!(10, position);
 
     // Check it works with course subscription consistency boundaries and events.
@@ -576,54 +637,67 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
 
     let student_joined_course = DCBEvent {
         event_type: "StudentJoinedCourse".to_string(),
-        data: format!(r#"{{"student_id": "{}", "course_id": "{}"}}"#, student_id, course_id).into_bytes(),
+        data: format!(
+            r#"{{"student_id": "{}", "course_id": "{}"}}"#,
+            student_id, course_id
+        )
+        .into_bytes(),
         tags: vec![course_id.clone(), student_id.clone()],
     };
 
-    let _position = event_store.append(
-        vec![student_registered.clone()],
-        Some(DCBAppendCondition {
-            fail_if_events_match: DCBQuery {
-                items: vec![DCBQueryItem {
-                    types: vec!["StudentRegistered".to_string()],
-                    tags: student_registered.tags.clone(),
-                }],
-            },
-            after: Some(3),
-        }),
-    ).unwrap();
+    let _position = event_store
+        .append(
+            vec![student_registered.clone()],
+            Some(DCBAppendCondition {
+                fail_if_events_match: DCBQuery {
+                    items: vec![DCBQueryItem {
+                        types: vec!["StudentRegistered".to_string()],
+                        tags: student_registered.tags.clone(),
+                    }],
+                },
+                after: Some(3),
+            }),
+        )
+        .unwrap();
 
-    let _position = event_store.append(
-        vec![course_registered.clone()],
-        Some(DCBAppendCondition {
-            fail_if_events_match: DCBQuery {
-                items: vec![DCBQueryItem {
-                    types: vec![],
-                    tags: course_registered.tags.clone(),
-                }],
-            },
-            after: Some(3),
-        }),
-    ).unwrap();
+    let _position = event_store
+        .append(
+            vec![course_registered.clone()],
+            Some(DCBAppendCondition {
+                fail_if_events_match: DCBQuery {
+                    items: vec![DCBQueryItem {
+                        types: vec![],
+                        tags: course_registered.tags.clone(),
+                    }],
+                },
+                after: Some(3),
+            }),
+        )
+        .unwrap();
 
-    let _position = event_store.append(
-        vec![student_joined_course.clone()],
-        Some(DCBAppendCondition {
-            fail_if_events_match: DCBQuery {
-                items: vec![DCBQueryItem {
-                    types: vec![],
-                    tags: student_joined_course.tags.clone(),
-                }],
-            },
-            after: Some(3),
-        }),
-    ).unwrap();
+    let _position = event_store
+        .append(
+            vec![student_joined_course.clone()],
+            Some(DCBAppendCondition {
+                fail_if_events_match: DCBQuery {
+                    items: vec![DCBQueryItem {
+                        types: vec![],
+                        tags: student_joined_course.tags.clone(),
+                    }],
+                },
+                after: Some(3),
+            }),
+        )
+        .unwrap();
 
     let (result, head) = event_store.read_with_head(None, None, None).unwrap();
     assert_eq!(13, result.len());
     assert_eq!(result[10].event.event_type, student_registered.event_type);
     assert_eq!(result[11].event.event_type, course_registered.event_type);
-    assert_eq!(result[12].event.event_type, student_joined_course.event_type);
+    assert_eq!(
+        result[12].event.event_type,
+        student_joined_course.event_type
+    );
     assert_eq!(result[10].event.data, student_registered.data);
     assert_eq!(result[11].event.data, course_registered.data);
     assert_eq!(result[12].event.data, student_joined_course.data);
@@ -632,136 +706,171 @@ pub fn run_event_store_test<T: DCBEventStoreAPI>(event_store: &T) {
     assert_eq!(result[12].event.tags, student_joined_course.tags);
     assert_eq!(Some(13), head);
 
-    let (result, head) = event_store.read_with_head(
-        Some(DCBQuery {
-            items: vec![DCBQueryItem {
-                types: vec![],
-                tags: vec![student_id.clone()],
-            }],
-        }),
-        None,
-        None,
-    ).unwrap();
+    let (result, head) = event_store
+        .read_with_head(
+            Some(DCBQuery {
+                items: vec![DCBQueryItem {
+                    types: vec![],
+                    tags: vec![student_id.clone()],
+                }],
+            }),
+            None,
+            None,
+        )
+        .unwrap();
     assert_eq!(2, result.len());
     assert_eq!(Some(13), head);
 
-    let (result, head) = event_store.read_with_head(
-        Some(DCBQuery {
-            items: vec![DCBQueryItem {
-                types: vec![],
-                tags: vec![course_id.clone()],
-            }],
-        }),
-        None,
-        None,
-    ).unwrap();
+    let (result, head) = event_store
+        .read_with_head(
+            Some(DCBQuery {
+                items: vec![DCBQueryItem {
+                    types: vec![],
+                    tags: vec![course_id.clone()],
+                }],
+            }),
+            None,
+            None,
+        )
+        .unwrap();
     assert_eq!(2, result.len());
     assert_eq!(Some(13), head);
 
-    let (result, head) = event_store.read_with_head(
-        Some(DCBQuery {
-            items: vec![DCBQueryItem {
-                types: vec![],
-                tags: vec![student_joined_course.tags[0].clone(), student_joined_course.tags[1].clone()],
-            }],
-        }),
-        None,
-        None,
-    ).unwrap();
+    let (result, head) = event_store
+        .read_with_head(
+            Some(DCBQuery {
+                items: vec![DCBQueryItem {
+                    types: vec![],
+                    tags: vec![
+                        student_joined_course.tags[0].clone(),
+                        student_joined_course.tags[1].clone(),
+                    ],
+                }],
+            }),
+            None,
+            None,
+        )
+        .unwrap();
     assert_eq!(1, result.len());
     assert_eq!(Some(13), head);
 
-    let (result, head) = event_store.read_with_head(
-        Some(DCBQuery {
-            items: vec![DCBQueryItem {
-                types: vec![],
-                tags: vec![student_id.clone()],
-            }],
-        }),
-        Some(2),
-        None,
-    ).unwrap();
+    let (result, head) = event_store
+        .read_with_head(
+            Some(DCBQuery {
+                items: vec![DCBQueryItem {
+                    types: vec![],
+                    tags: vec![student_id.clone()],
+                }],
+            }),
+            Some(2),
+            None,
+        )
+        .unwrap();
     assert_eq!(2, result.len());
     assert_eq!(Some(13), head);
 
-    let (result, head) = event_store.read_with_head(
-        Some(DCBQuery {
-            items: vec![DCBQueryItem {
-                types: vec![],
-                tags: vec![course_id.clone()],
-            }],
-        }),
-        Some(2),
-        None,
-    ).unwrap();
+    let (result, head) = event_store
+        .read_with_head(
+            Some(DCBQuery {
+                items: vec![DCBQueryItem {
+                    types: vec![],
+                    tags: vec![course_id.clone()],
+                }],
+            }),
+            Some(2),
+            None,
+        )
+        .unwrap();
     assert_eq!(2, result.len());
     assert_eq!(Some(13), head);
 
-    let (result, head) = event_store.read_with_head(
-        Some(DCBQuery {
-            items: vec![DCBQueryItem {
-                types: vec![],
-                tags: vec![student_joined_course.tags[0].clone(), student_joined_course.tags[1].clone()],
-            }],
-        }),
-        Some(2),
-        None,
-    ).unwrap();
+    let (result, head) = event_store
+        .read_with_head(
+            Some(DCBQuery {
+                items: vec![DCBQueryItem {
+                    types: vec![],
+                    tags: vec![
+                        student_joined_course.tags[0].clone(),
+                        student_joined_course.tags[1].clone(),
+                    ],
+                }],
+            }),
+            Some(2),
+            None,
+        )
+        .unwrap();
     assert_eq!(1, result.len());
     assert_eq!(Some(13), head);
 
-    let (result, head) = event_store.read_with_head(
-        Some(DCBQuery {
-            items: vec![DCBQueryItem {
-                types: vec![],
-                tags: vec![student_id.clone()],
-            }],
-        }),
-        Some(2),
-        Some(1),
-    ).unwrap();
+    let (result, head) = event_store
+        .read_with_head(
+            Some(DCBQuery {
+                items: vec![DCBQueryItem {
+                    types: vec![],
+                    tags: vec![student_id.clone()],
+                }],
+            }),
+            Some(2),
+            Some(1),
+        )
+        .unwrap();
     assert_eq!(1, result.len());
     assert_eq!(Some(11), head);
 
-    let (result, head) = event_store.read_with_head(
-        Some(DCBQuery {
-            items: vec![DCBQueryItem {
-                types: vec![],
-                tags: vec![course_id.clone()],
-            }],
-        }),
-        Some(2),
-        Some(1),
-    ).unwrap();
+    let (result, head) = event_store
+        .read_with_head(
+            Some(DCBQuery {
+                items: vec![DCBQueryItem {
+                    types: vec![],
+                    tags: vec![course_id.clone()],
+                }],
+            }),
+            Some(2),
+            Some(1),
+        )
+        .unwrap();
     assert_eq!(1, result.len());
     assert_eq!(Some(12), head);
 
-    let (result, head) = event_store.read_with_head(
-        Some(DCBQuery {
-            items: vec![DCBQueryItem {
-                types: vec![],
-                tags: vec![student_joined_course.tags[0].clone(), student_joined_course.tags[1].clone()],
-            }],
-        }),
-        Some(2),
-        Some(1),
-    ).unwrap();
+    let (result, head) = event_store
+        .read_with_head(
+            Some(DCBQuery {
+                items: vec![DCBQueryItem {
+                    types: vec![],
+                    tags: vec![
+                        student_joined_course.tags[0].clone(),
+                        student_joined_course.tags[1].clone(),
+                    ],
+                }],
+            }),
+            Some(2),
+            Some(1),
+        )
+        .unwrap();
     assert_eq!(1, result.len());
     assert_eq!(Some(13), head);
 
     let consistency_boundary = DCBQuery {
         items: vec![
             DCBQueryItem {
-                types: vec!["StudentRegistered".to_string(), "StudentJoinedCourse".to_string()],
+                types: vec![
+                    "StudentRegistered".to_string(),
+                    "StudentJoinedCourse".to_string(),
+                ],
                 tags: vec![student_id.clone()],
             },
             DCBQueryItem {
-                types: vec!["CourseRegistered".to_string(), "StudentJoinedCourse".to_string()],
+                types: vec![
+                    "CourseRegistered".to_string(),
+                    "StudentJoinedCourse".to_string(),
+                ],
                 tags: vec![course_id.clone()],
             },
         ],
     };
-    let (result, head) = event_store.read_with_head(Some(consistency_boundary), None, None).unwrap();
+    let (result, head) = event_store
+        .read_with_head(Some(consistency_boundary), None, None)
+        .unwrap();
     assert_eq!(3, result.len());
     assert_eq!(Some(13), head);
 

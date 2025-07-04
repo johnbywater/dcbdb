@@ -1,10 +1,10 @@
 // Paged Index File module
-use std::path::{Path, PathBuf};
-use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Write, Seek, SeekFrom};
+use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::fs::{File, OpenOptions};
+use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 use thiserror::Error;
-use serde::{Serialize, Deserialize};
 
 // Constants
 pub const PAGE_SIZE: usize = 4096;
@@ -12,7 +12,7 @@ pub const PAGE_SIZE: usize = 4096;
 // Page ID type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
 pub struct PageID(pub u32);
-pub const PAGE_ID_SIZE: usize = 4; 
+pub const PAGE_ID_SIZE: usize = 4;
 
 impl fmt::Display for PageID {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -39,10 +39,10 @@ pub struct PagedFile {
 
 impl PagedFile {
     /// Creates a new PagedFile with the given path and page size
-    /// 
+    ///
     /// If the file does not exist, it will be created and 'new' will be set to false.
     /// If the file exists, it will be opened and 'new' will be set to true.
-    /// 
+    ///
     /// The page_size parameter defaults to PAGE_SIZE if not specified.
     pub fn new<P: AsRef<Path>>(path: P, page_size: usize) -> io::Result<Self> {
         let path_buf = path.as_ref().to_path_buf();
@@ -76,7 +76,10 @@ impl PagedFile {
     pub fn write_page(&mut self, page_id: PageID, page_data: &[u8]) -> Result<(), PagedFileError> {
         // Check if the data is too large
         if page_data.len() > self.page_size {
-            return Err(PagedFileError::DataTooLarge(page_data.len(), self.page_size));
+            return Err(PagedFileError::DataTooLarge(
+                page_data.len(),
+                self.page_size,
+            ));
         }
 
         // Calculate the offset in the file
@@ -158,8 +161,8 @@ mod tests {
         let test_path = temp_dir.path().join("position-index.dat");
 
         // Create a new PagedFile using the constructor - first time, the file doesn't exist
-        let paged_file = PagedFile::new(test_path.clone(), PAGE_SIZE)
-            .expect("Failed to create PagedFile");
+        let paged_file =
+            PagedFile::new(test_path.clone(), PAGE_SIZE).expect("Failed to create PagedFile");
 
         // Verify the path was correctly stored
         assert_eq!(paged_file.path, test_path);
@@ -191,23 +194,31 @@ mod tests {
         let test_path = temp_dir.path().join("position-index.dat");
 
         // Create a PagedFile instance
-        let mut paged_file = PagedFile::new(test_path.clone(), PAGE_SIZE)
-            .expect("Failed to create PagedFile");
+        let mut paged_file =
+            PagedFile::new(test_path.clone(), PAGE_SIZE).expect("Failed to create PagedFile");
 
         // Create test data for different pages
         let page0_data = b"This is data for page 0".to_vec();
         let page1_data = b"This is different data for page 1".to_vec();
 
         // Write data to different pages
-        paged_file.write_page(PageID(0), &page0_data).expect("Failed to write to page 0");
-        paged_file.write_page(PageID(1), &page1_data).expect("Failed to write to page 1");
+        paged_file
+            .write_page(PageID(0), &page0_data)
+            .expect("Failed to write to page 0");
+        paged_file
+            .write_page(PageID(1), &page1_data)
+            .expect("Failed to write to page 1");
 
         // Read the data back and verify it matches
         let mut buffer0 = vec![0u8; PAGE_SIZE];
         let mut buffer1 = vec![0u8; PAGE_SIZE];
 
-        paged_file.read_page(PageID(0), &mut buffer0).expect("Failed to read page 0");
-        paged_file.read_page(PageID(1), &mut buffer1).expect("Failed to read page 1");
+        paged_file
+            .read_page(PageID(0), &mut buffer0)
+            .expect("Failed to read page 0");
+        paged_file
+            .read_page(PageID(1), &mut buffer1)
+            .expect("Failed to read page 1");
 
         // Verify the data matches (note: we only compare the actual data part, not the padding)
         assert_eq!(&buffer0[..page0_data.len()], &page0_data[..]);
@@ -223,8 +234,12 @@ mod tests {
             .expect("Failed to create second PagedFile");
 
         // Read the data again to verify persistence
-        second_paged_file.read_page(PageID(0), &mut buffer0).expect("Failed to read page 0 with second instance");
-        second_paged_file.read_page(PageID(1), &mut buffer1).expect("Failed to read page 1 with second instance");
+        second_paged_file
+            .read_page(PageID(0), &mut buffer0)
+            .expect("Failed to read page 0 with second instance");
+        second_paged_file
+            .read_page(PageID(1), &mut buffer1)
+            .expect("Failed to read page 1 with second instance");
 
         // Verify the data still matches
         assert_eq!(&buffer0[..page0_data.len()], &page0_data[..]);
@@ -232,14 +247,22 @@ mod tests {
 
         // Write more data with the second instance
         let page2_data = b"This is data written by the second instance to page 2".to_vec();
-        second_paged_file.write_page(PageID(2), &page2_data).expect("Failed to write to page 2 with second instance");
+        second_paged_file
+            .write_page(PageID(2), &page2_data)
+            .expect("Failed to write to page 2 with second instance");
 
         // Read back all pages and verify
-        second_paged_file.read_page(PageID(0), &mut buffer0).expect("Failed to read page 0 after writing page 2");
-        second_paged_file.read_page(PageID(1), &mut buffer1).expect("Failed to read page 1 after writing page 2");
+        second_paged_file
+            .read_page(PageID(0), &mut buffer0)
+            .expect("Failed to read page 0 after writing page 2");
+        second_paged_file
+            .read_page(PageID(1), &mut buffer1)
+            .expect("Failed to read page 1 after writing page 2");
         let mut buffer2 = vec![0u8; PAGE_SIZE];
-        
-        second_paged_file.read_page(PageID(2), &mut buffer2).expect("Failed to read page 2");
+
+        second_paged_file
+            .read_page(PageID(2), &mut buffer2)
+            .expect("Failed to read page 2");
 
         // Verify all data is correctly stored
         assert_eq!(&buffer0[..page0_data.len()], &page0_data[..]);
@@ -254,18 +277,20 @@ mod tests {
         let test_path = temp_dir.path().join("position-index.dat");
 
         // Create a PagedFile instance
-        let mut paged_file = PagedFile::new(test_path.clone(), PAGE_SIZE)
-            .expect("Failed to create PagedFile");
+        let mut paged_file =
+            PagedFile::new(test_path.clone(), PAGE_SIZE).expect("Failed to create PagedFile");
 
         // Create test data
         let test_data = b"This is data that will be flushed and fsynced".to_vec();
 
         // Write data to a page
-        paged_file.write_page(PageID(0), &test_data)
+        paged_file
+            .write_page(PageID(0), &test_data)
             .expect("Failed to write to page");
 
         // Explicitly call flush_and_fsync
-        paged_file.flush_and_fsync()
+        paged_file
+            .flush_and_fsync()
             .expect("Failed to flush and fsync");
 
         // Create a new PagedFile instance with the same path to verify data persistence
@@ -274,7 +299,9 @@ mod tests {
 
         // Read the data back
         let mut buffer0 = vec![0u8; PAGE_SIZE];
-        second_paged_file.read_page(PageID(0), &mut buffer0).expect("Failed to read page");
+        second_paged_file
+            .read_page(PageID(0), &mut buffer0)
+            .expect("Failed to read page");
 
         // Verify the data matches
         assert_eq!(&buffer0[..test_data.len()], &test_data[..]);
@@ -288,8 +315,8 @@ mod tests {
 
         // Create a PagedFile instance with a small page size for testing
         let page_size = 100; // Small page size for testing
-        let mut paged_file = PagedFile::new(test_path.clone(), page_size)
-            .expect("Failed to create PagedFile");
+        let mut paged_file =
+            PagedFile::new(test_path.clone(), page_size).expect("Failed to create PagedFile");
 
         // Create test data that is larger than the page size
         let large_data = vec![1u8; page_size + 50]; // 50 bytes more than page_size
@@ -303,7 +330,7 @@ mod tests {
                 // Check that the error contains the correct size information
                 assert_eq!(actual_size, large_data.len());
                 assert_eq!(max_size, page_size);
-            },
+            }
             _ => panic!("Expected DataTooLarge error, but got: {:?}", result),
         }
     }

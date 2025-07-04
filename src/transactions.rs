@@ -1,16 +1,16 @@
 use std::collections::HashMap;
-use std::path::{Path};
 use std::io;
+use std::path::Path;
 
 use lru::LruCache;
 use thiserror::Error;
 
 use crate::api::{DCBEvent, DCBSequencedEvent};
 use crate::checkpoint::CheckpointFile;
-use crate::positions::{PositionIndex, PositionIndexRecord, hash_type};
-use crate::segments::{SegmentManager, SegmentError};
+use crate::positions::{hash_type, PositionIndex, PositionIndexRecord};
+use crate::segments::{SegmentError, SegmentManager};
 use crate::tags::TagIndex;
-use crate::wal::{Position, TransactionWAL, pack_dcb_event_with_crc, WalError};
+use crate::wal::{pack_dcb_event_with_crc, Position, TransactionWAL, WalError};
 
 /// Error types for transaction operations
 #[derive(Debug, Error)]
@@ -47,14 +47,22 @@ impl From<TransactionError> for std::io::Error {
             TransactionError::Io(io_error) => io_error,
             TransactionError::Segment(segment_error) => segment_error.into(),
             TransactionError::Wal(wal_error) => wal_error.into(),
-            TransactionError::TransactionNotFound(txn_id) => 
-                std::io::Error::new(std::io::ErrorKind::NotFound, format!("Transaction not found: {}", txn_id)),
-            TransactionError::PositionNotFound(position) => 
-                std::io::Error::new(std::io::ErrorKind::NotFound, format!("Position not found: {}", position)),
-            TransactionError::InvalidPosition { expected, found } => 
-                std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Invalid position: expected {}, found {}", expected, found)),
-            TransactionError::Serialization(msg) => 
-                std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Serialization error: {}", msg)),
+            TransactionError::TransactionNotFound(txn_id) => std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Transaction not found: {}", txn_id),
+            ),
+            TransactionError::PositionNotFound(position) => std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Position not found: {}", position),
+            ),
+            TransactionError::InvalidPosition { expected, found } => std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Invalid position: expected {}, found {}", expected, found),
+            ),
+            TransactionError::Serialization(msg) => std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Serialization error: {}", msg),
+            ),
         }
     }
 }
@@ -115,7 +123,9 @@ impl TransactionManager {
             Err(e) => return Err(TransactionError::Segment(e)),
         };
 
-        if let Err(e) = segment_manager.recover_position(checkpoint.segment_number, checkpoint.segment_offset) {
+        if let Err(e) =
+            segment_manager.recover_position(checkpoint.segment_number, checkpoint.segment_offset)
+        {
             return Err(TransactionError::Segment(e));
         }
 
@@ -152,7 +162,10 @@ impl TransactionManager {
 
             last_issued_txn_id: 0,
             last_issued_position: 0,
-            last_committed: LastCommittedTxnPosition { txn_id: 0, position: 0 },
+            last_committed: LastCommittedTxnPosition {
+                txn_id: 0,
+                position: 0,
+            },
 
             cache: LruCache::unbounded(),
             cache_capacity,
@@ -228,11 +241,7 @@ impl TransactionManager {
     }
 
     /// Append an event to a transaction
-    pub fn append_event(
-        &mut self,
-        txn_id: u64,
-        event: DCBEvent,
-    ) -> Result<Position> {
+    pub fn append_event(&mut self, txn_id: u64, event: DCBEvent) -> Result<Position> {
         let position = self.issue_position();
         let payload = pack_dcb_event_with_crc(position, event.clone());
 
@@ -255,9 +264,10 @@ impl TransactionManager {
             return Err(TransactionError::Wal(e));
         }
 
-        let committed = self.uncommitted.remove(&txn_id).ok_or_else(|| {
-            TransactionError::TransactionNotFound(txn_id)
-        })?;
+        let committed = self
+            .uncommitted
+            .remove(&txn_id)
+            .ok_or_else(|| TransactionError::TransactionNotFound(txn_id))?;
 
         self.push_to_segment_and_indexes(&committed)?;
 
@@ -280,18 +290,22 @@ impl TransactionManager {
         event: &DCBEvent,
     ) -> Result<()> {
         // Add to position index
-        self.position_idx.insert(
-            position,
-            PositionIndexRecord {
-                segment: segment_number,
-                offset,
-                type_hash: hash_type(&event.event_type),
-            },
-        ).map_err(TransactionError::Io)?;
+        self.position_idx
+            .insert(
+                position,
+                PositionIndexRecord {
+                    segment: segment_number,
+                    offset,
+                    type_hash: hash_type(&event.event_type),
+                },
+            )
+            .map_err(TransactionError::Io)?;
 
         // Add to tags index
         for tag in &event.tags {
-            self.tags_idx.insert(tag, position).map_err(TransactionError::Io)?;
+            self.tags_idx
+                .insert(tag, position)
+                .map_err(TransactionError::Io)?;
         }
 
         Ok(())
@@ -302,7 +316,10 @@ impl TransactionManager {
         &mut self,
         committed: &[(Position, DCBEvent, Vec<u8>)],
     ) -> Result<()> {
-        let payloads: Vec<Vec<u8>> = committed.iter().map(|(_, _, payload)| payload.clone()).collect();
+        let payloads: Vec<Vec<u8>> = committed
+            .iter()
+            .map(|(_, _, payload)| payload.clone())
+            .collect();
 
         let segment_numbers_and_offsets = match self.segment_manager.add_payloads(&payloads) {
             Ok(nos) => nos,
@@ -316,10 +333,13 @@ impl TransactionManager {
             self.add_event_to_indexes(*position, segment_number, segment_offset, event)?;
 
             // Cache the event
-            self.cache.put(*position, DCBSequencedEvent {
-                event: event.clone(),
-                position: *position,
-            });
+            self.cache.put(
+                *position,
+                DCBSequencedEvent {
+                    event: event.clone(),
+                    position: *position,
+                },
+            );
         }
 
         Ok(())
@@ -339,7 +359,10 @@ impl TransactionManager {
         }
 
         // Flush the position index.
-        self.position_idx.index_pages.flush().map_err(TransactionError::Io)?;
+        self.position_idx
+            .index_pages
+            .flush()
+            .map_err(TransactionError::Io)?;
 
         // Flush the tag index.
         let mut tag_index_pages = self.tags_idx.index_pages.borrow_mut();
@@ -353,10 +376,15 @@ impl TransactionManager {
         self.checkpoint.segment_offset = self.segment_manager.current_segment.write_offset();
         self.checkpoint.wal_commit_offset = self.wal.commit_offset();
 
-        self.checkpoint.write_checkpoint().map_err(TransactionError::Io)?;
+        self.checkpoint
+            .write_checkpoint()
+            .map_err(TransactionError::Io)?;
 
         // We can't call wal.cut_before_offset directly, so we use truncate_wal_before_checkpoint
-        if let Err(e) = self.wal.cut_before_offset(self.checkpoint.wal_commit_offset) {
+        if let Err(e) = self
+            .wal
+            .cut_before_offset(self.checkpoint.wal_commit_offset)
+        {
             return Err(TransactionError::Wal(e));
         }
 
@@ -380,35 +408,38 @@ impl TransactionManager {
                 let (position, event, offset) = record_result.map_err(TransactionError::Segment)?;
 
                 // Add to position index
-                self.position_idx.insert(
-                    position,
-                    PositionIndexRecord {
-                        segment: segment_number,
-                        offset,
-                        type_hash: hash_type(&event.event_type),
-                    },
-                ).map_err(TransactionError::Io)?;
+                self.position_idx
+                    .insert(
+                        position,
+                        PositionIndexRecord {
+                            segment: segment_number,
+                            offset,
+                            type_hash: hash_type(&event.event_type),
+                        },
+                    )
+                    .map_err(TransactionError::Io)?;
 
                 // Add to tags index
                 for tag in &event.tags {
-                    self.tags_idx.insert(tag, position).map_err(TransactionError::Io)?;
+                    self.tags_idx
+                        .insert(tag, position)
+                        .map_err(TransactionError::Io)?;
                 }
             }
         }
 
-        self.position_idx.index_pages.flush().map_err(TransactionError::Io)?;
+        self.position_idx
+            .index_pages
+            .flush()
+            .map_err(TransactionError::Io)?;
         let mut tags_index_pages = self.tags_idx.index_pages.borrow_mut();
         tags_index_pages.flush().map_err(TransactionError::Io)?;
 
         Ok(())
     }
 
-
     /// Read an event at a specific position (backward compatibility wrapper)
-    pub fn read_event_at_position(
-        &mut self,
-        position: Position,
-    ) -> Result<DCBSequencedEvent> {
+    pub fn read_event_at_position(&mut self, position: Position) -> Result<DCBSequencedEvent> {
         self.read_event_at_position_with_record(position, None)
     }
 
@@ -426,23 +457,23 @@ impl TransactionManager {
         // Get the segment number and offset from the index if not provided
         let position_index_record = match position_index_record {
             Some(record) => record,
-            None => self.position_idx.lookup(position).map_err(TransactionError::Io)?
-                .ok_or_else(|| {
-                    TransactionError::PositionNotFound(position)
-                })?,
+            None => self
+                .position_idx
+                .lookup(position)
+                .map_err(TransactionError::Io)?
+                .ok_or_else(|| TransactionError::PositionNotFound(position))?,
         };
 
         // Get the segment from the segment manager
-        let mut segment = self.segment_manager.get_segment(position_index_record.segment)
-            .map_err(|e| {
-                TransactionError::Segment(e)
-            })?;
+        let mut segment = self
+            .segment_manager
+            .get_segment(position_index_record.segment)
+            .map_err(|e| TransactionError::Segment(e))?;
 
         // Get the position and event blob from the segment
-        let (recorded_position, event, _) = segment.get_event_record(position_index_record.offset as u64)
-            .map_err(|e| {
-                TransactionError::Segment(e)
-            })?;
+        let (recorded_position, event, _) = segment
+            .get_event_record(position_index_record.offset as u64)
+            .map_err(|e| TransactionError::Segment(e))?;
 
         // Check the recorded event position is the one we asked for
         if recorded_position != position {
@@ -453,10 +484,7 @@ impl TransactionManager {
         }
 
         // Construct a sequenced event object
-        let sequenced_event = DCBSequencedEvent {
-            event,
-            position,
-        };
+        let sequenced_event = DCBSequencedEvent { event, position };
 
         // Cache the event
         self.cache.put(position, sequenced_event.clone());
@@ -466,14 +494,13 @@ impl TransactionManager {
 
     /// Deserialize a DCB event from a byte array
     fn deserialize_dcb_event(&self, data: &[u8]) -> Result<(Position, DCBEvent)> {
-        use rmp_serde::decode;
         use crate::wal::DCBEventWithPosition;
+        use rmp_serde::decode;
 
-        let event_with_pos: DCBEventWithPosition = decode::from_slice(data)
-            .map_err(|e| {
-                let err_msg = format!("Failed to deserialize event: {}", e);
-                TransactionError::Serialization(err_msg)
-            })?;
+        let event_with_pos: DCBEventWithPosition = decode::from_slice(data).map_err(|e| {
+            let err_msg = format!("Failed to deserialize event: {}", e);
+            TransactionError::Serialization(err_msg)
+        })?;
 
         let position = event_with_pos.position;
         let event = DCBEvent {
@@ -491,20 +518,33 @@ impl TransactionManager {
     }
 
     /// Lookup positions for a tag after a specific position and return an iterator
-    pub fn lookup_positions_for_tag_after_iter<'a>(&'a self, tag: &str, after: Position) -> Result<impl Iterator<Item = Result<Position>> + 'a> {
-        self.tags_idx.lookup_with_after_iter(tag, after)
+    pub fn lookup_positions_for_tag_after_iter<'a>(
+        &'a self,
+        tag: &str,
+        after: Position,
+    ) -> Result<impl Iterator<Item = Result<Position>> + 'a> {
+        self.tags_idx
+            .lookup_with_after_iter(tag, after)
             .map_err(TransactionError::Io)
             .map(|iter| iter.map(|res| res.map_err(TransactionError::Io)))
     }
 
     /// Scan positions and get their type hashes
-    pub fn scan_positions(&mut self, after: Option<Position>) -> Result<Vec<(Position, PositionIndexRecord)>> {
+    pub fn scan_positions(
+        &mut self,
+        after: Option<Position>,
+    ) -> Result<Vec<(Position, PositionIndexRecord)>> {
         self.position_idx.scan(after).map_err(TransactionError::Io)
     }
 
     /// Lookup a position index record for a specific position
-    pub fn lookup_position_record(&mut self, position: Position) -> Result<Option<PositionIndexRecord>> {
-        self.position_idx.lookup(position).map_err(TransactionError::Io)
+    pub fn lookup_position_record(
+        &mut self,
+        position: Position,
+    ) -> Result<Option<PositionIndexRecord>> {
+        self.position_idx
+            .lookup(position)
+            .map_err(TransactionError::Io)
     }
 
     /// Get the last issued position
@@ -632,8 +672,6 @@ mod tests {
         assert_eq!(read_event.event.data, event.data);
         assert_eq!(read_event.event.tags, event.tags);
 
-
-
         Ok(())
     }
 
@@ -729,19 +767,46 @@ mod tests {
         let tag1_positions = tm2.tags_idx.lookup("tag1")?;
         let tag2_positions = tm2.tags_idx.lookup("tag2")?;
 
-        assert!(tag1_positions.contains(&position), "TagIndex should contain position {} for tag1", position);
-        assert!(tag2_positions.contains(&position), "TagIndex should contain position {} for tag2", position);
+        assert!(
+            tag1_positions.contains(&position),
+            "TagIndex should contain position {} for tag1",
+            position
+        );
+        assert!(
+            tag2_positions.contains(&position),
+            "TagIndex should contain position {} for tag2",
+            position
+        );
 
         // Check that we can lookup this position in PositionIndex and get the correct record
-        let position_record = tm2.position_idx.lookup(position)?.expect("Position should exist in PositionIndex");
-        assert_eq!(position_record.type_hash, hash_type(&event.event_type), "Type hash in PositionIndex should match event type");
+        let position_record = tm2
+            .position_idx
+            .lookup(position)?
+            .expect("Position should exist in PositionIndex");
+        assert_eq!(
+            position_record.type_hash,
+            hash_type(&event.event_type),
+            "Type hash in PositionIndex should match event type"
+        );
 
         // Check that read_event_at_position returns an event equal to the one that was appended
         let read_event = tm2.read_event_at_position(position)?;
-        assert_eq!(read_event.position, position, "Read event position should match appended position");
-        assert_eq!(read_event.event.event_type, event.event_type, "Read event type should match appended event type");
-        assert_eq!(read_event.event.data, event.data, "Read event data should match appended event data");
-        assert_eq!(read_event.event.tags, event.tags, "Read event tags should match appended event tags");
+        assert_eq!(
+            read_event.position, position,
+            "Read event position should match appended position"
+        );
+        assert_eq!(
+            read_event.event.event_type, event.event_type,
+            "Read event type should match appended event type"
+        );
+        assert_eq!(
+            read_event.event.data, event.data,
+            "Read event data should match appended event data"
+        );
+        assert_eq!(
+            read_event.event.tags, event.tags,
+            "Read event tags should match appended event tags"
+        );
 
         Ok(())
     }
@@ -814,7 +879,10 @@ mod tests {
         }
 
         // Delete the index files
-        fs::remove_file(dir.path().join(TransactionManager::POSITION_INDEX_FILE_NAME))?;
+        fs::remove_file(
+            dir.path()
+                .join(TransactionManager::POSITION_INDEX_FILE_NAME),
+        )?;
         fs::remove_file(dir.path().join(TransactionManager::TAG_INDEX_FILE_NAME))?;
 
         // Create a new transaction manager, which should rebuild the indexes

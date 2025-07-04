@@ -1,9 +1,9 @@
-use std::path::Path;
-use std::collections::HashMap;
-use crate::pagedfile::{PagedFile, PageID, PagedFileError};
-use lru::LruCache;
+use crate::pagedfile::{PageID, PagedFile, PagedFileError};
 use crate::wal::calc_crc;
+use lru::LruCache;
 use std::any::Any;
+use std::collections::HashMap;
+use std::path::Path;
 
 /// Constant for the header node type
 pub const HEADER_NODE_TYPE: u8 = 1;
@@ -188,7 +188,11 @@ impl Deserializer {
     ///
     /// # Returns
     /// * `Result<IndexPage, decode::Error>` - The deserialized page or an error
-    pub fn deserialize_page(&self, data: &[u8], page_id: PageID) -> Result<IndexPage, std::io::Error> {
+    pub fn deserialize_page(
+        &self,
+        data: &[u8],
+        page_id: PageID,
+    ) -> Result<IndexPage, std::io::Error> {
         // Extract the node type byte
         if data.is_empty() {
             return Err(std::io::Error::new(
@@ -208,7 +212,8 @@ impl Deserializer {
         let crc_bytes = &data[1..5];
         let len_bytes = &data[5..9];
         let crc = u32::from_le_bytes([crc_bytes[0], crc_bytes[1], crc_bytes[2], crc_bytes[3]]);
-        let blob_len = u32::from_le_bytes([len_bytes[0], len_bytes[1], len_bytes[2], len_bytes[3]]) as usize;
+        let blob_len =
+            u32::from_le_bytes([len_bytes[0], len_bytes[1], len_bytes[2], len_bytes[3]]) as usize;
 
         // Extract the blob
         if data.len() < 9 + blob_len {
@@ -232,7 +237,10 @@ impl Deserializer {
         let decode_fn = self.decoders.get(&node_type_byte).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("No decoder registered for node type byte: {}", node_type_byte),
+                format!(
+                    "No decoder registered for node type byte: {}",
+                    node_type_byte
+                ),
             )
         })?;
 
@@ -240,10 +248,7 @@ impl Deserializer {
         let node = decode_fn(blob)?;
 
         // Create and return the IndexPage
-        Ok(IndexPage {
-            page_id,
-            node,
-        })
+        Ok(IndexPage { page_id, node })
     }
 }
 
@@ -270,7 +275,10 @@ impl IndexPages {
     /// # Returns
     /// * `&HeaderNode` - A reference to the HeaderNode
     pub fn header_node(&self) -> &HeaderNode {
-        self.header_page.node.as_any().downcast_ref::<HeaderNode>()
+        self.header_page
+            .node
+            .as_any()
+            .downcast_ref::<HeaderNode>()
             .expect("Failed to downcast node to HeaderNode")
     }
 
@@ -279,7 +287,10 @@ impl IndexPages {
     /// # Returns
     /// * `&mut HeaderNode` - A mutable reference to the HeaderNode
     fn header_node_mut(&mut self) -> &mut HeaderNode {
-        self.header_page.node.as_any_mut().downcast_mut::<HeaderNode>()
+        self.header_page
+            .node
+            .as_any_mut()
+            .downcast_mut::<HeaderNode>()
             .expect("Failed to downcast node to HeaderNode")
     }
 
@@ -289,7 +300,11 @@ impl IndexPages {
     }
 
     /// Creates a new IndexPages with the given path, page size, and cache capacity
-    pub fn new_with_cache_capacity<P: AsRef<Path>>(path: P, page_size: usize, cache_capacity: Option<usize>) -> std::io::Result<Self> {
+    pub fn new_with_cache_capacity<P: AsRef<Path>>(
+        path: P,
+        page_size: usize,
+        cache_capacity: Option<usize>,
+    ) -> std::io::Result<Self> {
         let cache_capacity = cache_capacity.unwrap_or(1024);
         let mut paged_file = PagedFile::new(path, page_size)?;
         let mut page_buffer = vec![0; page_size];
@@ -309,21 +324,27 @@ impl IndexPages {
         // Check if the file exists
         let header_page = if paged_file.new {
             // File exists, read the header page from disk
-            paged_file.read_page(header_page_id, &mut page_buffer)
-                .map_err(|e| std::io::Error::new(
-                    match e {
-                        PagedFileError::Io(ref io_err) => io_err.kind(),
-                        _ => std::io::ErrorKind::Other,
-                    },
-                    format!("Failed to read header page: {}", e)
-                ))?;
+            paged_file
+                .read_page(header_page_id, &mut page_buffer)
+                .map_err(|e| {
+                    std::io::Error::new(
+                        match e {
+                            PagedFileError::Io(ref io_err) => io_err.kind(),
+                            _ => std::io::ErrorKind::Other,
+                        },
+                        format!("Failed to read header page: {}", e),
+                    )
+                })?;
 
             // Deserialize the header page
-            deserializer.deserialize_page(&page_buffer, header_page_id)
-                .map_err(|e| std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("Failed to deserialize header page: {}", e)
-                ))?
+            deserializer
+                .deserialize_page(&page_buffer, header_page_id)
+                .map_err(|e| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("Failed to deserialize header page: {}", e),
+                    )
+                })?
         } else {
             // File doesn't exist, create a new header node with default values
             let header_node = HeaderNode {
@@ -348,7 +369,7 @@ impl IndexPages {
             cache: LruCache::unbounded(),
             deserializer,
             cache_capacity,
-            page_buffer
+            page_buffer,
         };
 
         // If the file doesn't exist, mark the header page as dirty and flush it to disk
@@ -452,21 +473,28 @@ impl IndexPages {
         // Check if the page is in the cache
         if !self.cache.contains(&page_id) {
             // Page is not in the cache, read it from disk
-            self.paged_file.read_page(page_id, &mut self.page_buffer)
-                .map_err(|e| std::io::Error::new(
-                    match e {
-                        PagedFileError::Io(ref io_err) => io_err.kind(),
-                        _ => std::io::ErrorKind::Other,
-                    },
-                    format!("Failed to read page: {}", e)
-                ))?;
+            self.paged_file
+                .read_page(page_id, &mut self.page_buffer)
+                .map_err(|e| {
+                    std::io::Error::new(
+                        match e {
+                            PagedFileError::Io(ref io_err) => io_err.kind(),
+                            _ => std::io::ErrorKind::Other,
+                        },
+                        format!("Failed to read page: {}", e),
+                    )
+                })?;
 
             // Deserialize the page
-            let page = self.deserializer.deserialize_page(&self.page_buffer, page_id)
-                .map_err(|e| std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("Failed to deserialize page: {}", e)
-                ))?;
+            let page = self
+                .deserializer
+                .deserialize_page(&self.page_buffer, page_id)
+                .map_err(|e| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("Failed to deserialize page: {}", e),
+                    )
+                })?;
 
             // Add the page to the cache
             self.cache.put(page_id, page);
@@ -516,10 +544,12 @@ impl IndexPages {
                 // Otherwise, get the page from the cache
                 match self.cache.get(page_id) {
                     Some(page) => page,
-                    None => return Err(std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        format!("Page not found in cache: {:?}", page_id)
-                    )),
+                    None => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            format!("Page not found in cache: {:?}", page_id),
+                        ))
+                    }
                 }
             };
 
@@ -527,19 +557,23 @@ impl IndexPages {
             let serialized_data = page.node.serialize_page();
 
             // Write the page to the paged file
-            self.paged_file.write_page(*page_id, &serialized_data)
-                .map_err(|e| std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("Failed to write page: {}", e)
-                ))?;
+            self.paged_file
+                .write_page(*page_id, &serialized_data)
+                .map_err(|e| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("Failed to write page: {}", e),
+                    )
+                })?;
         }
 
         // Flush and fsync the paged file
-        self.paged_file.flush_and_fsync()
-            .map_err(|e| std::io::Error::new(
+        self.paged_file.flush_and_fsync().map_err(|e| {
+            std::io::Error::new(
                 std::io::ErrorKind::Other,
-                format!("Failed to flush and fsync: {}", e)
-            ))?;
+                format!("Failed to flush and fsync: {}", e),
+            )
+        })?;
 
         // Clear the dirty HashMap
         self.clear_dirty();
@@ -554,8 +588,8 @@ impl IndexPages {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pagedfile::PAGE_SIZE;
     use tempfile::TempDir;
-    use crate::pagedfile::{PAGE_SIZE};
 
     #[test]
     fn test_index_pages_creation() {
@@ -566,34 +600,52 @@ mod tests {
         let test_path = temp_dir.path().join("index.dat");
 
         // Create a new IndexPages using the constructor
-        let index_pages = IndexPages::new(test_path, PAGE_SIZE)
-            .expect("Failed to create IndexPages");
+        let index_pages =
+            IndexPages::new(test_path, PAGE_SIZE).expect("Failed to create IndexPages");
 
         // Check that header_page_id equals PageID(0)
-        assert_eq!(index_pages.header_page_id, PageID(0), 
-                   "header_page_id should be initialized to PageID(0)");
+        assert_eq!(
+            index_pages.header_page_id,
+            PageID(0),
+            "header_page_id should be initialized to PageID(0)"
+        );
 
         // Check that header_node.root_page_id equals PageID(1)
-        assert_eq!(index_pages.header_node().root_page_id, PageID(1),
-                   "header_node.root_page_id should be initialized to PageID(1)");
+        assert_eq!(
+            index_pages.header_node().root_page_id,
+            PageID(1),
+            "header_node.root_page_id should be initialized to PageID(1)"
+        );
 
         // Check that header_node.next_page_id equals PageID(2)
-        assert_eq!(index_pages.header_node().next_page_id, PageID(2),
-                   "header_node.next_page_id should be initialized to PageID(2)");
+        assert_eq!(
+            index_pages.header_node().next_page_id,
+            PageID(2),
+            "header_node.next_page_id should be initialized to PageID(2)"
+        );
 
         // Check that the cache is initialized and empty
-        assert!(index_pages.cache.is_empty(), 
-                "Cache should be initialized as empty");
+        assert!(
+            index_pages.cache.is_empty(),
+            "Cache should be initialized as empty"
+        );
 
         // Check that cache_capacity equals 1024
-        assert_eq!(index_pages.cache_capacity, 1024,
-                   "cache_capacity should be initialized to 1024");
+        assert_eq!(
+            index_pages.cache_capacity, 1024,
+            "cache_capacity should be initialized to 1024"
+        );
 
         // Check that header_page has the header_node
-        assert_eq!(index_pages.header_page.page_id, index_pages.header_page_id,
-                   "header_page.page_id should match header_page_id");
-        assert_eq!(index_pages.header_page.node.node_type_byte(), HEADER_NODE_TYPE,
-                   "header_page.node should be a HeaderNode");
+        assert_eq!(
+            index_pages.header_page.page_id, index_pages.header_page_id,
+            "header_page.page_id should match header_page_id"
+        );
+        assert_eq!(
+            index_pages.header_page.node.node_type_byte(),
+            HEADER_NODE_TYPE,
+            "header_page.node should be a HeaderNode"
+        );
 
         // Check that the deserializer field exists and has HEADER_NODE_TYPE registered
         // Create an IndexPage with a HeaderNode
@@ -610,24 +662,34 @@ mod tests {
         let serialized_data = index_page.node.serialize_page();
 
         // Use the deserializer to deserialize the page data
-        let deserialized_page = index_pages.deserializer.deserialize_page(&serialized_data, PageID(5))
+        let deserialized_page = index_pages
+            .deserializer
+            .deserialize_page(&serialized_data, PageID(5))
             .expect("Failed to deserialize page data");
 
         // Verify that the deserialized page has the correct page_id
-        assert_eq!(deserialized_page.page_id, PageID(5), 
-                   "page_id should match after deserialization");
+        assert_eq!(
+            deserialized_page.page_id,
+            PageID(5),
+            "page_id should match after deserialization"
+        );
 
         // Verify that the deserialized page has the correct node type
-        assert_eq!(deserialized_page.node.node_type_byte(), HEADER_NODE_TYPE, 
-                   "node_type_byte should match after deserialization");
+        assert_eq!(
+            deserialized_page.node.node_type_byte(),
+            HEADER_NODE_TYPE,
+            "node_type_byte should match after deserialization"
+        );
 
         // Serialize the node data from the deserialized page
         let reserialized_data = deserialized_page.node.serialize();
 
         // Deserialize the original node data for comparison
         let original_node_data = &serialized_data[9..];
-        assert_eq!(reserialized_data, original_node_data, 
-                   "Reserialized node data should match the original node data");
+        assert_eq!(
+            reserialized_data, original_node_data,
+            "Reserialized node data should match the original node data"
+        );
 
         // The temporary directory will be automatically deleted when temp_dir goes out of scope
     }
@@ -639,8 +701,8 @@ mod tests {
         let test_path = temp_dir.path().join("index.dat");
 
         // Create a new IndexPages
-        let mut index_pages = IndexPages::new(test_path, PAGE_SIZE)
-            .expect("Failed to create IndexPages");
+        let mut index_pages =
+            IndexPages::new(test_path, PAGE_SIZE).expect("Failed to create IndexPages");
 
         // Create a few PageID instances
         let page_id1 = PageID(1);
@@ -661,19 +723,28 @@ mod tests {
 
         // Verify that each unique PageID added exists in the HashMap
         for (page_id, _) in &index_pages.dirty {
-            assert!(expected_page_ids.contains_key(page_id), 
-                    "Unexpected PageID in dirty HashMap: {:?}", page_id);
+            assert!(
+                expected_page_ids.contains_key(page_id),
+                "Unexpected PageID in dirty HashMap: {:?}",
+                page_id
+            );
         }
 
         // Verify that all expected PageIDs exist in the HashMap
         for (page_id, _) in &expected_page_ids {
-            assert!(index_pages.dirty.contains_key(page_id), 
-                    "Expected PageID not found in dirty HashMap: {:?}", page_id);
+            assert!(
+                index_pages.dirty.contains_key(page_id),
+                "Expected PageID not found in dirty HashMap: {:?}",
+                page_id
+            );
         }
 
         // Verify that the number of entries in the dirty HashMap matches the expected count
-        assert_eq!(index_pages.dirty.len(), expected_page_ids.len(), 
-                   "Number of entries in dirty HashMap does not match expected count");
+        assert_eq!(
+            index_pages.dirty.len(),
+            expected_page_ids.len(),
+            "Number of entries in dirty HashMap does not match expected count"
+        );
     }
 
     #[test]
@@ -683,8 +754,8 @@ mod tests {
         let test_path = temp_dir.path().join("index.dat");
 
         // Create a new IndexPages
-        let mut index_pages = IndexPages::new(test_path, PAGE_SIZE)
-            .expect("Failed to create IndexPages");
+        let mut index_pages =
+            IndexPages::new(test_path, PAGE_SIZE).expect("Failed to create IndexPages");
 
         // Create a few PageID instances
         let page_id1 = PageID(1);
@@ -697,13 +768,19 @@ mod tests {
         index_pages.mark_dirty(page_id3);
 
         // Verify that the dirty HashMap is not empty
-        assert!(!index_pages.dirty.is_empty(), "Dirty HashMap should not be empty before clearing");
+        assert!(
+            !index_pages.dirty.is_empty(),
+            "Dirty HashMap should not be empty before clearing"
+        );
 
         // Clear the dirty HashMap
         index_pages.clear_dirty();
 
         // Verify that the dirty HashMap is now empty
-        assert!(index_pages.dirty.is_empty(), "Dirty HashMap should be empty after clearing");
+        assert!(
+            index_pages.dirty.is_empty(),
+            "Dirty HashMap should be empty after clearing"
+        );
     }
 
     #[test]
@@ -719,10 +796,14 @@ mod tests {
         };
 
         // Verify initial values
-        assert_eq!(header_node.root_page_id, initial_root_page_id, 
-                   "root_page_id should be initialized to the provided value");
-        assert_eq!(header_node.next_page_id, initial_next_page_id, 
-                   "next_page_id should be initialized to the provided value");
+        assert_eq!(
+            header_node.root_page_id, initial_root_page_id,
+            "root_page_id should be initialized to the provided value"
+        );
+        assert_eq!(
+            header_node.next_page_id, initial_next_page_id,
+            "next_page_id should be initialized to the provided value"
+        );
 
         // Change the values
         let new_root_page_id = PageID(3);
@@ -732,10 +813,14 @@ mod tests {
         header_node.next_page_id = new_next_page_id;
 
         // Verify the new values
-        assert_eq!(header_node.root_page_id, new_root_page_id, 
-                   "root_page_id should be updated to the new value");
-        assert_eq!(header_node.next_page_id, new_next_page_id, 
-                   "next_page_id should be updated to the new value");
+        assert_eq!(
+            header_node.root_page_id, new_root_page_id,
+            "root_page_id should be updated to the new value"
+        );
+        assert_eq!(
+            header_node.next_page_id, new_next_page_id,
+            "next_page_id should be updated to the new value"
+        );
     }
 
     #[test]
@@ -750,23 +835,31 @@ mod tests {
         let serialized = header_node.serialize();
 
         // Deserialize the node data back to a HeaderNode
-        let deserialized: HeaderNode = HeaderNode::from_slice(&serialized)
-            .expect("Failed to deserialize HeaderNode");
+        let deserialized: HeaderNode =
+            HeaderNode::from_slice(&serialized).expect("Failed to deserialize HeaderNode");
 
         // Verify that the deserialized HeaderNode matches the original
-        assert_eq!(deserialized, header_node, 
-                   "Deserialized HeaderNode should match the original");
-        assert_eq!(deserialized.root_page_id, header_node.root_page_id, 
-                   "root_page_id should match after serialization/deserialization");
-        assert_eq!(deserialized.next_page_id, header_node.next_page_id, 
-                   "next_page_id should match after serialization/deserialization");
+        assert_eq!(
+            deserialized, header_node,
+            "Deserialized HeaderNode should match the original"
+        );
+        assert_eq!(
+            deserialized.root_page_id, header_node.root_page_id,
+            "root_page_id should match after serialization/deserialization"
+        );
+        assert_eq!(
+            deserialized.next_page_id, header_node.next_page_id,
+            "next_page_id should match after serialization/deserialization"
+        );
 
         // Calculate the serialized page size
         let page_size = header_node.calc_serialized_page_size();
 
         // Verify that the page size is correct (8 bytes for the node + 9 bytes for the page overhead)
-        assert_eq!(page_size, 17, 
-                   "Page size should be 17 bytes (8 bytes for the node + 9 bytes for the page overhead)");
+        assert_eq!(
+            page_size, 17,
+            "Page size should be 17 bytes (8 bytes for the node + 9 bytes for the page overhead)"
+        );
 
         // Serialize the HeaderNode to a page format
         let page_data = header_node.serialize_page();
@@ -778,7 +871,10 @@ mod tests {
         assert_eq!(page_data.len(), 17, "Page data should be 17 bytes");
 
         // Verify that the page data starts with the correct node type byte
-        assert_eq!(page_data[0], HEADER_NODE_TYPE, "Page data should start with the header node type byte");
+        assert_eq!(
+            page_data[0], HEADER_NODE_TYPE,
+            "Page data should start with the header node type byte"
+        );
     }
 
     #[test]
@@ -796,8 +892,11 @@ mod tests {
         };
 
         // Verify that the IndexPage has the correct values
-        assert_eq!(index_page.page_id, PageID(9), 
-                   "page_id should be initialized to the provided value");
+        assert_eq!(
+            index_page.page_id,
+            PageID(9),
+            "page_id should be initialized to the provided value"
+        );
 
         // Serialize the node data using the new method
         let serialized_data = index_page.node.serialize_page();
@@ -806,10 +905,14 @@ mod tests {
         let node_data = index_page.node.serialize();
 
         // Verify that the serialized data contains the node data
-        assert!(serialized_data.len() > node_data.len(), 
-                "Serialized data should be larger than just the node data");
-        assert!(serialized_data.ends_with(&node_data), 
-                "Serialized data should end with the node data");
+        assert!(
+            serialized_data.len() > node_data.len(),
+            "Serialized data should be larger than just the node data"
+        );
+        assert!(
+            serialized_data.ends_with(&node_data),
+            "Serialized data should end with the node data"
+        );
     }
 
     #[test]
@@ -819,8 +922,8 @@ mod tests {
         let test_path = temp_dir.path().join("index.dat");
 
         // Create a new IndexPages
-        let mut index_pages = IndexPages::new(test_path, PAGE_SIZE)
-            .expect("Failed to create IndexPages");
+        let mut index_pages =
+            IndexPages::new(test_path, PAGE_SIZE).expect("Failed to create IndexPages");
 
         // Create a HeaderNode instance
         let header_node = HeaderNode {
@@ -839,12 +942,16 @@ mod tests {
         index_pages.add_page(index_page);
 
         // Verify that the page_id is in the dirty HashMap
-        assert!(index_pages.dirty.contains_key(&page_id), 
-                "page_id should be in the dirty HashMap after adding the page");
+        assert!(
+            index_pages.dirty.contains_key(&page_id),
+            "page_id should be in the dirty HashMap after adding the page"
+        );
 
         // Verify that the page_id is in the cache
-        assert!(index_pages.cache.contains(&page_id), 
-                "page_id should be in the cache after adding the page");
+        assert!(
+            index_pages.cache.contains(&page_id),
+            "page_id should be in the cache after adding the page"
+        );
     }
 
     #[test]
@@ -856,8 +963,11 @@ mod tests {
         };
 
         // Verify that node_type_byte returns HEADER_NODE_TYPE
-        assert_eq!(header_node.node_type_byte(), HEADER_NODE_TYPE, 
-                   "node_type_byte should return HEADER_NODE_TYPE");
+        assert_eq!(
+            header_node.node_type_byte(),
+            HEADER_NODE_TYPE,
+            "node_type_byte should return HEADER_NODE_TYPE"
+        );
 
         // Create an IndexPage with the HeaderNode
         let index_page = IndexPage {
@@ -866,8 +976,11 @@ mod tests {
         };
 
         // Verify that node_type_byte can be called through the trait object
-        assert_eq!(index_page.node.node_type_byte(), HEADER_NODE_TYPE, 
-                   "node_type_byte should return HEADER_NODE_TYPE when called through trait object");
+        assert_eq!(
+            index_page.node.node_type_byte(),
+            HEADER_NODE_TYPE,
+            "node_type_byte should return HEADER_NODE_TYPE when called through trait object"
+        );
     }
 
     #[test]
@@ -897,24 +1010,33 @@ mod tests {
         });
 
         // Deserialize the page data
-        let deserialized_page = deserializer.deserialize_page(&serialized_data, PageID(19))
+        let deserialized_page = deserializer
+            .deserialize_page(&serialized_data, PageID(19))
             .expect("Failed to deserialize page data");
 
         // Verify that the deserialized page has the correct page_id
-        assert_eq!(deserialized_page.page_id, PageID(19), 
-                   "page_id should match after deserialization");
+        assert_eq!(
+            deserialized_page.page_id,
+            PageID(19),
+            "page_id should match after deserialization"
+        );
 
         // Verify that the deserialized page has the correct node type
-        assert_eq!(deserialized_page.node.node_type_byte(), HEADER_NODE_TYPE, 
-                   "node_type_byte should match after deserialization");
+        assert_eq!(
+            deserialized_page.node.node_type_byte(),
+            HEADER_NODE_TYPE,
+            "node_type_byte should match after deserialization"
+        );
 
         // Serialize the node data from the deserialized page
         let reserialized_data = deserialized_page.node.serialize();
 
         // Deserialize the original node data for comparison
         let original_node_data = &serialized_data[9..];
-        assert_eq!(reserialized_data, original_node_data, 
-                   "Reserialized node data should match the original node data");
+        assert_eq!(
+            reserialized_data, original_node_data,
+            "Reserialized node data should match the original node data"
+        );
     }
 
     #[test]
@@ -934,7 +1056,10 @@ mod tests {
 
         // Test with data that's too short for the header
         let result = deserializer.deserialize_page(&[HEADER_NODE_TYPE], PageID(20));
-        assert!(result.is_err(), "Should return an error for data that's too short for the header");
+        assert!(
+            result.is_err(),
+            "Should return an error for data that's too short for the header"
+        );
 
         // Test with an unregistered node type
         let unregistered_type = 99;
@@ -943,7 +1068,10 @@ mod tests {
         invalid_data.extend_from_slice(&[0, 0, 0, 0]); // CRC
         invalid_data.extend_from_slice(&[0, 0, 0, 0]); // Length
         let result = deserializer.deserialize_page(&invalid_data, PageID(20));
-        assert!(result.is_err(), "Should return an error for an unregistered node type");
+        assert!(
+            result.is_err(),
+            "Should return an error for an unregistered node type"
+        );
 
         // Test with invalid CRC
         let mut invalid_crc_data = Vec::new();
@@ -962,48 +1090,65 @@ mod tests {
         let test_path = temp_dir.path().join("index.dat");
 
         // Create a new IndexPages
-        let mut index_pages = IndexPages::new(test_path, PAGE_SIZE)
-            .expect("Failed to create IndexPages");
+        let mut index_pages =
+            IndexPages::new(test_path, PAGE_SIZE).expect("Failed to create IndexPages");
 
         // Check the initial root_page_id
-        assert_eq!(index_pages.header_node().root_page_id, PageID(1),
-                   "Initial root_page_id should be PageID(1)");
+        assert_eq!(
+            index_pages.header_node().root_page_id,
+            PageID(1),
+            "Initial root_page_id should be PageID(1)"
+        );
 
         // Set a new root_page_id
         let new_root_page_id = PageID(42);
         index_pages.set_root_page_id(new_root_page_id);
 
         // Check that the root_page_id was updated
-        assert_eq!(index_pages.header_node().root_page_id, new_root_page_id,
-                   "root_page_id should be updated to the new value");
+        assert_eq!(
+            index_pages.header_node().root_page_id,
+            new_root_page_id,
+            "root_page_id should be updated to the new value"
+        );
 
         // Check that the header_page_id was marked as dirty
-        assert!(index_pages.dirty.contains_key(&index_pages.header_page_id),
-                "header_page_id should be marked as dirty");
+        assert!(
+            index_pages.dirty.contains_key(&index_pages.header_page_id),
+            "header_page_id should be marked as dirty"
+        );
 
         // Serialize the header_page
         let serialized_data = index_pages.header_page.node.serialize_page();
 
         // Deserialize the serialized data into another instance of IndexPage
-        let deserialized_page = index_pages.deserializer.deserialize_page(&serialized_data, index_pages.header_page_id)
+        let deserialized_page = index_pages
+            .deserializer
+            .deserialize_page(&serialized_data, index_pages.header_page_id)
             .expect("Failed to deserialize header_page");
 
         // Check that the deserialized page has the correct page_id
-        assert_eq!(deserialized_page.page_id, index_pages.header_page_id,
-                   "Deserialized page_id should match header_page_id");
+        assert_eq!(
+            deserialized_page.page_id, index_pages.header_page_id,
+            "Deserialized page_id should match header_page_id"
+        );
 
         // Check that the deserialized page has the correct node type
-        assert_eq!(deserialized_page.node.node_type_byte(), HEADER_NODE_TYPE,
-                   "Deserialized node_type_byte should be HEADER_NODE_TYPE");
+        assert_eq!(
+            deserialized_page.node.node_type_byte(),
+            HEADER_NODE_TYPE,
+            "Deserialized node_type_byte should be HEADER_NODE_TYPE"
+        );
 
         // Get the header_node from the deserialized page
         let node_data = deserialized_page.node.serialize();
-        let deserialized_header_node: HeaderNode = HeaderNode::from_slice(&node_data)
-            .expect("Failed to deserialize node data");
+        let deserialized_header_node: HeaderNode =
+            HeaderNode::from_slice(&node_data).expect("Failed to deserialize node data");
 
         // Check that the root_page_id in the deserialized header_node matches the new value
-        assert_eq!(deserialized_header_node.root_page_id, new_root_page_id,
-                   "root_page_id in deserialized header_node should match the new value");
+        assert_eq!(
+            deserialized_header_node.root_page_id, new_root_page_id,
+            "root_page_id in deserialized header_node should match the new value"
+        );
     }
 
     #[test]
@@ -1013,48 +1158,65 @@ mod tests {
         let test_path = temp_dir.path().join("index.dat");
 
         // Create a new IndexPages
-        let mut index_pages = IndexPages::new(test_path, PAGE_SIZE)
-            .expect("Failed to create IndexPages");
+        let mut index_pages =
+            IndexPages::new(test_path, PAGE_SIZE).expect("Failed to create IndexPages");
 
         // Check the initial next_page_id
-        assert_eq!(index_pages.header_node().next_page_id, PageID(2),
-                   "Initial next_page_id should be PageID(2)");
+        assert_eq!(
+            index_pages.header_node().next_page_id,
+            PageID(2),
+            "Initial next_page_id should be PageID(2)"
+        );
 
         // Set a new next_page_id
         let new_next_page_id = PageID(42);
         index_pages.set_next_page_id(new_next_page_id);
 
         // Check that the next_page_id was updated
-        assert_eq!(index_pages.header_node().next_page_id, new_next_page_id,
-                   "next_page_id should be updated to the new value");
+        assert_eq!(
+            index_pages.header_node().next_page_id,
+            new_next_page_id,
+            "next_page_id should be updated to the new value"
+        );
 
         // Check that the header_page_id was marked as dirty
-        assert!(index_pages.dirty.contains_key(&index_pages.header_page_id),
-                "header_page_id should be marked as dirty");
+        assert!(
+            index_pages.dirty.contains_key(&index_pages.header_page_id),
+            "header_page_id should be marked as dirty"
+        );
 
         // Serialize the header_page
         let serialized_data = index_pages.header_page.node.serialize_page();
 
         // Deserialize the serialized data into another instance of IndexPage
-        let deserialized_page = index_pages.deserializer.deserialize_page(&serialized_data, index_pages.header_page_id)
+        let deserialized_page = index_pages
+            .deserializer
+            .deserialize_page(&serialized_data, index_pages.header_page_id)
             .expect("Failed to deserialize header_page");
 
         // Check that the deserialized page has the correct page_id
-        assert_eq!(deserialized_page.page_id, index_pages.header_page_id,
-                   "Deserialized page_id should match header_page_id");
+        assert_eq!(
+            deserialized_page.page_id, index_pages.header_page_id,
+            "Deserialized page_id should match header_page_id"
+        );
 
         // Check that the deserialized page has the correct node type
-        assert_eq!(deserialized_page.node.node_type_byte(), HEADER_NODE_TYPE,
-                   "Deserialized node_type_byte should be HEADER_NODE_TYPE");
+        assert_eq!(
+            deserialized_page.node.node_type_byte(),
+            HEADER_NODE_TYPE,
+            "Deserialized node_type_byte should be HEADER_NODE_TYPE"
+        );
 
         // Get the header_node from the deserialized page
         let node_data = deserialized_page.node.serialize();
-        let deserialized_header_node: HeaderNode = HeaderNode::from_slice(&node_data)
-            .expect("Failed to deserialize node data");
+        let deserialized_header_node: HeaderNode =
+            HeaderNode::from_slice(&node_data).expect("Failed to deserialize node data");
 
         // Check that the next_page_id in the deserialized header_node matches the new value
-        assert_eq!(deserialized_header_node.next_page_id, new_next_page_id,
-                   "next_page_id in deserialized header_node should match the new value");
+        assert_eq!(
+            deserialized_header_node.next_page_id, new_next_page_id,
+            "next_page_id in deserialized header_node should match the new value"
+        );
     }
 
     #[test]
@@ -1064,8 +1226,8 @@ mod tests {
         let test_path = temp_dir.path().join("index.dat");
 
         // Create a new IndexPages
-        let mut index_pages = IndexPages::new(test_path.clone(), PAGE_SIZE)
-            .expect("Failed to create IndexPages");
+        let mut index_pages =
+            IndexPages::new(test_path.clone(), PAGE_SIZE).expect("Failed to create IndexPages");
 
         // Mark the header page as dirty
         index_pages.mark_dirty(index_pages.header_page_id);
@@ -1103,60 +1265,86 @@ mod tests {
         index_pages.add_page(index_page2);
 
         // Verify that the pages are marked as dirty
-        assert!(index_pages.dirty.contains_key(&index_pages.header_page_id),
-                "header_page_id should be marked as dirty");
-        assert!(index_pages.dirty.contains_key(&page_id1),
-                "page_id1 should be marked as dirty");
-        assert!(index_pages.dirty.contains_key(&page_id2),
-                "page_id2 should be marked as dirty");
+        assert!(
+            index_pages.dirty.contains_key(&index_pages.header_page_id),
+            "header_page_id should be marked as dirty"
+        );
+        assert!(
+            index_pages.dirty.contains_key(&page_id1),
+            "page_id1 should be marked as dirty"
+        );
+        assert!(
+            index_pages.dirty.contains_key(&page_id2),
+            "page_id2 should be marked as dirty"
+        );
 
         // Flush the pages
         index_pages.flush().expect("Failed to flush pages");
 
         // Verify that the dirty HashMap is cleared
-        assert!(index_pages.dirty.is_empty(),
-                "dirty HashMap should be empty after flushing");
+        assert!(
+            index_pages.dirty.is_empty(),
+            "dirty HashMap should be empty after flushing"
+        );
 
         // Create a new IndexPages instance to read the pages from disk
-        let mut new_index_pages = IndexPages::new(test_path, PAGE_SIZE)
-            .expect("Failed to create new IndexPages");
+        let mut new_index_pages =
+            IndexPages::new(test_path, PAGE_SIZE).expect("Failed to create new IndexPages");
 
         // Read the header page from disk
         let mut page_buffer = vec![0u8; PAGE_SIZE];
-        new_index_pages.paged_file.read_page(index_pages.header_page_id, &mut page_buffer)
+        new_index_pages
+            .paged_file
+            .read_page(index_pages.header_page_id, &mut page_buffer)
             .expect("Failed to read header page from disk");
 
         // Deserialize the header page
-        let deserialized_header_page = new_index_pages.deserializer.deserialize_page(&page_buffer, index_pages.header_page_id)
+        let deserialized_header_page = new_index_pages
+            .deserializer
+            .deserialize_page(&page_buffer, index_pages.header_page_id)
             .expect("Failed to deserialize header page");
 
         // Verify that the deserialized header page has the correct page_id
-        assert_eq!(deserialized_header_page.page_id, index_pages.header_page_id,
-                   "Deserialized header page_id should match header_page_id");
+        assert_eq!(
+            deserialized_header_page.page_id, index_pages.header_page_id,
+            "Deserialized header page_id should match header_page_id"
+        );
 
         // Read page 1 from disk
-        new_index_pages.paged_file.read_page(page_id1, &mut page_buffer)
+        new_index_pages
+            .paged_file
+            .read_page(page_id1, &mut page_buffer)
             .expect("Failed to read page 1 from disk");
 
         // Deserialize page 1
-        let deserialized_page1 = new_index_pages.deserializer.deserialize_page(&page_buffer, page_id1)
+        let deserialized_page1 = new_index_pages
+            .deserializer
+            .deserialize_page(&page_buffer, page_id1)
             .expect("Failed to deserialize page 1");
 
         // Verify that the deserialized page 1 has the correct page_id
-        assert_eq!(deserialized_page1.page_id, page_id1,
-                   "Deserialized page 1 page_id should match page_id1");
+        assert_eq!(
+            deserialized_page1.page_id, page_id1,
+            "Deserialized page 1 page_id should match page_id1"
+        );
 
         // Read page 2 from disk
-        new_index_pages.paged_file.read_page(page_id2, &mut page_buffer)
+        new_index_pages
+            .paged_file
+            .read_page(page_id2, &mut page_buffer)
             .expect("Failed to read page 2 from disk");
 
         // Deserialize page 2
-        let deserialized_page2 = new_index_pages.deserializer.deserialize_page(&page_buffer, page_id2)
+        let deserialized_page2 = new_index_pages
+            .deserializer
+            .deserialize_page(&page_buffer, page_id2)
             .expect("Failed to deserialize page 2");
 
         // Verify that the deserialized page 2 has the correct page_id
-        assert_eq!(deserialized_page2.page_id, page_id2,
-                   "Deserialized page 2 page_id should match page_id2");
+        assert_eq!(
+            deserialized_page2.page_id, page_id2,
+            "Deserialized page 2 page_id should match page_id2"
+        );
     }
 
     #[test]
@@ -1166,32 +1354,62 @@ mod tests {
         let test_path = temp_dir.path().join("index.dat");
 
         // Create a new IndexPages
-        let mut index_pages = IndexPages::new(test_path, PAGE_SIZE)
-            .expect("Failed to create IndexPages");
+        let mut index_pages =
+            IndexPages::new(test_path, PAGE_SIZE).expect("Failed to create IndexPages");
 
         // Check the initial next_page_id
-        assert_eq!(index_pages.header_node().next_page_id, PageID(2),
-                   "Initial next_page_id should be PageID(2)");
+        assert_eq!(
+            index_pages.header_node().next_page_id,
+            PageID(2),
+            "Initial next_page_id should be PageID(2)"
+        );
 
         // Call alloc_page_id multiple times and verify the returned values
         let page_id1 = index_pages.alloc_page_id();
-        assert_eq!(page_id1, PageID(2), "First allocated page_id should be PageID(2)");
-        assert_eq!(index_pages.header_node().next_page_id, PageID(3),
-                   "next_page_id should be incremented to PageID(3)");
+        assert_eq!(
+            page_id1,
+            PageID(2),
+            "First allocated page_id should be PageID(2)"
+        );
+        assert_eq!(
+            index_pages.header_node().next_page_id,
+            PageID(3),
+            "next_page_id should be incremented to PageID(3)"
+        );
 
         let page_id2 = index_pages.alloc_page_id();
-        assert_eq!(page_id2, PageID(3), "Second allocated page_id should be PageID(3)");
-        assert_eq!(index_pages.header_node().next_page_id, PageID(4),
-                   "next_page_id should be incremented to PageID(4)");
+        assert_eq!(
+            page_id2,
+            PageID(3),
+            "Second allocated page_id should be PageID(3)"
+        );
+        assert_eq!(
+            index_pages.header_node().next_page_id,
+            PageID(4),
+            "next_page_id should be incremented to PageID(4)"
+        );
 
         let page_id3 = index_pages.alloc_page_id();
-        assert_eq!(page_id3, PageID(4), "Third allocated page_id should be PageID(4)");
-        assert_eq!(index_pages.header_node().next_page_id, PageID(5),
-                   "next_page_id should be incremented to PageID(5)");
+        assert_eq!(
+            page_id3,
+            PageID(4),
+            "Third allocated page_id should be PageID(4)"
+        );
+        assert_eq!(
+            index_pages.header_node().next_page_id,
+            PageID(5),
+            "next_page_id should be incremented to PageID(5)"
+        );
 
         // Verify that the allocated page IDs are monotonically increasing
-        assert!(page_id1.0 < page_id2.0, "page_id1 should be less than page_id2");
-        assert!(page_id2.0 < page_id3.0, "page_id2 should be less than page_id3");
+        assert!(
+            page_id1.0 < page_id2.0,
+            "page_id1 should be less than page_id2"
+        );
+        assert!(
+            page_id2.0 < page_id3.0,
+            "page_id2 should be less than page_id3"
+        );
     }
 
     #[test]
@@ -1205,20 +1423,32 @@ mod tests {
             .expect("Failed to create first IndexPages instance");
 
         // Check the initial values
-        assert_eq!(index_pages1.header_node().root_page_id, PageID(1),
-                   "Initial root_page_id should be PageID(1)");
-        assert_eq!(index_pages1.header_node().next_page_id, PageID(2),
-                   "Initial next_page_id should be PageID(2)");
+        assert_eq!(
+            index_pages1.header_node().root_page_id,
+            PageID(1),
+            "Initial root_page_id should be PageID(1)"
+        );
+        assert_eq!(
+            index_pages1.header_node().next_page_id,
+            PageID(2),
+            "Initial next_page_id should be PageID(2)"
+        );
 
         // Step 2: Create a second IndexPages instance
         let mut index_pages2 = IndexPages::new(test_path.clone(), PAGE_SIZE)
             .expect("Failed to create second IndexPages instance");
 
         // Check that the values are the same as in the first instance
-        assert_eq!(index_pages2.header_node().root_page_id, index_pages1.header_node().root_page_id,
-                   "root_page_id should be the same in the second instance");
-        assert_eq!(index_pages2.header_node().next_page_id, index_pages1.header_node().next_page_id,
-                   "next_page_id should be the same in the second instance");
+        assert_eq!(
+            index_pages2.header_node().root_page_id,
+            index_pages1.header_node().root_page_id,
+            "root_page_id should be the same in the second instance"
+        );
+        assert_eq!(
+            index_pages2.header_node().next_page_id,
+            index_pages1.header_node().next_page_id,
+            "next_page_id should be the same in the second instance"
+        );
 
         // Set new values for root_page_id and next_page_id
         let new_root_page_id = PageID(42);
@@ -1235,10 +1465,16 @@ mod tests {
             .expect("Failed to create third IndexPages instance");
 
         // Check that the values are the same as the modified values in the second instance
-        assert_eq!(index_pages3.header_node().root_page_id, new_root_page_id,
-                   "root_page_id should be the modified value in the third instance");
-        assert_eq!(index_pages3.header_node().next_page_id, new_next_page_id,
-                   "next_page_id should be the modified value in the third instance");
+        assert_eq!(
+            index_pages3.header_node().root_page_id,
+            new_root_page_id,
+            "root_page_id should be the modified value in the third instance"
+        );
+        assert_eq!(
+            index_pages3.header_node().next_page_id,
+            new_next_page_id,
+            "next_page_id should be the modified value in the third instance"
+        );
     }
 
     #[test]
@@ -1248,8 +1484,8 @@ mod tests {
         let test_path = temp_dir.path().join("index.dat");
 
         // Create a new IndexPages instance
-        let mut index_pages = IndexPages::new(test_path.clone(), PAGE_SIZE)
-            .expect("Failed to create IndexPages");
+        let mut index_pages =
+            IndexPages::new(test_path.clone(), PAGE_SIZE).expect("Failed to create IndexPages");
 
         // Create and add a page to the cache
         let page_id = PageID(1);
@@ -1273,30 +1509,45 @@ mod tests {
         index_pages.flush().expect("Failed to flush page to disk");
 
         // Create a new IndexPages instance to read the page from disk
-        let mut new_index_pages = IndexPages::new(test_path, PAGE_SIZE)
-            .expect("Failed to create new IndexPages");
+        let mut new_index_pages =
+            IndexPages::new(test_path, PAGE_SIZE).expect("Failed to create new IndexPages");
 
         // Get the page using get_page()
-        let page = new_index_pages.get_page(page_id)
+        let page = new_index_pages
+            .get_page(page_id)
             .expect("Failed to get page");
 
         // Verify that the page has the correct page_id
-        assert_eq!(page.page_id, page_id,
-                   "Page should have the correct page_id");
+        assert_eq!(
+            page.page_id, page_id,
+            "Page should have the correct page_id"
+        );
 
         // Verify that the page has the correct node type
-        assert_eq!(page.node.node_type_byte(), HEADER_NODE_TYPE,
-                   "Page should have the correct node type");
+        assert_eq!(
+            page.node.node_type_byte(),
+            HEADER_NODE_TYPE,
+            "Page should have the correct node type"
+        );
 
         // Get the HeaderNode from the page
-        let node = page.node.as_any().downcast_ref::<HeaderNode>()
+        let node = page
+            .node
+            .as_any()
+            .downcast_ref::<HeaderNode>()
             .expect("Failed to downcast node to HeaderNode");
 
         // Verify that the HeaderNode has the correct values
-        assert_eq!(node.root_page_id, PageID(3),
-                   "HeaderNode should have the correct root_page_id");
-        assert_eq!(node.next_page_id, PageID(4),
-                   "HeaderNode should have the correct next_page_id");
+        assert_eq!(
+            node.root_page_id,
+            PageID(3),
+            "HeaderNode should have the correct root_page_id"
+        );
+        assert_eq!(
+            node.next_page_id,
+            PageID(4),
+            "HeaderNode should have the correct next_page_id"
+        );
     }
 
     #[test]
@@ -1306,8 +1557,8 @@ mod tests {
         let test_path = temp_dir.path().join("index.dat");
 
         // Create a new IndexPages instance
-        let mut index_pages = IndexPages::new(test_path.clone(), PAGE_SIZE)
-            .expect("Failed to create IndexPages");
+        let mut index_pages =
+            IndexPages::new(test_path.clone(), PAGE_SIZE).expect("Failed to create IndexPages");
 
         // Create and add a page to the cache
         let page_id = PageID(1);
@@ -1328,11 +1579,15 @@ mod tests {
         index_pages.add_page(index_page);
 
         // Get a mutable reference to the page using get_page_mut()
-        let page_mut = index_pages.get_page_mut(page_id)
+        let page_mut = index_pages
+            .get_page_mut(page_id)
             .expect("Failed to get mutable page");
 
         // Modify the node in the page
-        let node_mut = page_mut.node.as_any_mut().downcast_mut::<HeaderNode>()
+        let node_mut = page_mut
+            .node
+            .as_any_mut()
+            .downcast_mut::<HeaderNode>()
             .expect("Failed to downcast node to HeaderNode");
         node_mut.next_page_id = PageID(5);
 
@@ -1340,37 +1595,56 @@ mod tests {
         index_pages.flush().expect("Failed to flush changes");
 
         // Create a new IndexPages instance to read the page from disk
-        let mut new_index_pages = IndexPages::new(test_path.clone(), PAGE_SIZE)
-            .expect("Failed to create new IndexPages");
+        let mut new_index_pages =
+            IndexPages::new(test_path.clone(), PAGE_SIZE).expect("Failed to create new IndexPages");
 
         // Get the page using get_page()
-        let page = new_index_pages.get_page(page_id)
+        let page = new_index_pages
+            .get_page(page_id)
             .expect("Failed to get page");
 
         // Verify that the page has the correct page_id
-        assert_eq!(page.page_id, page_id,
-                   "Page should have the correct page_id");
+        assert_eq!(
+            page.page_id, page_id,
+            "Page should have the correct page_id"
+        );
 
         // Verify that the page has the correct node type
-        assert_eq!(page.node.node_type_byte(), HEADER_NODE_TYPE,
-                   "Page should have the correct node type");
+        assert_eq!(
+            page.node.node_type_byte(),
+            HEADER_NODE_TYPE,
+            "Page should have the correct node type"
+        );
 
         // Get the HeaderNode from the page
-        let node = page.node.as_any().downcast_ref::<HeaderNode>()
+        let node = page
+            .node
+            .as_any()
+            .downcast_ref::<HeaderNode>()
             .expect("Failed to downcast node to HeaderNode");
 
         // Verify that the HeaderNode has the modified next_page_id
-        assert_eq!(node.root_page_id, PageID(3),
-                   "HeaderNode should have the correct root_page_id");
-        assert_eq!(node.next_page_id, PageID(5),
-                   "HeaderNode should have the modified next_page_id");
+        assert_eq!(
+            node.root_page_id,
+            PageID(3),
+            "HeaderNode should have the correct root_page_id"
+        );
+        assert_eq!(
+            node.next_page_id,
+            PageID(5),
+            "HeaderNode should have the modified next_page_id"
+        );
 
         // Get a mutable reference to the page using get_page_mut()
-        let page_mut = new_index_pages.get_page_mut(page_id)
+        let page_mut = new_index_pages
+            .get_page_mut(page_id)
             .expect("Failed to get mutable page");
 
         // Modify the node in the page again
-        let node_mut = page_mut.node.as_any_mut().downcast_mut::<HeaderNode>()
+        let node_mut = page_mut
+            .node
+            .as_any_mut()
+            .downcast_mut::<HeaderNode>()
             .expect("Failed to downcast node to HeaderNode");
         node_mut.next_page_id = PageID(6);
 
@@ -1379,30 +1653,45 @@ mod tests {
         new_index_pages.flush().expect("Failed to flush changes");
 
         // Create another IndexPages instance to read the page from disk
-        let mut third_index_pages = IndexPages::new(test_path, PAGE_SIZE)
-            .expect("Failed to create third IndexPages");
+        let mut third_index_pages =
+            IndexPages::new(test_path, PAGE_SIZE).expect("Failed to create third IndexPages");
 
         // Get the page using get_page()
-        let page = third_index_pages.get_page(page_id)
+        let page = third_index_pages
+            .get_page(page_id)
             .expect("Failed to get page");
 
         // Verify that the page has the correct page_id
-        assert_eq!(page.page_id, page_id,
-                   "Page should have the correct page_id");
+        assert_eq!(
+            page.page_id, page_id,
+            "Page should have the correct page_id"
+        );
 
         // Verify that the page has the correct node type
-        assert_eq!(page.node.node_type_byte(), HEADER_NODE_TYPE,
-                   "Page should have the correct node type");
+        assert_eq!(
+            page.node.node_type_byte(),
+            HEADER_NODE_TYPE,
+            "Page should have the correct node type"
+        );
 
         // Get the HeaderNode from the page
-        let node = page.node.as_any().downcast_ref::<HeaderNode>()
+        let node = page
+            .node
+            .as_any()
+            .downcast_ref::<HeaderNode>()
             .expect("Failed to downcast node to HeaderNode");
 
         // Verify that the HeaderNode has the second modified next_page_id
-        assert_eq!(node.root_page_id, PageID(3),
-                   "HeaderNode should have the correct root_page_id");
-        assert_eq!(node.next_page_id, PageID(6),
-                   "HeaderNode should have the second modified next_page_id");
+        assert_eq!(
+            node.root_page_id,
+            PageID(3),
+            "HeaderNode should have the correct root_page_id"
+        );
+        assert_eq!(
+            node.next_page_id,
+            PageID(6),
+            "HeaderNode should have the second modified next_page_id"
+        );
     }
 
     #[test]
@@ -1436,32 +1725,53 @@ mod tests {
         }
 
         // Get the first and third pages to make them recently used
-        let _ = index_pages.get_page(PageID(1)).expect("Failed to get page 1");
-        let _ = index_pages.get_page(PageID(3)).expect("Failed to get page 3");
+        let _ = index_pages
+            .get_page(PageID(1))
+            .expect("Failed to get page 1");
+        let _ = index_pages
+            .get_page(PageID(3))
+            .expect("Failed to get page 3");
 
         // Call reduce_cache to remove the least recently used items
         index_pages.reduce_cache();
 
         // Check that the second and fourth pages are not in the cache
-        assert!(!index_pages.cache.contains(&PageID(2)), 
-                "Page 2 should not be in the cache after reduce_cache");
-        assert!(!index_pages.cache.contains(&PageID(4)), 
-                "Page 4 should not be in the cache after reduce_cache");
+        assert!(
+            !index_pages.cache.contains(&PageID(2)),
+            "Page 2 should not be in the cache after reduce_cache"
+        );
+        assert!(
+            !index_pages.cache.contains(&PageID(4)),
+            "Page 4 should not be in the cache after reduce_cache"
+        );
 
         // Check that the other five pages are in the cache
-        assert!(index_pages.cache.contains(&PageID(1)), 
-                "Page 1 should be in the cache after reduce_cache");
-        assert!(index_pages.cache.contains(&PageID(3)), 
-                "Page 3 should be in the cache after reduce_cache");
-        assert!(index_pages.cache.contains(&PageID(5)), 
-                "Page 5 should be in the cache after reduce_cache");
-        assert!(index_pages.cache.contains(&PageID(6)), 
-                "Page 6 should be in the cache after reduce_cache");
-        assert!(index_pages.cache.contains(&PageID(7)), 
-                "Page 7 should be in the cache after reduce_cache");
+        assert!(
+            index_pages.cache.contains(&PageID(1)),
+            "Page 1 should be in the cache after reduce_cache"
+        );
+        assert!(
+            index_pages.cache.contains(&PageID(3)),
+            "Page 3 should be in the cache after reduce_cache"
+        );
+        assert!(
+            index_pages.cache.contains(&PageID(5)),
+            "Page 5 should be in the cache after reduce_cache"
+        );
+        assert!(
+            index_pages.cache.contains(&PageID(6)),
+            "Page 6 should be in the cache after reduce_cache"
+        );
+        assert!(
+            index_pages.cache.contains(&PageID(7)),
+            "Page 7 should be in the cache after reduce_cache"
+        );
 
         // Verify that the cache size is equal to the cache_capacity
-        assert_eq!(index_pages.cache.len(), index_pages.cache_capacity,
-                   "Cache size should be equal to cache_capacity after reduce_cache");
+        assert_eq!(
+            index_pages.cache.len(),
+            index_pages.cache_capacity,
+            "Cache size should be equal to cache_capacity after reduce_cache"
+        );
     }
 }

@@ -1,12 +1,15 @@
-use std::path::Path;
-use tonic::{Request, Response, Status, transport::Server};
 use futures::Stream;
+use std::path::Path;
 use std::pin::Pin;
+use std::thread;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
-use std::thread;
+use tonic::{transport::Server, Request, Response, Status};
 
-use crate::api::{DCBEventStoreAPI, DCBEvent, DCBQuery, DCBQueryItem, DCBAppendCondition, DCBSequencedEvent, EventStoreError, Result as DCBResult};
+use crate::api::{
+    DCBAppendCondition, DCBEvent, DCBEventStoreAPI, DCBQuery, DCBQueryItem, DCBSequencedEvent,
+    EventStoreError, Result as DCBResult,
+};
 use crate::store::EventStore;
 
 // Include the generated proto code
@@ -16,9 +19,9 @@ pub mod dcbdb {
 
 use dcbdb::{
     event_store_service_server::{EventStoreService, EventStoreServiceServer},
-    EventProto, SequencedEventProto, SequencedEventBatchProto, QueryItemProto, QueryProto,
-    AppendConditionProto, ReadRequestProto, ReadResponseProto, AppendRequestProto, AppendResponseProto,
-    HeadRequestProto, HeadResponseProto,
+    AppendConditionProto, AppendRequestProto, AppendResponseProto, EventProto, HeadRequestProto,
+    HeadResponseProto, QueryItemProto, QueryProto, ReadRequestProto, ReadResponseProto,
+    SequencedEventBatchProto, SequencedEventProto,
 };
 
 // Conversion functions between proto and API types
@@ -62,7 +65,9 @@ impl From<QueryProto> for DCBQuery {
 impl From<AppendConditionProto> for DCBAppendCondition {
     fn from(proto: AppendConditionProto) -> Self {
         DCBAppendCondition {
-            fail_if_events_match: proto.fail_if_events_match.map_or_else(|| DCBQuery::default(), |q| q.into()),
+            fail_if_events_match: proto
+                .fail_if_events_match
+                .map_or_else(|| DCBQuery::default(), |q| q.into()),
             after: proto.after,
         }
     }
@@ -131,11 +136,20 @@ impl EventStoreHandle {
             rt.block_on(async {
                 while let Some(request) = request_rx.recv().await {
                     match request {
-                        EventStoreRequest::Read { query, after, limit, response_tx } => {
+                        EventStoreRequest::Read {
+                            query,
+                            after,
+                            limit,
+                            response_tx,
+                        } => {
                             let result = event_store.read_with_head(query, after, limit);
                             let _ = response_tx.send(result);
                         }
-                        EventStoreRequest::Append { events, condition, response_tx } => {
+                        EventStoreRequest::Append {
+                            events,
+                            condition,
+                            response_tx,
+                        } => {
                             let result = event_store.append(events, condition);
                             let _ = response_tx.send(result);
                         }
@@ -165,57 +179,85 @@ impl EventStoreHandle {
         Ok(Self { request_tx })
     }
 
-    async fn read(&self, query: Option<DCBQuery>, after: Option<u64>, limit: Option<usize>) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
+    async fn read(
+        &self,
+        query: Option<DCBQuery>,
+        after: Option<u64>,
+        limit: Option<usize>,
+    ) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
         let (response_tx, response_rx) = oneshot::channel();
 
-        self.request_tx.send(EventStoreRequest::Read {
-            query,
-            after,
-            limit,
-            response_tx,
-        }).await.map_err(|_| EventStoreError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "Failed to send read request to EventStore thread",
-        )))?;
+        self.request_tx
+            .send(EventStoreRequest::Read {
+                query,
+                after,
+                limit,
+                response_tx,
+            })
+            .await
+            .map_err(|_| {
+                EventStoreError::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Failed to send read request to EventStore thread",
+                ))
+            })?;
 
-        response_rx.await.map_err(|_| EventStoreError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "Failed to receive read response from EventStore thread",
-        )))?
+        response_rx.await.map_err(|_| {
+            EventStoreError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Failed to receive read response from EventStore thread",
+            ))
+        })?
     }
 
-    async fn append(&self, events: Vec<DCBEvent>, condition: Option<DCBAppendCondition>) -> DCBResult<u64> {
+    async fn append(
+        &self,
+        events: Vec<DCBEvent>,
+        condition: Option<DCBAppendCondition>,
+    ) -> DCBResult<u64> {
         let (response_tx, response_rx) = oneshot::channel();
 
-        self.request_tx.send(EventStoreRequest::Append {
-            events,
-            condition,
-            response_tx,
-        }).await.map_err(|_| EventStoreError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "Failed to send append request to EventStore thread",
-        )))?;
+        self.request_tx
+            .send(EventStoreRequest::Append {
+                events,
+                condition,
+                response_tx,
+            })
+            .await
+            .map_err(|_| {
+                EventStoreError::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Failed to send append request to EventStore thread",
+                ))
+            })?;
 
-        response_rx.await.map_err(|_| EventStoreError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "Failed to receive append response from EventStore thread",
-        )))?
+        response_rx.await.map_err(|_| {
+            EventStoreError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Failed to receive append response from EventStore thread",
+            ))
+        })?
     }
 
     async fn head(&self) -> DCBResult<Option<u64>> {
         let (response_tx, response_rx) = oneshot::channel();
 
-        self.request_tx.send(EventStoreRequest::Head {
-            response_tx,
-        }).await.map_err(|_| EventStoreError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "Failed to send head request to EventStore thread",
-        )))?;
+        self.request_tx
+            .send(EventStoreRequest::Head { response_tx })
+            .await
+            .map_err(|_| {
+                EventStoreError::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Failed to send head request to EventStore thread",
+                ))
+            })?;
 
-        response_rx.await.map_err(|_| EventStoreError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "Failed to receive head response from EventStore thread",
-        )))?
+        response_rx.await.map_err(|_| {
+            EventStoreError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Failed to receive head response from EventStore thread",
+            ))
+        })?
     }
 
     #[allow(dead_code)]
@@ -227,34 +269,44 @@ impl EventStoreHandle {
     pub async fn flush_and_shutdown(&self) -> DCBResult<()> {
         let (response_tx, response_rx) = oneshot::channel();
 
-        self.request_tx.send(EventStoreRequest::FlushAndShutdown {
-            response_tx,
-        }).await.map_err(|_| EventStoreError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "Failed to send flush_and_shutdown request to EventStore thread",
-        )))?;
+        self.request_tx
+            .send(EventStoreRequest::FlushAndShutdown { response_tx })
+            .await
+            .map_err(|_| {
+                EventStoreError::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Failed to send flush_and_shutdown request to EventStore thread",
+                ))
+            })?;
 
-        response_rx.await.map_err(|_| EventStoreError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "Failed to receive flush_and_shutdown response from EventStore thread",
-        )))?
+        response_rx.await.map_err(|_| {
+            EventStoreError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Failed to receive flush_and_shutdown response from EventStore thread",
+            ))
+        })?
     }
 
     /// Flushes all pending changes to disk and creates a checkpoint
     pub async fn flush_and_checkpoint(&self) -> DCBResult<()> {
         let (response_tx, response_rx) = oneshot::channel();
 
-        self.request_tx.send(EventStoreRequest::FlushAndCheckpoint {
-            response_tx,
-        }).await.map_err(|_| EventStoreError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "Failed to send flush_and_checkpoint request to EventStore thread",
-        )))?;
+        self.request_tx
+            .send(EventStoreRequest::FlushAndCheckpoint { response_tx })
+            .await
+            .map_err(|_| {
+                EventStoreError::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Failed to send flush_and_checkpoint request to EventStore thread",
+                ))
+            })?;
 
-        response_rx.await.map_err(|_| EventStoreError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "Failed to receive flush_and_checkpoint response from EventStore thread",
-        )))?
+        response_rx.await.map_err(|_| {
+            EventStoreError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Failed to receive flush_and_checkpoint response from EventStore thread",
+            ))
+        })?
     }
 }
 
@@ -276,7 +328,8 @@ impl GrpcEventStoreServer {
 
 #[tonic::async_trait]
 impl EventStoreService for GrpcEventStoreServer {
-    type ReadStream = Pin<Box<dyn Stream<Item = Result<ReadResponseProto, Status>> + Send + 'static>>;
+    type ReadStream =
+        Pin<Box<dyn Stream<Item = Result<ReadResponseProto, Status>> + Send + 'static>>;
 
     async fn read(
         &self,
@@ -304,20 +357,22 @@ impl EventStoreService for GrpcEventStoreServer {
                     };
 
                     // Send the batch as a response
-                    let response = ReadResponseProto {
-                        batch: Some(batch),
-                    };
+                    let response = ReadResponseProto { batch: Some(batch) };
 
                     let _ = tx.send(Ok(response)).await;
                 }
                 Err(e) => {
-                    let _ = tx.send(Err(Status::internal(format!("Read error: {:?}", e)))).await;
+                    let _ = tx
+                        .send(Err(Status::internal(format!("Read error: {:?}", e))))
+                        .await;
                 }
             }
         });
 
         // Return the receiver as a stream
-        Ok(Response::new(Box::pin(ReceiverStream::new(rx)) as Self::ReadStream))
+        Ok(Response::new(
+            Box::pin(ReceiverStream::new(rx)) as Self::ReadStream
+        ))
     }
 
     async fn append(
@@ -339,12 +394,10 @@ impl EventStoreService for GrpcEventStoreServer {
             Err(e) => {
                 // Convert the error to a gRPC status with specific error type information
                 match e {
-                    EventStoreError::IntegrityError => {
-                        Err(Status::failed_precondition("Integrity error: condition failed"))
-                    }
-                    _ => {
-                        Err(Status::internal(format!("Append error: {:?}", e)))
-                    }
+                    EventStoreError::IntegrityError => Err(Status::failed_precondition(
+                        "Integrity error: condition failed",
+                    )),
+                    _ => Err(Status::internal(format!("Append error: {:?}", e))),
                 }
             }
         }
@@ -360,9 +413,7 @@ impl EventStoreService for GrpcEventStoreServer {
                 // Return the position as a response
                 Ok(Response::new(HeadResponseProto { position }))
             }
-            Err(e) => {
-                Err(Status::internal(format!("Head error: {:?}", e)))
-            }
+            Err(e) => Err(Status::internal(format!("Head error: {:?}", e))),
         }
     }
 }
@@ -387,7 +438,8 @@ impl GrpcEventStoreClient {
         D: std::convert::TryInto<tonic::transport::Endpoint>,
         D::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
-        let client = dcbdb::event_store_service_client::EventStoreServiceClient::connect(dst).await?;
+        let client =
+            dcbdb::event_store_service_client::EventStoreServiceClient::connect(dst).await?;
         Ok(Self { client })
     }
 }
@@ -405,10 +457,14 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
 
         // Convert API types to proto types
         let query_proto = query.map(|q| QueryProto {
-            items: q.items.into_iter().map(|item| QueryItemProto {
-                types: item.types,
-                tags: item.tags,
-            }).collect(),
+            items: q
+                .items
+                .into_iter()
+                .map(|item| QueryItemProto {
+                    types: item.types,
+                    tags: item.tags,
+                })
+                .collect(),
         });
 
         let limit_proto = limit.map(|l| l as u32);
@@ -422,41 +478,50 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
 
         // Execute the read operation in the runtime
         let mut client = self.client.clone();
-        let response = rt.block_on(async move {
-            client.read(request).await
-        });
+        let response = rt.block_on(async move { client.read(request).await });
 
         match response {
             Ok(stream) => {
                 // Create a GrpcReadResponse that implements DCBReadResponse
-                Ok(Box::new(GrpcReadResponse::new(rt, stream.into_inner())) as Box<dyn crate::api::DCBReadResponse + '_>)
+                Ok(Box::new(GrpcReadResponse::new(rt, stream.into_inner()))
+                    as Box<dyn crate::api::DCBReadResponse + '_>)
             }
-            Err(status) => {
-                Err(EventStoreError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("gRPC read error: {}", status),
-                )))
-            }
+            Err(status) => Err(EventStoreError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("gRPC read error: {}", status),
+            ))),
         }
     }
 
-    fn append(&self, events: Vec<DCBEvent>, condition: Option<DCBAppendCondition>) -> DCBResult<u64> {
+    fn append(
+        &self,
+        events: Vec<DCBEvent>,
+        condition: Option<DCBAppendCondition>,
+    ) -> DCBResult<u64> {
         // Create a blocking runtime for the async append operation
         let rt = tokio::runtime::Runtime::new().unwrap();
 
         // Convert API types to proto types
-        let events_proto: Vec<EventProto> = events.into_iter().map(|e| EventProto {
-            event_type: e.event_type,
-            tags: e.tags,
-            data: e.data,
-        }).collect();
+        let events_proto: Vec<EventProto> = events
+            .into_iter()
+            .map(|e| EventProto {
+                event_type: e.event_type,
+                tags: e.tags,
+                data: e.data,
+            })
+            .collect();
 
         let condition_proto = condition.map(|c| AppendConditionProto {
             fail_if_events_match: Some(QueryProto {
-                items: c.fail_if_events_match.items.into_iter().map(|item| QueryItemProto {
-                    types: item.types,
-                    tags: item.tags,
-                }).collect(),
+                items: c
+                    .fail_if_events_match
+                    .items
+                    .into_iter()
+                    .map(|item| QueryItemProto {
+                        types: item.types,
+                        tags: item.tags,
+                    })
+                    .collect(),
             }),
             after: c.after,
         });
@@ -469,14 +534,10 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
 
         // Execute the append operation in the runtime
         let mut client = self.client.clone();
-        let response = rt.block_on(async move {
-            client.append(request).await
-        });
+        let response = rt.block_on(async move { client.append(request).await });
 
         match response {
-            Ok(response) => {
-                Ok(response.into_inner().position)
-            }
+            Ok(response) => Ok(response.into_inner().position),
             Err(status) => {
                 // Check if the error message indicates an integrity error
                 if status.message().contains("Integrity error") {
@@ -500,20 +561,14 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
 
         // Execute the head operation in the runtime
         let mut client = self.client.clone();
-        let response = rt.block_on(async move {
-            client.head(request).await
-        });
+        let response = rt.block_on(async move { client.head(request).await });
 
         match response {
-            Ok(response) => {
-                Ok(response.into_inner().position)
-            }
-            Err(status) => {
-                Err(EventStoreError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("gRPC head error: {}", status),
-                )))
-            }
+            Ok(response) => Ok(response.into_inner().position),
+            Err(status) => Err(EventStoreError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("gRPC head error: {}", status),
+            ))),
         }
     }
 }
@@ -528,7 +583,10 @@ struct GrpcReadResponse {
 }
 
 impl GrpcReadResponse {
-    fn new(rt: tokio::runtime::Runtime, stream: tonic::codec::Streaming<ReadResponseProto>) -> Self {
+    fn new(
+        rt: tokio::runtime::Runtime,
+        stream: tonic::codec::Streaming<ReadResponseProto>,
+    ) -> Self {
         Self {
             rt,
             stream,
@@ -540,9 +598,7 @@ impl GrpcReadResponse {
 
     fn fetch_next_batch(&mut self) -> DCBResult<()> {
         // Use the runtime to get the next message from the stream
-        let next_message = self.rt.block_on(async {
-            self.stream.message().await
-        });
+        let next_message = self.rt.block_on(async { self.stream.message().await });
 
         match next_message {
             Ok(Some(response)) => {
@@ -551,17 +607,21 @@ impl GrpcReadResponse {
                     self.head = batch.head;
 
                     // Convert proto events to API events
-                    let events: Vec<DCBSequencedEvent> = batch.events.into_iter().map(|e| {
-                        let event_proto = e.event.unwrap();
-                        DCBSequencedEvent {
-                            position: e.position,
-                            event: DCBEvent {
-                                event_type: event_proto.event_type,
-                                tags: event_proto.tags,
-                                data: event_proto.data,
-                            },
-                        }
-                    }).collect();
+                    let events: Vec<DCBSequencedEvent> = batch
+                        .events
+                        .into_iter()
+                        .map(|e| {
+                            let event_proto = e.event.unwrap();
+                            DCBSequencedEvent {
+                                position: e.position,
+                                event: DCBEvent {
+                                    event_type: event_proto.event_type,
+                                    tags: event_proto.tags,
+                                    data: event_proto.data,
+                                },
+                            }
+                        })
+                        .collect();
 
                     // Add the events to our buffer
                     self.events.extend(events);
@@ -569,12 +629,10 @@ impl GrpcReadResponse {
                 Ok(())
             }
             Ok(None) => Ok(()),
-            Err(status) => {
-                Err(EventStoreError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("gRPC stream error: {}", status),
-                )))
-            }
+            Err(status) => Err(EventStoreError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("gRPC stream error: {}", status),
+            ))),
         }
     }
 }
@@ -633,7 +691,10 @@ impl crate::api::DCBReadResponse for GrpcReadResponse {
 }
 
 // Function to start the gRPC server
-pub async fn start_grpc_server<P: AsRef<Path> + Send + 'static>(path: P, addr: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn start_grpc_server<P: AsRef<Path> + Send + 'static>(
+    path: P,
+    addr: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let addr = addr.parse()?;
     let server = GrpcEventStoreServer::new(path)?;
 

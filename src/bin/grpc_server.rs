@@ -1,6 +1,6 @@
-use std::path::PathBuf;
 use clap::Parser;
 use dcbdb::grpc;
+use std::path::PathBuf;
 use tokio::signal;
 
 #[derive(Parser)]
@@ -30,7 +30,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(async move {
         signal::ctrl_c().await.expect("Failed to listen for Ctrl+C");
         println!("Received Ctrl+C, initiating graceful shutdown...");
-        shutdown_tx.send(()).expect("Failed to send shutdown signal");
+        shutdown_tx
+            .send(())
+            .expect("Failed to send shutdown signal");
     });
 
     // Start the gRPC server with shutdown capability

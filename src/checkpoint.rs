@@ -7,7 +7,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use crate::wal::{Position, calc_crc};
+use crate::wal::{calc_crc, Position};
 
 // Constants
 const CHECKPOINT_FILE_NAME: &str = "checkpoint.dat";
@@ -130,28 +130,23 @@ impl CheckpointFile {
 
         // Parse the fields
         self.txn_id = u64::from_le_bytes([
-            blob[0], blob[1], blob[2], blob[3], 
-            blob[4], blob[5], blob[6], blob[7],
+            blob[0], blob[1], blob[2], blob[3], blob[4], blob[5], blob[6], blob[7],
         ]);
 
         self.position = u64::from_le_bytes([
-            blob[8], blob[9], blob[10], blob[11], 
-            blob[12], blob[13], blob[14], blob[15],
+            blob[8], blob[9], blob[10], blob[11], blob[12], blob[13], blob[14], blob[15],
         ]);
 
         self.segment_number = u64::from_le_bytes([
-            blob[16], blob[17], blob[18], blob[19], 
-            blob[20], blob[21], blob[22], blob[23],
+            blob[16], blob[17], blob[18], blob[19], blob[20], blob[21], blob[22], blob[23],
         ]);
 
         self.segment_offset = u64::from_le_bytes([
-            blob[24], blob[25], blob[26], blob[27], 
-            blob[28], blob[29], blob[30], blob[31],
+            blob[24], blob[25], blob[26], blob[27], blob[28], blob[29], blob[30], blob[31],
         ]);
 
         self.wal_commit_offset = u64::from_le_bytes([
-            blob[32], blob[33], blob[34], blob[35], 
-            blob[36], blob[37], blob[38], blob[39],
+            blob[32], blob[33], blob[34], blob[35], blob[36], blob[37], blob[38], blob[39],
         ]);
 
         Ok(())
@@ -261,7 +256,8 @@ mod tests {
             .open(temp_dir.path().join(CHECKPOINT_FILE_NAME))
             .unwrap();
 
-        file.seek(SeekFrom::Start(CHECKPOINT_STRUCT_SIZE as u64)).unwrap();
+        file.seek(SeekFrom::Start(CHECKPOINT_STRUCT_SIZE as u64))
+            .unwrap();
         file.write_all(&[0, 0, 0, 0]).unwrap();
         file.flush().unwrap();
 

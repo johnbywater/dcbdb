@@ -1,4 +1,4 @@
-//! DCBSD - Dynamic Consistency Boundaries Event Store
+//! DCBDB - Dynamic Consistency Boundaries Database
 //! 
 //! This library provides an event store implementation with support for
 //! dynamic consistency boundaries.

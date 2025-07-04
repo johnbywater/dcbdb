@@ -2,9 +2,9 @@ use tempfile::tempdir;
 use uuid::Uuid;
 use std::thread;
 use std::time::Duration;
-use dcbsd::api::{DCBAppendCondition, DCBQuery, DCBEvent, EventStoreError, DCBQueryItem, DCBEventStoreAPI};
-use dcbsd::store::EventStore;
-use dcbsd::grpc::GrpcEventStoreClient;
+use dcbdb::api::{DCBAppendCondition, DCBQuery, DCBEvent, EventStoreError, DCBQueryItem, DCBEventStoreAPI};
+use dcbdb::store::EventStore;
+use dcbdb::grpc::GrpcEventStoreClient;
 // Import the EventStore and related types from the main crate
 
 #[test]
@@ -28,7 +28,7 @@ fn test_grpc_event_store() {
     let server_thread = thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            use dcbsd::grpc::start_grpc_server_with_shutdown;
+            use dcbdb::grpc::start_grpc_server_with_shutdown;
             start_grpc_server_with_shutdown(temp_path, server_addr, shutdown_rx).await.unwrap();
         });
     });

@@ -1,6 +1,6 @@
-# DCBSD - Distributed Content-Based Storage Database
+# DCBDB - Distributed Content-Based Database
 
-DCBSD is a distributed content-based storage database with a gRPC interface.
+DCBDB is a distributed content-based database with a gRPC interface.
 
 ## Quick Start
 
@@ -65,7 +65,7 @@ You can interact with the gRPC server using any gRPC client. The server implemen
 
 ### Using the Example Client
 
-DCBSD includes an example client that you can use to interact with the gRPC server. You can run it with:
+DCBDB includes an example client that you can use to interact with the gRPC server. You can run it with:
 
 ```bash
 cargo run --bin example_client -- --address http://127.0.0.1:50051
@@ -79,11 +79,11 @@ The example client:
 
 ### Using the Rust Client in Your Own Code
 
-DCBSD provides a Rust client that you can use to interact with the gRPC server in your own code. Here's an example of how to use it:
+DCBDB provides a Rust client that you can use to interact with the gRPC server in your own code. Here's an example of how to use it:
 
 ```rust
-use dcbsd::api::{DCBEvent, DCBEventStoreAPI, DCBQuery, DCBQueryItem};
-use dcbsd::grpc::GrpcEventStoreClient;
+use dcbdb::api::{DCBEvent, DCBEventStoreAPI, DCBQuery, DCBQueryItem};
+use dcbdb::grpc::GrpcEventStoreClient;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

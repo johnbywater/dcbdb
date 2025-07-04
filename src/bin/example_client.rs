@@ -1,9 +1,9 @@
-use dcbsd::api::{DCBEvent, DCBEventStoreAPI, DCBQuery, DCBQueryItem};
-use dcbsd::grpc::GrpcEventStoreClient;
+use dcbdb::api::{DCBEvent, DCBEventStoreAPI, DCBQuery, DCBQueryItem};
+use dcbdb::grpc::GrpcEventStoreClient;
 use clap::Parser;
 
 #[derive(Parser)]
-#[command(author, version, about = "DCBSD Example Client", long_about = None)]
+#[command(author, version, about = "DCBDB Example Client", long_about = None)]
 struct Args {
     /// Address of the gRPC server (e.g., "http://127.0.0.1:50051")
     #[arg(short, long, value_name = "ADDR", default_value = "http://127.0.0.1:50051")]
@@ -13,9 +13,9 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    
+
     println!("Connecting to gRPC server at {}", args.address);
-    
+
     // Connect to the gRPC server
     let client = GrpcEventStoreClient::connect(args.address).await?;
     println!("Connected successfully!");
@@ -26,7 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tags: vec!["tag1".to_string(), "tag2".to_string()],
         data: b"Hello, world!".to_vec(),
     };
-    
+
     println!("Appending event...");
     let position = client.append(vec![event], None)?;
     println!("Appended event at position: {}", position);
@@ -38,10 +38,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tags: vec!["tag1".to_string()],
         }],
     };
-    
+
     println!("Reading events...");
     let response = client.read(Some(query), None, None)?;
-    
+
     // Iterate through the events
     println!("Events:");
     for event in response {

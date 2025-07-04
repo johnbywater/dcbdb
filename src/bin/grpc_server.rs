@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 use clap::Parser;
-use dcbsd::grpc;
+use dcbdb::grpc;
 
 #[derive(Parser)]
-#[command(author, version, about = "DCBSD gRPC Server", long_about = None)]
+#[command(author, version, about = "DCBDB gRPC Server", long_about = None)]
 struct Args {
     /// Path to the database directory
     #[arg(short, long, value_name = "PATH")]
@@ -17,11 +17,11 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    
+
     println!("Starting gRPC server for database at {:?}", args.path);
     println!("Listening on {}", args.address);
-    
+
     grpc::start_grpc_server(args.path, &args.address).await?;
-    
+
     Ok(())
 }

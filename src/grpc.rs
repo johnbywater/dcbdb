@@ -442,9 +442,6 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
         after: Option<u64>,
         limit: Option<usize>,
     ) -> DCBResult<Box<dyn crate::api::DCBReadResponse + '_>> {
-        // Create a blocking runtime for the async read operation
-        let rt = tokio::runtime::Runtime::new().unwrap();
-
         // Convert API types to proto types
         let query_proto = query.map(|q| QueryProto {
             items: q
@@ -466,19 +463,38 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
             limit: limit_proto,
         };
 
-        // Execute the read operation in the runtime
+        // Execute the read operation
         let mut client = self.client.clone();
-        let response = rt.block_on(async move { client.read(request).await });
 
-        match response {
-            Ok(stream) => {
-                // Create a GrpcReadResponse that implements DCBReadResponse
-                Ok(Box::new(GrpcReadResponse::new(rt, stream.into_inner()))
-                    as Box<dyn crate::api::DCBReadResponse + '_>)
+        if tokio::runtime::Handle::try_current().is_ok() {
+            // We're already in a Tokio runtime, use the current one
+            let response = futures::executor::block_on(async move { client.read(request).await });
+
+            match response {
+                Ok(stream) => {
+                    // Create a GrpcReadResponse that implements DCBReadResponse
+                    Ok(Box::new(GrpcReadResponse::new_with_current_runtime(stream.into_inner()))
+                        as Box<dyn crate::api::DCBReadResponse + '_>)
+                }
+                Err(status) => Err(EventStoreError::Io(std::io::Error::other(format!(
+                    "gRPC read error: {status}"
+                )))),
             }
-            Err(status) => Err(EventStoreError::Io(std::io::Error::other(format!(
-                "gRPC read error: {status}"
-            )))),
+        } else {
+            // No Tokio runtime, create a new one
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let response = rt.block_on(async move { client.read(request).await });
+
+            match response {
+                Ok(stream) => {
+                    // Create a GrpcReadResponse that implements DCBReadResponse
+                    Ok(Box::new(GrpcReadResponse::new_with_runtime(rt, stream.into_inner()))
+                        as Box<dyn crate::api::DCBReadResponse + '_>)
+                }
+                Err(status) => Err(EventStoreError::Io(std::io::Error::other(format!(
+                    "gRPC read error: {status}"
+                )))),
+            }
         }
     }
 
@@ -487,9 +503,6 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
         events: Vec<DCBEvent>,
         condition: Option<DCBAppendCondition>,
     ) -> DCBResult<u64> {
-        // Create a blocking runtime for the async append operation
-        let rt = tokio::runtime::Runtime::new().unwrap();
-
         // Convert API types to proto types
         let events_proto: Vec<EventProto> = events
             .into_iter()
@@ -521,9 +534,17 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
             condition: condition_proto,
         };
 
-        // Execute the append operation in the runtime
+        // Execute the append operation
         let mut client = self.client.clone();
-        let response = rt.block_on(async move { client.append(request).await });
+
+        let response = if tokio::runtime::Handle::try_current().is_ok() {
+            // We're already in a Tokio runtime, use the current one
+            futures::executor::block_on(async move { client.append(request).await })
+        } else {
+            // No Tokio runtime, create a new one
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async move { client.append(request).await })
+        };
 
         match response {
             Ok(response) => Ok(response.into_inner().position),
@@ -541,15 +562,20 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
     }
 
     fn head(&self) -> DCBResult<Option<u64>> {
-        // Create a blocking runtime for the async head operation
-        let rt = tokio::runtime::Runtime::new().unwrap();
-
         // Create the head request
         let request = HeadRequestProto {};
 
-        // Execute the head operation in the runtime
+        // Execute the head operation
         let mut client = self.client.clone();
-        let response = rt.block_on(async move { client.head(request).await });
+
+        let response = if tokio::runtime::Handle::try_current().is_ok() {
+            // We're already in a Tokio runtime, use the current one
+            futures::executor::block_on(async move { client.head(request).await })
+        } else {
+            // No Tokio runtime, create a new one
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async move { client.head(request).await })
+        };
 
         match response {
             Ok(response) => Ok(response.into_inner().position),
@@ -561,8 +587,13 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
 }
 
 // Implementation of DCBReadResponse for the gRPC client
+enum RuntimeType {
+    Owned(tokio::runtime::Runtime),
+    Current,
+}
+
 struct GrpcReadResponse {
-    rt: tokio::runtime::Runtime,
+    runtime_type: RuntimeType,
     stream: tonic::codec::Streaming<ReadResponseProto>,
     events: Vec<DCBSequencedEvent>,
     current_index: usize,
@@ -570,12 +601,24 @@ struct GrpcReadResponse {
 }
 
 impl GrpcReadResponse {
-    fn new(
+    fn new_with_runtime(
         rt: tokio::runtime::Runtime,
         stream: tonic::codec::Streaming<ReadResponseProto>,
     ) -> Self {
         Self {
-            rt,
+            runtime_type: RuntimeType::Owned(rt),
+            stream,
+            events: Vec::new(),
+            current_index: 0,
+            head: None,
+        }
+    }
+
+    fn new_with_current_runtime(
+        stream: tonic::codec::Streaming<ReadResponseProto>,
+    ) -> Self {
+        Self {
+            runtime_type: RuntimeType::Current,
             stream,
             events: Vec::new(),
             current_index: 0,
@@ -584,8 +627,11 @@ impl GrpcReadResponse {
     }
 
     fn fetch_next_batch(&mut self) -> DCBResult<()> {
-        // Use the runtime to get the next message from the stream
-        let next_message = self.rt.block_on(async { self.stream.message().await });
+        // Use the appropriate method to get the next message from the stream
+        let next_message = match &mut self.runtime_type {
+            RuntimeType::Owned(rt) => rt.block_on(async { self.stream.message().await }),
+            RuntimeType::Current => futures::executor::block_on(async { self.stream.message().await }),
+        };
 
         match next_message {
             Ok(Some(response)) => {

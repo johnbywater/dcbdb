@@ -751,7 +751,7 @@ pub type Result<T> = std::result::Result<T, LmdbError>;
 // Free list management functions
 pub fn insert_freed_page_id(db: &mut Lmdb, writer: &mut LmdbWriter, tsn: TSN, freed_page_id: PageID) -> Result<()> {
     // Get the root page
-    let current_page = db.get_page(writer, writer.free_list_root_id)?;
+    let mut current_page = db.get_page(writer, writer.free_list_root_id)?;
     
     // Traverse the tree to find a leaf node
     let mut stack: Vec<PageID> = Vec::new();
@@ -761,8 +761,8 @@ pub fn insert_freed_page_id(db: &mut Lmdb, writer: &mut LmdbWriter, tsn: TSN, fr
         if let Node::FreeListInternal(internal_node) = &current_node {
             stack.push(current_page.page_id);
             let child_page_id = internal_node.child_ids.last().unwrap();
-            let child_page = db.get_page(writer, *child_page_id)?;
-            current_node = child_page.node.clone();
+            current_page = db.get_page(writer, *child_page_id)?;
+            current_node = current_page.node.clone();
         } else {
             return Err(LmdbError::DatabaseCorrupted("Expected FreeListInternal node".to_string()));
         }
@@ -1165,7 +1165,7 @@ pub fn insert_position(db: &mut Lmdb, writer: &mut LmdbWriter, key: Position, va
 
 pub fn remove_freed_page_id(db: &mut Lmdb, writer: &mut LmdbWriter, tsn: TSN, used_page_id: PageID) -> Result<()> {
     // Get the root page
-    let current_page = db.get_page(writer, writer.free_list_root_id)?;
+    let mut current_page = db.get_page(writer, writer.free_list_root_id)?;
     
     // Traverse the tree to find a leaf node
     let mut stack: Vec<PageID> = Vec::new();
@@ -1175,8 +1175,8 @@ pub fn remove_freed_page_id(db: &mut Lmdb, writer: &mut LmdbWriter, tsn: TSN, us
         if let Node::FreeListInternal(internal_node) = &current_node {
             stack.push(current_page.page_id);
             let child_page_id = internal_node.child_ids[0];
-            let child_page = db.get_page(writer, child_page_id)?;
-            current_node = child_page.node.clone();
+            current_page = db.get_page(writer, child_page_id)?;
+            current_node = current_page.node.clone();
         } else {
             return Err(LmdbError::DatabaseCorrupted("Expected FreeListInternal node".to_string()));
         }

@@ -39,6 +39,9 @@ pub mod grpc;
 // Export the MVCC module
 pub mod mvcc;
 
+// Export the MVCC Nodes module
+pub mod mvcc_nodes;
+
 #[cfg(test)]
 mod tests {
     #[test]

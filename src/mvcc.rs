@@ -48,6 +48,38 @@ impl HeaderNode {
         result.extend_from_slice(&self.position_root_id.0.to_le_bytes());
         result
     }
+    
+    /// Creates a HeaderNode from a byte slice
+    /// Expects a slice with 16 bytes:
+    /// - 4 bytes for tsn
+    /// - 4 bytes for next_page_id
+    /// - 4 bytes for free_list_root_id
+    /// - 4 bytes for position_root_id
+    ///
+    /// # Arguments
+    /// * `slice` - The byte slice to deserialize from
+    ///
+    /// # Returns
+    /// * `Result<Self>` - The deserialized HeaderNode or an error
+    pub fn from_slice(slice: &[u8]) -> Result<Self> {
+        if slice.len() != 16 {
+            return Err(LmdbError::DeserializationError(
+                format!("Expected 16 bytes, got {}", slice.len())
+            ));
+        }
+
+        let tsn = u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]);
+        let next_page_id = u32::from_le_bytes([slice[4], slice[5], slice[6], slice[7]]);
+        let free_list_root_id = u32::from_le_bytes([slice[8], slice[9], slice[10], slice[11]]);
+        let position_root_id = u32::from_le_bytes([slice[12], slice[13], slice[14], slice[15]]);
+
+        Ok(HeaderNode {
+            tsn: TSN(tsn),
+            next_page_id: PageID(next_page_id),
+            free_list_root_id: PageID(free_list_root_id),
+            position_root_id: PageID(position_root_id),
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,6 +92,16 @@ pub struct FreeListLeafValue {
 pub struct FreeListLeafNode {
     pub keys: Vec<TSN>,
     pub values: Vec<FreeListLeafValue>,
+}
+
+impl FreeListLeafNode {
+    /// Serializes the FreeListLeafNode to a byte array using MessagePack format
+    /// 
+    /// # Returns
+    /// * `Result<Vec<u8>, LmdbError>` - The serialized data or an error
+    pub fn serialize(&self) -> Result<Vec<u8>> {
+        encode::to_vec(self).map_err(|e| LmdbError::SerializationError(e.to_string()))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -115,7 +157,7 @@ impl Node {
                 Ok(node.serialize())
             }
             Node::FreeListLeaf(node) => {
-                encode::to_vec(node).map_err(|e| LmdbError::SerializationError(e.to_string()))
+                node.serialize()
             }
             Node::FreeListInternal(node) => {
                 encode::to_vec(node).map_err(|e| LmdbError::SerializationError(e.to_string()))
@@ -1336,6 +1378,112 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::thread;
     use tempfile::tempdir;
+    
+    mod nodes {
+        use super::*;
+        
+        #[test]
+        fn test_header_serialize() {
+            // Create a HeaderNode with known values
+            let header_node = HeaderNode {
+                tsn: TSN(42),
+                next_page_id: PageID(123),
+                free_list_root_id: PageID(456),
+                position_root_id: PageID(789),
+            };
+            
+            // Serialize the HeaderNode
+            let serialized = header_node.serialize();
+            
+            // Verify the serialized output has the correct length
+            assert_eq!(16, serialized.len());
+            
+            // Verify the serialized output has the correct byte values
+            // TSN(42) = 42u32 = [42, 0, 0, 0] in little-endian
+            assert_eq!(&[42, 0, 0, 0], &serialized[0..4]);
+            
+            // PageID(123) = 123u32 = [123, 0, 0, 0] in little-endian
+            assert_eq!(&[123, 0, 0, 0], &serialized[4..8]);
+            
+            // PageID(456) = 456u32 = [200, 1, 0, 0] in little-endian (456 = 200 + 1*256)
+            assert_eq!(&[200, 1, 0, 0], &serialized[8..12]);
+            
+            // PageID(789) = 789u32 = [21, 3, 0, 0] in little-endian (789 = 21 + 3*256)
+            assert_eq!(&[21, 3, 0, 0], &serialized[12..16]);
+            
+            // Deserialize back to a HeaderNode
+            let deserialized = HeaderNode::from_slice(&serialized)
+                .expect("Failed to deserialize HeaderNode");
+            
+            // Verify that the deserialized node matches the original
+            assert_eq!(header_node.tsn, deserialized.tsn);
+            assert_eq!(header_node.next_page_id, deserialized.next_page_id);
+            assert_eq!(header_node.free_list_root_id, deserialized.free_list_root_id);
+            assert_eq!(header_node.position_root_id, deserialized.position_root_id);
+        }
+        
+        #[test]
+        fn test_freelist_leaf_serialize() {
+            // Create a FreeListLeafNode with known values
+            let leaf_node = FreeListLeafNode {
+                keys: vec![TSN(10), TSN(20), TSN(30)],
+                values: vec![
+                    FreeListLeafValue {
+                        page_ids: vec![PageID(100), PageID(101)],
+                        root_id: Some(PageID(200)),
+                    },
+                    FreeListLeafValue {
+                        page_ids: vec![PageID(102), PageID(103), PageID(104)],
+                        root_id: None,
+                    },
+                    FreeListLeafValue {
+                        page_ids: vec![PageID(105)],
+                        root_id: Some(PageID(300)),
+                    },
+                ],
+            };
+            
+            // Serialize the FreeListLeafNode
+            let serialized = leaf_node.serialize().unwrap();
+            
+            // Verify the serialized output is not empty
+            assert!(!serialized.is_empty());
+            
+            // Deserialize back to a FreeListLeafNode
+            let deserialized: FreeListLeafNode = decode::from_slice(&serialized)
+                .expect("Failed to deserialize FreeListLeafNode");
+            
+            // Verify that the deserialized node matches the original
+            assert_eq!(leaf_node, deserialized);
+            
+            // Verify specific properties
+            assert_eq!(3, deserialized.keys.len());
+            assert_eq!(3, deserialized.values.len());
+            
+            // Check keys
+            assert_eq!(TSN(10), deserialized.keys[0]);
+            assert_eq!(TSN(20), deserialized.keys[1]);
+            assert_eq!(TSN(30), deserialized.keys[2]);
+            
+            // Check first value
+            assert_eq!(2, deserialized.values[0].page_ids.len());
+            assert_eq!(PageID(100), deserialized.values[0].page_ids[0]);
+            assert_eq!(PageID(101), deserialized.values[0].page_ids[1]);
+            assert_eq!(Some(PageID(200)), deserialized.values[0].root_id);
+            
+            // Check second value
+            assert_eq!(3, deserialized.values[1].page_ids.len());
+            assert_eq!(PageID(102), deserialized.values[1].page_ids[0]);
+            assert_eq!(PageID(103), deserialized.values[1].page_ids[1]);
+            assert_eq!(PageID(104), deserialized.values[1].page_ids[2]);
+            assert_eq!(None, deserialized.values[1].root_id);
+            
+            // Check third value
+            assert_eq!(1, deserialized.values[2].page_ids.len());
+            assert_eq!(PageID(105), deserialized.values[2].page_ids[0]);
+            assert_eq!(Some(PageID(300)), deserialized.values[2].root_id);
+        }
+    }
 
     #[test]
     fn test_lmdb_init() {

@@ -270,6 +270,121 @@ pub struct FreeListInternalNode {
     pub child_ids: Vec<PageID>,
 }
 
+impl FreeListInternalNode {
+    /// Calculates the size needed to serialize the FreeListInternalNode
+    ///
+    /// # Returns
+    /// * `usize` - The size in bytes
+    fn calc_serialized_node_size(&self) -> usize {
+        // 2 bytes for keys_len
+        let mut total_size = 2;
+        
+        // 4 bytes for each TSN in keys
+        total_size += self.keys.len() * 4;
+        
+        // 2 bytes for child_ids length
+        total_size += 2;
+        
+        // 4 bytes for each PageID in child_ids
+        total_size += self.child_ids.len() * 4;
+        
+        total_size
+    }
+
+    /// Serializes the FreeListInternalNode to a byte array by manually converting its fields to bytes
+    /// 
+    /// # Returns
+    /// * `Result<Vec<u8>, LmdbError>` - The serialized data or an error
+    pub fn serialize(&self) -> Result<Vec<u8>> {
+        let total_size = self.calc_serialized_node_size();
+        let mut result = Vec::with_capacity(total_size);
+        
+        // Serialize the length of the keys (2 bytes)
+        result.extend_from_slice(&(self.keys.len() as u16).to_le_bytes());
+        
+        // Serialize each key (4 bytes each)
+        for key in &self.keys {
+            result.extend_from_slice(&key.0.to_le_bytes());
+        }
+        
+        // Serialize the length of child_ids (2 bytes)
+        result.extend_from_slice(&(self.child_ids.len() as u16).to_le_bytes());
+        
+        // Serialize each child_id (4 bytes each)
+        for child_id in &self.child_ids {
+            result.extend_from_slice(&child_id.0.to_le_bytes());
+        }
+        
+        Ok(result)
+    }
+    
+    /// Creates a FreeListInternalNode from a byte slice
+    ///
+    /// # Arguments
+    /// * `slice` - The byte slice to deserialize from
+    ///
+    /// # Returns
+    /// * `Result<Self>` - The deserialized FreeListInternalNode or an error
+    pub fn from_slice(slice: &[u8]) -> Result<Self> {
+        // Check if the slice has at least 2 bytes for keys_len
+        if slice.len() < 2 {
+            return Err(LmdbError::DeserializationError(
+                format!("Expected at least 2 bytes, got {}", slice.len())
+            ));
+        }
+        
+        // Extract the length of the keys (first 2 bytes)
+        let keys_len = u16::from_le_bytes([slice[0], slice[1]]) as usize;
+        
+        // Calculate the minimum expected size for the keys
+        let min_expected_size = 2 + (keys_len * 4);
+        if slice.len() < min_expected_size {
+            return Err(LmdbError::DeserializationError(
+                format!("Expected at least {} bytes for keys, got {}", min_expected_size, slice.len())
+            ));
+        }
+        
+        // Extract the keys (4 bytes each)
+        let mut keys = Vec::with_capacity(keys_len);
+        for i in 0..keys_len {
+            let start = 2 + (i * 4);
+            let tsn = u32::from_le_bytes([slice[start], slice[start+1], slice[start+2], slice[start+3]]);
+            keys.push(TSN(tsn));
+        }
+        
+        // Extract the length of child_ids (2 bytes)
+        let offset = 2 + (keys_len * 4);
+        if offset + 2 > slice.len() {
+            return Err(LmdbError::DeserializationError(
+                "Unexpected end of data while reading child_ids length".to_string()
+            ));
+        }
+        
+        let child_ids_len = u16::from_le_bytes([slice[offset], slice[offset+1]]) as usize;
+        
+        // Calculate the minimum expected size for the child_ids
+        let min_expected_size = offset + 2 + (child_ids_len * 4);
+        if slice.len() < min_expected_size {
+            return Err(LmdbError::DeserializationError(
+                format!("Expected at least {} bytes for child_ids, got {}", min_expected_size, slice.len())
+            ));
+        }
+        
+        // Extract the child_ids (4 bytes each)
+        let mut child_ids = Vec::with_capacity(child_ids_len);
+        for i in 0..child_ids_len {
+            let start = offset + 2 + (i * 4);
+            let page_id = u32::from_le_bytes([slice[start], slice[start+1], slice[start+2], slice[start+3]]);
+            child_ids.push(PageID(page_id));
+        }
+        
+        Ok(FreeListInternalNode {
+            keys,
+            child_ids,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PositionIndexRecord {
     pub segment: u32,
@@ -320,7 +435,7 @@ impl Node {
                 node.serialize()
             }
             Node::FreeListInternal(node) => {
-                encode::to_vec(node).map_err(|e| LmdbError::SerializationError(e.to_string()))
+                node.serialize()
             }
             Node::PositionLeaf(node) => {
                 encode::to_vec(node).map_err(|e| LmdbError::SerializationError(e.to_string()))
@@ -334,8 +449,7 @@ impl Node {
     pub fn deserialize(node_type: u8, data: &[u8]) -> Result<Self> {
         match node_type {
             PAGE_TYPE_HEADER => {
-                let node: HeaderNode = decode::from_slice(data)
-                    .map_err(|e| LmdbError::DeserializationError(e.to_string()))?;
+                let node = HeaderNode::from_slice(data)?;
                 Ok(Node::Header(node))
             }
             PAGE_TYPE_FREELIST_LEAF => {
@@ -343,8 +457,7 @@ impl Node {
                 Ok(Node::FreeListLeaf(node))
             }
             PAGE_TYPE_FREELIST_INTERNAL => {
-                let node: FreeListInternalNode = decode::from_slice(data)
-                    .map_err(|e| LmdbError::DeserializationError(e.to_string()))?;
+                let node = FreeListInternalNode::from_slice(data)?;
                 Ok(Node::FreeListInternal(node))
             }
             PAGE_TYPE_POSITION_LEAF => {
@@ -1641,6 +1754,85 @@ mod tests {
             assert_eq!(1, deserialized.values[2].page_ids.len());
             assert_eq!(PageID(105), deserialized.values[2].page_ids[0]);
             assert_eq!(Some(PageID(300)), deserialized.values[2].root_id);
+        }
+        
+        #[test]
+        fn test_freelist_internal_serialize() {
+            // Create a FreeListInternalNode with known values
+            let internal_node = FreeListInternalNode {
+                keys: vec![TSN(10), TSN(20), TSN(30)],
+                child_ids: vec![PageID(100), PageID(200), PageID(300), PageID(400)],
+            };
+            
+            // Serialize the FreeListInternalNode using its serialize method
+            let serialized = internal_node.serialize().unwrap();
+            
+            // Verify the serialized output is not empty
+            assert!(!serialized.is_empty());
+            
+            // Verify the serialized output has the correct structure
+            // First 2 bytes: keys_len (3) = [3, 0] in little-endian
+            assert_eq!(&[3, 0], &serialized[0..2]);
+            
+            // Next 12 bytes: 3 TSNs (4 bytes each)
+            // TSN(10) = [10, 0, 0, 0] in little-endian
+            assert_eq!(&[10, 0, 0, 0], &serialized[2..6]);
+            // TSN(20) = [20, 0, 0, 0] in little-endian
+            assert_eq!(&[20, 0, 0, 0], &serialized[6..10]);
+            // TSN(30) = [30, 0, 0, 0] in little-endian
+            assert_eq!(&[30, 0, 0, 0], &serialized[10..14]);
+            
+            // Next 2 bytes: child_ids_len (4) = [4, 0] in little-endian
+            assert_eq!(&[4, 0], &serialized[14..16]);
+            
+            // Next 16 bytes: 4 PageIDs (4 bytes each)
+            // PageID(100) = [100, 0, 0, 0] in little-endian
+            assert_eq!(&[100, 0, 0, 0], &serialized[16..20]);
+            // PageID(200) = [200, 0, 0, 0] in little-endian
+            assert_eq!(&[200, 0, 0, 0], &serialized[20..24]);
+            // PageID(300) = [44, 1, 0, 0] in little-endian (300 = 44 + 1*256)
+            assert_eq!(&[44, 1, 0, 0], &serialized[24..28]);
+            // PageID(400) = [144, 1, 0, 0] in little-endian (400 = 144 + 1*256)
+            assert_eq!(&[144, 1, 0, 0], &serialized[28..32]);
+            
+            // Deserialize back to a FreeListInternalNode using from_slice
+            let deserialized = FreeListInternalNode::from_slice(&serialized)
+                .expect("Failed to deserialize FreeListInternalNode");
+            
+            // Verify that the deserialized node matches the original
+            assert_eq!(internal_node, deserialized);
+            
+            // Verify specific properties
+            assert_eq!(3, deserialized.keys.len());
+            assert_eq!(4, deserialized.child_ids.len());
+            
+            // Check keys
+            assert_eq!(TSN(10), deserialized.keys[0]);
+            assert_eq!(TSN(20), deserialized.keys[1]);
+            assert_eq!(TSN(30), deserialized.keys[2]);
+            
+            // Check child_ids
+            assert_eq!(PageID(100), deserialized.child_ids[0]);
+            assert_eq!(PageID(200), deserialized.child_ids[1]);
+            assert_eq!(PageID(300), deserialized.child_ids[2]);
+            assert_eq!(PageID(400), deserialized.child_ids[3]);
+            
+            // Also test serialization through Node enum
+            let node = Node::FreeListInternal(internal_node.clone());
+            let node_serialized = node.serialize().unwrap();
+            
+            // Verify that serialization through Node produces the same result
+            assert_eq!(serialized, node_serialized);
+            
+            // Test deserialization through Node enum
+            let node_deserialized = Node::deserialize(PAGE_TYPE_FREELIST_INTERNAL, &node_serialized).unwrap();
+            
+            // Verify that deserialization through Node produces the correct result
+            if let Node::FreeListInternal(deserialized_internal) = node_deserialized {
+                assert_eq!(internal_node, deserialized_internal);
+            } else {
+                panic!("Expected FreeListInternal node");
+            }
         }
     }
 

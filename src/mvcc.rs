@@ -95,12 +95,172 @@ pub struct FreeListLeafNode {
 }
 
 impl FreeListLeafNode {
-    /// Serializes the FreeListLeafNode to a byte array using MessagePack format
+    /// Calculates the size needed to serialize the FreeListLeafNode
+    ///
+    /// # Returns
+    /// * `usize` - The size in bytes
+    fn calc_serialized_node_size(&self) -> usize {
+        // 2 bytes for keys_len
+        let mut total_size = 2;
+        
+        // 4 bytes for each TSN in keys
+        total_size += self.keys.len() * 4;
+        
+        // For each value:
+        for value in &self.values {
+            // 2 bytes for page_ids length
+            total_size += 2;
+            
+            // 4 bytes for each PageID in page_ids
+            total_size += value.page_ids.len() * 4;
+            
+            // 1 byte for root_id presence flag + 4 bytes if present
+            total_size += 1;
+            if value.root_id.is_some() {
+                total_size += 4;
+            }
+        }
+        
+        total_size
+    }
+
+    /// Serializes the FreeListLeafNode to a byte array by manually converting its fields to bytes
     /// 
     /// # Returns
     /// * `Result<Vec<u8>, LmdbError>` - The serialized data or an error
     pub fn serialize(&self) -> Result<Vec<u8>> {
-        encode::to_vec(self).map_err(|e| LmdbError::SerializationError(e.to_string()))
+        let total_size = self.calc_serialized_node_size();
+        let mut result = Vec::with_capacity(total_size);
+        
+        // Serialize the length of the keys (2 bytes)
+        result.extend_from_slice(&(self.keys.len() as u16).to_le_bytes());
+        
+        // Serialize each key (4 bytes each)
+        for key in &self.keys {
+            result.extend_from_slice(&key.0.to_le_bytes());
+        }
+        
+        // Serialize each value
+        for value in &self.values {
+            // Serialize the length of page_ids (2 bytes)
+            result.extend_from_slice(&(value.page_ids.len() as u16).to_le_bytes());
+            
+            // Serialize each PageID (4 bytes each)
+            for page_id in &value.page_ids {
+                result.extend_from_slice(&page_id.0.to_le_bytes());
+            }
+            
+            // Serialize the root_id (1 byte flag + 4 bytes if present)
+            if let Some(root_id) = value.root_id {
+                result.push(1); // Flag indicating root_id is present
+                result.extend_from_slice(&root_id.0.to_le_bytes());
+            } else {
+                result.push(0); // Flag indicating root_id is not present
+            }
+        }
+        
+        Ok(result)
+    }
+    
+    /// Creates a FreeListLeafNode from a byte slice
+    ///
+    /// # Arguments
+    /// * `slice` - The byte slice to deserialize from
+    ///
+    /// # Returns
+    /// * `Result<Self>` - The deserialized FreeListLeafNode or an error
+    pub fn from_slice(slice: &[u8]) -> Result<Self> {
+        // Check if the slice has at least 2 bytes for keys_len
+        if slice.len() < 2 {
+            return Err(LmdbError::DeserializationError(
+                format!("Expected at least 2 bytes, got {}", slice.len())
+            ));
+        }
+        
+        // Extract the length of the keys (first 2 bytes)
+        let keys_len = u16::from_le_bytes([slice[0], slice[1]]) as usize;
+        
+        // Calculate the minimum expected size for the keys
+        let min_expected_size = 2 + (keys_len * 4);
+        if slice.len() < min_expected_size {
+            return Err(LmdbError::DeserializationError(
+                format!("Expected at least {} bytes for keys, got {}", min_expected_size, slice.len())
+            ));
+        }
+        
+        // Extract the keys (4 bytes each)
+        let mut keys = Vec::with_capacity(keys_len);
+        for i in 0..keys_len {
+            let start = 2 + (i * 4);
+            let tsn = u32::from_le_bytes([slice[start], slice[start+1], slice[start+2], slice[start+3]]);
+            keys.push(TSN(tsn));
+        }
+        
+        // Extract the values
+        let mut values = Vec::with_capacity(keys_len);
+        let mut offset = 2 + (keys_len * 4);
+        
+        for _ in 0..keys_len {
+            if offset + 2 > slice.len() {
+                return Err(LmdbError::DeserializationError(
+                    "Unexpected end of data while reading page_ids length".to_string()
+                ));
+            }
+            
+            // Extract the length of page_ids (2 bytes)
+            let page_ids_len = u16::from_le_bytes([slice[offset], slice[offset+1]]) as usize;
+            offset += 2;
+            
+            if offset + (page_ids_len * 4) > slice.len() {
+                return Err(LmdbError::DeserializationError(
+                    "Unexpected end of data while reading page_ids".to_string()
+                ));
+            }
+            
+            // Extract the page_ids (4 bytes each)
+            let mut page_ids = Vec::with_capacity(page_ids_len);
+            for j in 0..page_ids_len {
+                let start = offset + (j * 4);
+                let page_id = u32::from_le_bytes([slice[start], slice[start+1], slice[start+2], slice[start+3]]);
+                page_ids.push(PageID(page_id));
+            }
+            offset += page_ids_len * 4;
+            
+            if offset >= slice.len() {
+                return Err(LmdbError::DeserializationError(
+                    "Unexpected end of data while reading root_id flag".to_string()
+                ));
+            }
+            
+            // Extract the root_id flag (1 byte)
+            let has_root_id = slice[offset] != 0;
+            offset += 1;
+            
+            // Extract the root_id if present (4 bytes)
+            let root_id = if has_root_id {
+                if offset + 4 > slice.len() {
+                    return Err(LmdbError::DeserializationError(
+                        "Unexpected end of data while reading root_id".to_string()
+                    ));
+                }
+                
+                let page_id = u32::from_le_bytes([slice[offset], slice[offset+1], slice[offset+2], slice[offset+3]]);
+                offset += 4;
+                Some(PageID(page_id))
+            } else {
+                None
+            };
+            
+            values.push(FreeListLeafValue {
+                page_ids,
+                root_id,
+            });
+        }
+        
+        Ok(FreeListLeafNode {
+            keys,
+            values,
+        })
     }
 }
 
@@ -179,8 +339,7 @@ impl Node {
                 Ok(Node::Header(node))
             }
             PAGE_TYPE_FREELIST_LEAF => {
-                let node: FreeListLeafNode = decode::from_slice(data)
-                    .map_err(|e| LmdbError::DeserializationError(e.to_string()))?;
+                let node = FreeListLeafNode::from_slice(data)?;
                 Ok(Node::FreeListLeaf(node))
             }
             PAGE_TYPE_FREELIST_INTERNAL => {
@@ -1449,8 +1608,8 @@ mod tests {
             // Verify the serialized output is not empty
             assert!(!serialized.is_empty());
             
-            // Deserialize back to a FreeListLeafNode
-            let deserialized: FreeListLeafNode = decode::from_slice(&serialized)
+            // Deserialize back to a FreeListLeafNode using from_slice
+            let deserialized = FreeListLeafNode::from_slice(&serialized)
                 .expect("Failed to deserialize FreeListLeafNode");
             
             // Verify that the deserialized node matches the original

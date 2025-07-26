@@ -1155,7 +1155,6 @@ mod tests {
             assert_eq!(TSN(1), writer.tsn);
             assert_eq!(PageID(0), writer.header_page_id);
             db.commit(&mut writer).unwrap();
-
         }
         
         {
@@ -1177,7 +1176,6 @@ mod tests {
             assert_eq!(TSN(4), writer.tsn);
             assert_eq!(PageID(1), writer.header_page_id);
             db.commit(&mut writer).unwrap();
-
         }
         
         {

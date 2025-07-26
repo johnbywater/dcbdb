@@ -268,10 +268,32 @@ impl Lmdb {
 
         // Deserialize page
         let deserialized_page = self.read_page(page_id).unwrap();
-        writer.insert_deserializes(deserialized_page);
+        writer.insert_deserialized(deserialized_page);
 
         // Return page
         Ok(writer.deserialized.get(&page_id).unwrap().clone())
+    }
+    
+    pub fn get_page_mut<'a>(&self, writer: &'a mut LmdbWriter, page_id: PageID) -> Result<&'a mut Page> {
+        // First check if we need to deserialize the page
+        let needs_deserialization = !writer.dirty.contains_key(&page_id) && !writer.deserialized.contains_key(&page_id);
+        
+        if needs_deserialization {
+            // Deserialize page and insert it into deserialized collection
+            let deserialized_page = self.read_page(page_id).unwrap();
+            writer.insert_deserialized(deserialized_page);
+        }
+        
+        // Now get a mutable reference to the page
+        if let Some(page) = writer.dirty.get_mut(&page_id) {
+            return Ok(page);
+        }
+        
+        if let Some(page) = writer.deserialized.get_mut(&page_id) {
+            return Ok(page);
+        }
+        
+        Err(LmdbError::PageNotFound(page_id))
     }
 }
 
@@ -366,7 +388,7 @@ impl LmdbWriter {
         }
     }
 
-    pub fn insert_deserializes(&mut self, page: Page) {
+    pub fn insert_deserialized(&mut self, page: Page) {
         self.deserialized.insert(page.page_id, page);
     }
 

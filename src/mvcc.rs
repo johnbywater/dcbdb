@@ -46,10 +46,11 @@ pub struct LmdbWriter {
     pub header_page_id: PageID,
     pub tsn: TSN,
     pub next_page_id: PageID,
-    pub free_list_root_id: PageID,
+    pub freetree_root_id: PageID,
     pub position_root_id: PageID,
-    pub free_page_ids: VecDeque<(PageID, TSN)>,
+    pub reusable_page_ids: VecDeque<(PageID, TSN)>,
     pub freed_page_ids: VecDeque<PageID>,
+    pub deserialized: HashMap<PageID, Page>,
     pub dirty: HashMap<PageID, Page>,
     pub reused_page_ids: VecDeque<(PageID, TSN)>,
 }
@@ -83,7 +84,7 @@ impl Lmdb {
         
         if lmdb.pager.is_file_new {
             // Initialize new database
-            let free_list_root_id = PageID(2);
+            let freetree_root_id = PageID(2);
             let position_root_id = PageID(3);
             let next_page_id = PageID(4);
             
@@ -91,7 +92,7 @@ impl Lmdb {
             let header_node0 = HeaderNode {
                 tsn: TSN(0),
                 next_page_id,
-                free_list_root_id,
+                freetree_root_id,
                 position_root_id,
             };
             
@@ -106,7 +107,7 @@ impl Lmdb {
                 keys: Vec::new(),
                 values: Vec::new(),
             };
-            let free_list_page = Page::new(free_list_root_id, Node::FreeListLeaf(free_list_leaf));
+            let free_list_page = Page::new(freetree_root_id, Node::FreeListLeaf(free_list_leaf));
             lmdb.write_page(&free_list_page)?;
             
             // Create and write empty position index root page
@@ -124,27 +125,26 @@ impl Lmdb {
         Ok(lmdb)
     }
     
-    pub fn get_latest_header(&mut self) -> Result<Page> {
-        let header0 = self.read_page(self.header_page_id0)?;
-        let header1 = self.read_page(self.header_page_id1)?;
-        
-        let header0_tsn = match &header0.node {
-            Node::Header(node) => node.tsn,
-            _ => return Err(LmdbError::DatabaseCorrupted("Invalid header node type".to_string())),
-        };
-        
-        let header1_tsn = match &header1.node {
-            Node::Header(node) => node.tsn,
-            _ => return Err(LmdbError::DatabaseCorrupted("Invalid header node type".to_string())),
-        };
-        
-        if header1_tsn > header0_tsn {
-            Ok(header1)
+    pub fn get_latest_header(&mut self) -> Result<(PageID, HeaderNode)> {
+        let header0 = self.read_header(self.header_page_id0)?;
+        let header1 = self.read_header(self.header_page_id1)?;
+
+        if header1.tsn > header0.tsn {
+            Ok((self.header_page_id1, header1))
         } else {
-            Ok(header0)
+            Ok((self.header_page_id0, header0))
         }
     }
-    
+
+    pub fn read_header(&mut self, page_id: PageID) -> Result<HeaderNode> {
+        let header = self.read_page(page_id)?;
+        let header_node = match header.node {
+            Node::Header(node) => node,
+            _ => return Err(LmdbError::DatabaseCorrupted("Invalid header node type".to_string())),
+        };
+        Ok(header_node)
+    }
+
     pub fn read_page(&self, page_id: PageID) -> Result<Page> {
         let page_data = self.pager.read_page(page_id)?;
         Page::deserialize(page_id, &page_data)
@@ -162,12 +162,7 @@ impl Lmdb {
     }
     
     pub fn reader<'a>(&'a mut self) -> Result<LmdbReader> {
-        let header = self.get_latest_header()?;
-        
-        let header_node = match &header.node {
-            Node::Header(node) => node,
-            _ => return Err(LmdbError::DatabaseCorrupted("Invalid header node type".to_string())),
-        };
+        let (header_page_id, header_node) = self.get_latest_header()?;
         
         // Generate a unique ID for this reader using the counter
         let reader_id = {
@@ -178,7 +173,7 @@ impl Lmdb {
         
         // Create the reader with the unique ID
         let reader = LmdbReader {
-            header_page_id: header.page_id,
+            header_page_id,
             tsn: header_node.tsn,
             position_root_id: header_node.position_root_id,
             reader_id,
@@ -193,31 +188,19 @@ impl Lmdb {
     
     pub fn writer<'a>(&'a mut self) -> Result<LmdbWriter> {
         // Get the latest header
-        let header = self.get_latest_header()?;
+        let (header_page_id, header_node) = self.get_latest_header()?;
 
-        let header_node = match &header.node {
-            Node::Header(node) => node,
-            _ => return Err(LmdbError::DatabaseCorrupted("Invalid header node type".to_string())),
-        };
-
-        // Increment the TSN
-        let next_tsn = TSN(header_node.tsn.0 + 1);
-
-        // Get free page IDs
-        println!("Getting free page IDs for TSN {:?}...", next_tsn);
         // Create the writer
         let mut writer = LmdbWriter::new(
-            header.page_id,
-            next_tsn,
+            header_page_id,
+            TSN(header_node.tsn.0 + 1),
             header_node.next_page_id,
-            header_node.free_list_root_id,
+            header_node.freetree_root_id,
             header_node.position_root_id,
-            VecDeque::new(),
         );
 
-        // let mut writer= &writer;
-        get_free_page_ids(self, &mut writer)?;
-
+        // Find the reusable page IDs.
+        get_reusable_page_ids(self, &mut writer)?;
 
         Ok(writer)
     }
@@ -259,7 +242,7 @@ impl Lmdb {
         let header_node = HeaderNode {
             tsn: writer.tsn,
             next_page_id: writer.next_page_id,
-            free_list_root_id: writer.free_list_root_id,
+            freetree_root_id: writer.freetree_root_id,
             position_root_id: writer.position_root_id,
         };
         
@@ -272,16 +255,26 @@ impl Lmdb {
         Ok(())
     }
     
-    pub fn get_page(&self, writer: &LmdbWriter, page_id: PageID) -> Result<Page> {
+    pub fn get_page(&self, writer: &mut LmdbWriter, page_id: PageID) -> Result<Page> {
         // Check if the page is in the dirty pages
         if let Some(page) = writer.dirty.get(&page_id) {
             return Ok(page.clone());
         }
-        
-        // Otherwise read it from disk
-        self.read_page(page_id)
+
+        // Check if the page is already deserialized
+        if let Some(page) = writer.deserialized.get(&page_id) {
+            return Ok(page.clone());
+        }
+
+        // Deserialize page
+        let deserialized_page = self.read_page(page_id).unwrap();
+        writer.insert_deserializes(deserialized_page);
+
+        // Return page
+        Ok(writer.deserialized.get(&page_id).unwrap().clone())
     }
 }
+
 // Page header format: type(1) + crc(4) + len(4)
 const PAGE_HEADER_SIZE: usize = 9;
 
@@ -356,21 +349,25 @@ impl LmdbWriter {
         header_page_id: PageID,
         tsn: TSN,
         next_page_id: PageID,
-        free_list_root_id: PageID,
+        freetree_root_id: PageID,
         position_root_id: PageID,
-        free_page_ids: VecDeque<(PageID, TSN)>,
     ) -> Self {
         Self {
             header_page_id,
             tsn,
             next_page_id,
-            free_list_root_id,
+            freetree_root_id,
             position_root_id,
-            free_page_ids,
+            reusable_page_ids: VecDeque::new(),
             freed_page_ids: VecDeque::new(),
+            deserialized: HashMap::new(),
             dirty: HashMap::new(),
             reused_page_ids: VecDeque::new(),
         }
+    }
+
+    pub fn insert_deserializes(&mut self, page: Page) {
+        self.deserialized.insert(page.page_id, page);
     }
 
     pub fn mark_dirty(&mut self, page: Page) {
@@ -381,7 +378,7 @@ impl LmdbWriter {
     }
 
     pub fn alloc_page_id(&mut self) -> PageID {
-        if let Some((free_page_id, tsn)) = self.free_page_ids.pop_front() {
+        if let Some((free_page_id, tsn)) = self.reusable_page_ids.pop_front() {
             self.reused_page_ids.push_back((free_page_id, tsn));
             return free_page_id;
         }
@@ -431,15 +428,18 @@ impl LmdbWriter {
     }
 }
 
-pub fn get_free_page_ids(db: &mut Lmdb, writer: &mut LmdbWriter) -> Result<()> {
-    println!("Root page is {:?}", writer.free_list_root_id);
-    let root_page = db.get_page(writer, writer.free_list_root_id)?;
+pub fn get_reusable_page_ids(db: &mut Lmdb, writer: &mut LmdbWriter) -> Result<()> {
+    // Get free page IDs
+    println!("Getting free page IDs for TSN {:?}...", writer.tsn);
 
     // Find the smallest reader TSN
     let smallest_reader_tsn = {
         db.reader_tsns.lock().unwrap().values().min().cloned()
     };
     println!("Smallest reader TSN: {:?}", smallest_reader_tsn);
+
+    let root_page = db.get_page(writer, writer.freetree_root_id)?;
+    println!("Root page is {:?}", writer.freetree_root_id);
 
     // Walk the tree to find leaf nodes
     let mut stack = vec![(root_page, 0)];
@@ -469,7 +469,7 @@ pub fn get_free_page_ids(db: &mut Lmdb, writer: &mut LmdbWriter) -> Result<()> {
                     let leaf_value = &node.values[i];
                     if leaf_value.root_id.is_none() {
                         for &page_id in &leaf_value.page_ids {
-                            writer.free_page_ids.push_back((page_id, tsn));
+                            writer.reusable_page_ids.push_back((page_id, tsn));
                         }
                     } else {
                         // TODO: Traverse into free list subtree
@@ -488,9 +488,9 @@ pub fn get_free_page_ids(db: &mut Lmdb, writer: &mut LmdbWriter) -> Result<()> {
 pub fn insert_freed_page_id(db: &mut Lmdb, writer: &mut LmdbWriter, tsn: TSN, freed_page_id: PageID) -> Result<()> {
     println!("");
     println!("Inserting freed page ID {:?} for TSN {:?}...", freed_page_id, tsn);
-    println!("Root page is {:?}", writer.free_list_root_id);
+    println!("Root page is {:?}", writer.freetree_root_id);
     // Get the root page
-    let mut current_page = db.get_page(writer, writer.free_list_root_id)?;
+    let mut current_page = db.get_page(writer, writer.freetree_root_id)?;
     
     // Traverse the tree to find a leaf node
     let mut stack: Vec<PageID> = Vec::new();
@@ -701,8 +701,8 @@ pub fn insert_freed_page_id(db: &mut Lmdb, writer: &mut LmdbWriter, tsn: TSN, fr
                 "Replacing root page {:?} with {:?} in header", old_id, new_id
             );
 
-            if writer.free_list_root_id == old_id {
-                writer.free_list_root_id = new_id;
+            if writer.freetree_root_id == old_id {
+                writer.freetree_root_id = new_id;
             } else {
                 return Err(LmdbError::DatabaseCorrupted("Root ID mismatch".to_string()));
             }
@@ -712,7 +712,7 @@ pub fn insert_freed_page_id(db: &mut Lmdb, writer: &mut LmdbWriter, tsn: TSN, fr
             // Create a new root
             let new_internal_node = FreeListInternalNode {
                 keys: vec![promoted_key],
-                child_ids: vec![writer.free_list_root_id, promoted_page_id],
+                child_ids: vec![writer.freetree_root_id, promoted_page_id],
             };
             
             let new_root_page_id = writer.alloc_page_id();
@@ -723,7 +723,7 @@ pub fn insert_freed_page_id(db: &mut Lmdb, writer: &mut LmdbWriter, tsn: TSN, fr
             );
             writer.mark_dirty(new_root_page);
 
-            writer.free_list_root_id = new_root_page_id;
+            writer.freetree_root_id = new_root_page_id;
         }
     } else {
         // No splitting needed, just update the page
@@ -731,8 +731,8 @@ pub fn insert_freed_page_id(db: &mut Lmdb, writer: &mut LmdbWriter, tsn: TSN, fr
         
         // Update the root if needed
         if let Some((old_id, new_id)) = replacement_info {
-            if writer.free_list_root_id == old_id {
-                writer.free_list_root_id = new_id;
+            if writer.freetree_root_id == old_id {
+                writer.freetree_root_id = new_id;
                 println!(
                     "Replacing root page {:?} with {:?} in header", old_id, new_id
                 );
@@ -746,9 +746,9 @@ pub fn insert_freed_page_id(db: &mut Lmdb, writer: &mut LmdbWriter, tsn: TSN, fr
 pub fn remove_freed_page_id(db: &mut Lmdb, writer: &mut LmdbWriter, tsn: TSN, used_page_id: PageID) -> Result<()> {
     println!("");
     println!("Removing {:?} from {:?}...", used_page_id, tsn);
-    println!("Root is {:?}", writer.free_list_root_id);
+    println!("Root is {:?}", writer.freetree_root_id);
     // Get the root page
-    let mut current_page = db.get_page(writer, writer.free_list_root_id)?;
+    let mut current_page = db.get_page(writer, writer.freetree_root_id)?;
 
     // Traverse the tree to find a leaf node
     let mut stack: Vec<PageID> = Vec::new();
@@ -891,14 +891,14 @@ pub fn remove_freed_page_id(db: &mut Lmdb, writer: &mut LmdbWriter, tsn: TSN, us
 
     // Update the root if needed
     if let Some((old_id, new_id)) = current_replacement_info {
-        if writer.free_list_root_id == old_id {
-            writer.free_list_root_id = new_id;
+        if writer.freetree_root_id == old_id {
+            writer.freetree_root_id = new_id;
         } else {
             return Err(LmdbError::DatabaseCorrupted("Root ID mismatch".to_string()));
         }
         println!(
             "Updated header with replacement root page {:?}",
-            writer.free_list_root_id
+            writer.freetree_root_id
         );
     }
 
@@ -1262,10 +1262,10 @@ mod tests {
             let mut writer = db.writer().unwrap();
             
             // Check there are no free pages
-            assert_eq!(0, writer.free_page_ids.len());
+            assert_eq!(0, writer.reusable_page_ids.len());
             
             // Check the free list root is page 2
-            assert_eq!(PageID(2), writer.free_list_root_id);
+            assert_eq!(PageID(2), writer.freetree_root_id);
             
             // Check the position root is page 3
             assert_eq!(PageID(3), writer.position_root_id);
@@ -1313,9 +1313,9 @@ mod tests {
             let mut writer = db.writer().unwrap();
             
             // Check there are two free pages (the old position root and the old free list root)
-            assert_eq!(2, writer.free_page_ids.len());
-            assert!(writer.free_page_ids.iter().any(|(id, _)| *id == PageID(3)));
-            assert!(writer.free_page_ids.iter().any(|(id, _)| *id == PageID(2)));
+            assert_eq!(2, writer.reusable_page_ids.len());
+            assert!(writer.reusable_page_ids.iter().any(|(id, _)| *id == PageID(3)));
+            assert!(writer.reusable_page_ids.iter().any(|(id, _)| *id == PageID(2)));
             
             // Insert position
             insert_position(&mut db, &mut writer, key2, value2.clone()).unwrap();
@@ -1359,53 +1359,40 @@ mod tests {
             let (_temp_dir, mut db) = construct_db(64);
             
             // Get latest header
-            let header = db.get_latest_header().unwrap();
-            assert_eq!(PageID(0), header.page_id);
+            let (header_page_id, header_node) = db.get_latest_header().unwrap();
+            assert_eq!(PageID(0), header_page_id);
             
             // Get next page ID
-            let next_page_id = match &header.node {
-                Node::Header(node) => node.next_page_id,
-                _ => panic!("Expected Header node"),
-            };
-            assert_eq!(PageID(4), next_page_id);
+            assert_eq!(PageID(4), header_node.next_page_id);
             
             // Construct a writer
             let tsn = TSN(1001);
-            let free_list_root_id = match &header.node {
-                Node::Header(node) => node.free_list_root_id,
-                _ => panic!("Expected Header node"),
-            };
-            let position_root_id = match &header.node {
-                Node::Header(node) => node.position_root_id,
-                _ => panic!("Expected Header node"),
-            };
-            
+
             let mut txn = LmdbWriter::new(
-                header.page_id,
+                header_page_id,
                 tsn,
-                next_page_id,
-                free_list_root_id,
-                position_root_id,
-                VecDeque::new(),
+                header_node.next_page_id,
+                header_node.freetree_root_id,
+                header_node.position_root_id,
             );
             
             // Check the free list tree root ID
-            let initial_root_id = txn.free_list_root_id;
+            let initial_root_id = txn.freetree_root_id;
             assert_eq!(PageID(2), initial_root_id);
             
             // Allocate a page ID (to be inserted as "freed")
             let page_id = txn.alloc_page_id();
             
             // Check the allocated page ID is the "next" page ID
-            assert_eq!(next_page_id, page_id);
+            assert_eq!(header_node.next_page_id, page_id);
             
             // Insert allocated page ID in free list tree
             let current_tsn = txn.tsn;
             insert_freed_page_id(&mut db, &mut txn, current_tsn, page_id).unwrap();
             
             // Check root page has been CoW-ed
-            let expected_new_root_id = PageID(next_page_id.0 + 1);
-            assert_eq!(expected_new_root_id, txn.free_list_root_id);
+            let expected_new_root_id = PageID(header_node.next_page_id.0 + 1);
+            assert_eq!(expected_new_root_id, txn.freetree_root_id);
             assert_eq!(1, txn.dirty.len());
             assert!(txn.dirty.contains_key(&expected_new_root_id));
             
@@ -1422,7 +1409,7 @@ mod tests {
                     assert_eq!(expected_keys, node.keys);
                     
                     let expected_values = vec![FreeListLeafValue {
-                        page_ids: vec![next_page_id],
+                        page_ids: vec![header_node.next_page_id],
                         root_id: None,
                     }];
                     assert_eq!(expected_values, node.values);
@@ -1446,7 +1433,7 @@ mod tests {
                 txn = db.writer().unwrap();
                 
                 // Remember the initial root ID
-                previous_root_id = txn.free_list_root_id;
+                previous_root_id = txn.freetree_root_id;
                 
                 // Allocate a page ID
                 inserted_page_id = txn.alloc_page_id();
@@ -1469,10 +1456,10 @@ mod tests {
                 txn = db.writer().unwrap();
                 
                 // Check there are no free pages (because we blocked them with a reader)
-                assert_eq!(0, txn.free_page_ids.len());
+                assert_eq!(0, txn.reusable_page_ids.len());
                 
                 // Remember the initial root ID and next page ID
-                let initial_root_id = txn.free_list_root_id;
+                let initial_root_id = txn.freetree_root_id;
                 let next_page_id = txn.next_page_id;
                 
                 // Remove what was inserted
@@ -1480,7 +1467,7 @@ mod tests {
                 
                 // Check root page has been CoW-ed
                 let expected_new_root_id = next_page_id;
-                assert_eq!(expected_new_root_id, txn.free_list_root_id);
+                assert_eq!(expected_new_root_id, txn.freetree_root_id);
                 assert_eq!(1, txn.dirty.len());
                 assert!(txn.dirty.contains_key(&expected_new_root_id));
                 
@@ -1512,23 +1499,16 @@ mod tests {
             let (_temp_dir, mut db) = construct_db(64);
             
             // Get latest header
-            let header = db.get_latest_header().unwrap();
-            
-            // Extract header information
-            let header_node = match &header.node {
-                Node::Header(node) => node,
-                _ => panic!("Expected Header node"),
-            };
-            
+            let (header_page_id, header_node) = db.get_latest_header().unwrap();
+
             // Create a writer
             let mut tsn = TSN(100);
             let mut txn = LmdbWriter::new(
-                header.page_id,
-                header_node.tsn,
+                header_page_id,
+                TSN(header_node.tsn.0 + 1),
                 header_node.next_page_id,
-                header_node.free_list_root_id,
+                header_node.freetree_root_id,
                 header_node.position_root_id,
-                VecDeque::new(),
             );
             
             let mut has_split_leaf = false;
@@ -1550,7 +1530,7 @@ mod tests {
                 tsn = TSN(tsn.0 + 1);
                 
                 // Check if we've split the leaf
-                let root_page = txn.dirty.get(&txn.free_list_root_id).unwrap();
+                let root_page = txn.dirty.get(&txn.freetree_root_id).unwrap();
                 match &root_page.node {
                     Node::FreeListInternal(_) => {
                         has_split_leaf = true;
@@ -1563,7 +1543,7 @@ mod tests {
             let mut copy_inserted = inserted.clone();
             
             // Get the root node
-            let root_page = txn.dirty.get(&txn.free_list_root_id).unwrap();
+            let root_page = txn.dirty.get(&txn.freetree_root_id).unwrap();
             let root_node = match &root_page.node {
                 Node::FreeListInternal(node) => node,
                 _ => panic!("Expected FreeListInternal node"),
@@ -1573,7 +1553,7 @@ mod tests {
             let mut active_page_ids = vec![
                 db.header_page_id0,
                 db.header_page_id1,
-                txn.free_list_root_id,
+                txn.freetree_root_id,
                 txn.position_root_id,
             ];
             
@@ -1642,7 +1622,7 @@ mod tests {
                 let mut txn = db.writer().unwrap();
                 
                 // Remember the initial root ID
-                previous_root_id = txn.free_list_root_id;
+                previous_root_id = txn.freetree_root_id;
                 
                 // Insert page IDs until we split a leaf
                 let mut has_split_leaf = false;
@@ -1663,7 +1643,7 @@ mod tests {
                     inserted.push((tsn, page_id2));
                     
                     // Check if we've split the leaf
-                    let root_page = txn.dirty.get(&txn.free_list_root_id).unwrap();
+                    let root_page = txn.dirty.get(&txn.freetree_root_id).unwrap();
                     match &root_page.node {
                         Node::FreeListInternal(_) => {
                             has_split_leaf = true;
@@ -1685,31 +1665,19 @@ mod tests {
 
             {
                 // Get latest header
-                let header = db.get_latest_header().unwrap();
-                
-                // Extract header information
-                let (tsn, next_page_id, free_list_root_id, position_root_id) = match &header.node {
-                    Node::Header(node) => (
-                        TSN(node.tsn.0 + 1),
-                        node.next_page_id,
-                        node.free_list_root_id,
-                        node.position_root_id
-                    ),
-                    _ => panic!("Expected Header node"),
-                };
-                
+                let (header_page_id, header_node) = db.get_latest_header().unwrap();
+
                 // Create a new writer
                 let mut txn = LmdbWriter::new(
-                    header.page_id,
-                    tsn,
-                    next_page_id,
-                    free_list_root_id,
-                    position_root_id,
-                    VecDeque::new(),
+                    header_page_id,
+                    TSN(header_node.tsn.0 + 1),
+                    header_node.next_page_id,
+                    header_node.freetree_root_id,
+                    header_node.position_root_id,
                 );
                 
                 // Remember the initial root ID
-                let old_root_id = txn.free_list_root_id;
+                let old_root_id = txn.freetree_root_id;
                 
                 // Remove all inserted page IDs
                 for (tsn, page_id) in inserted.iter() {
@@ -1719,14 +1687,14 @@ mod tests {
                 }
                 
                 // Check root page has been CoW-ed
-                assert_ne!(old_root_id, txn.free_list_root_id);
+                assert_ne!(old_root_id, txn.freetree_root_id);
                 println!("Dirty pages: {:?}", txn.dirty.keys());
 
                 assert_eq!(1, txn.dirty.len());
-                assert!(txn.dirty.contains_key(&txn.free_list_root_id));
+                assert!(txn.dirty.contains_key(&txn.freetree_root_id));
                 
-                let new_root_page = txn.dirty.get(&txn.free_list_root_id).unwrap();
-                assert_eq!(txn.free_list_root_id, new_root_page.page_id);
+                let new_root_page = txn.dirty.get(&txn.freetree_root_id).unwrap();
+                assert_eq!(txn.freetree_root_id, new_root_page.page_id);
                 
                 // Check old root ID is in freed page IDs
                 let freed_page_ids: Vec<PageID> = txn.freed_page_ids.iter().cloned().collect();
@@ -1755,7 +1723,7 @@ mod tests {
                 let active_page_ids = vec![
                     db.header_page_id0,
                     db.header_page_id1,
-                    txn.free_list_root_id,
+                    txn.freetree_root_id,
                     txn.position_root_id,
                 ];
                 
@@ -1793,27 +1761,15 @@ mod tests {
             let (_temp_dir, mut db) = construct_db(64);
 
             // Get latest header
-            let header = db.get_latest_header().unwrap();
-
-            // Extract header information
-            let (tsn, next_page_id, free_list_root_id, position_root_id) = match &header.node {
-                Node::Header(node) => (
-                    node.tsn,
-                    node.next_page_id,
-                    node.free_list_root_id,
-                    node.position_root_id
-                ),
-                _ => panic!("Expected Header node"),
-            };
+            let (header_page_id, header_node) = db.get_latest_header().unwrap();
 
             // Create a writer
             let mut txn = LmdbWriter::new(
-                header.page_id,
-                tsn,
-                next_page_id,
-                free_list_root_id,
-                position_root_id,
-                VecDeque::new(),
+                header_page_id,
+                TSN(header_node.tsn.0 + 1),
+                header_node.next_page_id,
+                header_node.freetree_root_id,
+                header_node.position_root_id,
             );
 
             // Start with TSN 100
@@ -1837,7 +1793,7 @@ mod tests {
                 tsn = TSN(tsn.0 + 1);
 
                 // Check if we've split an internal node
-                let root_page = txn.dirty.get(&txn.free_list_root_id).unwrap();
+                let root_page = txn.dirty.get(&txn.freetree_root_id).unwrap();
                 match &root_page.node {
                     Node::FreeListInternal(root_node) => {
                         // Check if the first child is an internal node
@@ -1861,7 +1817,7 @@ mod tests {
             }
 
             // Check keys and values of all pages
-            let root_page = txn.dirty.get(&txn.free_list_root_id).unwrap();
+            let root_page = txn.dirty.get(&txn.freetree_root_id).unwrap();
             let root_node = match &root_page.node {
                 Node::FreeListInternal(node) => node,
                 _ => panic!("Expected FreeListInternal node"),
@@ -1871,7 +1827,7 @@ mod tests {
             let mut active_page_ids = vec![
                 db.header_page_id0,
                 db.header_page_id1,
-                txn.free_list_root_id,
+                txn.freetree_root_id,
                 txn.position_root_id,
             ];
 
@@ -1967,7 +1923,7 @@ mod tests {
                 let mut txn = db.writer().unwrap();
 
                 // Remember the initial root ID
-                previous_root_id = txn.free_list_root_id;
+                previous_root_id = txn.freetree_root_id;
 
                 // Insert page IDs until we split an internal node
                 let mut has_split_internal = false;
@@ -1989,7 +1945,7 @@ mod tests {
                     inserted.push((tsn, page_id2));
 
                     // Check if we've split an internal node
-                    let root_page = txn.dirty.get(&txn.free_list_root_id).unwrap();
+                    let root_page = txn.dirty.get(&txn.freetree_root_id).unwrap();
                     match &root_page.node {
                         Node::FreeListInternal(root_node) => {
                             // Check if the first child is an internal node
@@ -2019,31 +1975,19 @@ mod tests {
             // Now remove all the inserted freed page IDs
             {
                 // Get latest header
-                let header = db.get_latest_header().unwrap();
-
-                // Extract header information
-                let (tsn, next_page_id, free_list_root_id, position_root_id) = match &header.node {
-                    Node::Header(node) => (
-                        TSN(node.tsn.0 + 1),
-                        node.next_page_id,
-                        node.free_list_root_id,
-                        node.position_root_id
-                    ),
-                    _ => panic!("Expected Header node"),
-                };
+                let (header_page_id, header_node) = db.get_latest_header().unwrap();
 
                 // Create a new writer
                 let mut txn = LmdbWriter::new(
-                    header.page_id,
-                    tsn,
-                    next_page_id,
-                    free_list_root_id,
-                    position_root_id,
-                    VecDeque::new(),
+                    header_page_id,
+                    TSN(header_node.tsn.0 + 1),
+                    header_node.next_page_id,
+                    header_node.freetree_root_id,
+                    header_node.position_root_id,
                 );
 
                 // Remember the initial root ID
-                let old_root_id = txn.free_list_root_id;
+                let old_root_id = txn.freetree_root_id;
 
                 // Remove all inserted page IDs
                 for (tsn, page_id) in inserted.iter() {
@@ -2051,12 +1995,12 @@ mod tests {
                 }
 
                 // Check root page has been CoW-ed
-                assert_ne!(old_root_id, txn.free_list_root_id);
+                assert_ne!(old_root_id, txn.freetree_root_id);
                 assert_eq!(1, txn.dirty.len());
-                assert!(txn.dirty.contains_key(&txn.free_list_root_id));
+                assert!(txn.dirty.contains_key(&txn.freetree_root_id));
 
-                let new_root_page = txn.dirty.get(&txn.free_list_root_id).unwrap();
-                assert_eq!(txn.free_list_root_id, new_root_page.page_id);
+                let new_root_page = txn.dirty.get(&txn.freetree_root_id).unwrap();
+                assert_eq!(txn.freetree_root_id, new_root_page.page_id);
 
                 // Check old root ID is in freed page IDs
                 let freed_page_ids: Vec<PageID> = txn.freed_page_ids.iter().cloned().collect();
@@ -2085,7 +2029,7 @@ mod tests {
                 let active_page_ids = vec![
                     db.header_page_id0,
                     db.header_page_id1,
-                    txn.free_list_root_id,
+                    txn.freetree_root_id,
                     txn.position_root_id,
                 ];
 

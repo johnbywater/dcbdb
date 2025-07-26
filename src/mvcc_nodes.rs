@@ -55,13 +55,13 @@ pub struct TSN(pub u32);
 pub struct HeaderNode {
     pub tsn: TSN,
     pub next_page_id: PageID,
-    pub free_list_root_id: PageID,
+    pub freetree_root_id: PageID,
     pub position_root_id: PageID,
 }
 
 impl HeaderNode {
     /// Serializes the HeaderNode to a byte array with 16 bytes
-    /// 4 bytes for tsn, 4 bytes for next_page_id, 4 bytes for free_list_root_id, and 4 bytes for position_root_id
+    /// 4 bytes for tsn, 4 bytes for next_page_id, 4 bytes for freetree_root_id, and 4 bytes for position_root_id
     ///
     /// # Returns
     /// * `Vec<u8>` - The serialized data
@@ -69,7 +69,7 @@ impl HeaderNode {
         let mut result = Vec::with_capacity(16);
         result.extend_from_slice(&self.tsn.0.to_le_bytes());
         result.extend_from_slice(&self.next_page_id.0.to_le_bytes());
-        result.extend_from_slice(&self.free_list_root_id.0.to_le_bytes());
+        result.extend_from_slice(&self.freetree_root_id.0.to_le_bytes());
         result.extend_from_slice(&self.position_root_id.0.to_le_bytes());
         result
     }
@@ -78,7 +78,7 @@ impl HeaderNode {
     /// Expects a slice with 16 bytes:
     /// - 4 bytes for tsn
     /// - 4 bytes for next_page_id
-    /// - 4 bytes for free_list_root_id
+    /// - 4 bytes for freetree_root_id
     /// - 4 bytes for position_root_id
     ///
     /// # Arguments
@@ -95,13 +95,13 @@ impl HeaderNode {
 
         let tsn = u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]);
         let next_page_id = u32::from_le_bytes([slice[4], slice[5], slice[6], slice[7]]);
-        let free_list_root_id = u32::from_le_bytes([slice[8], slice[9], slice[10], slice[11]]);
+        let freetree_root_id = u32::from_le_bytes([slice[8], slice[9], slice[10], slice[11]]);
         let position_root_id = u32::from_le_bytes([slice[12], slice[13], slice[14], slice[15]]);
 
         Ok(HeaderNode {
             tsn: TSN(tsn),
             next_page_id: PageID(next_page_id),
-            free_list_root_id: PageID(free_list_root_id),
+            freetree_root_id: PageID(freetree_root_id),
             position_root_id: PageID(position_root_id),
         })
     }
@@ -815,7 +815,7 @@ mod tests {
         let header_node = HeaderNode {
             tsn: TSN(42),
             next_page_id: PageID(123),
-            free_list_root_id: PageID(456),
+            freetree_root_id: PageID(456),
             position_root_id: PageID(789),
         };
 
@@ -845,7 +845,7 @@ mod tests {
         // Verify that the deserialized node matches the original
         assert_eq!(header_node.tsn, deserialized.tsn);
         assert_eq!(header_node.next_page_id, deserialized.next_page_id);
-        assert_eq!(header_node.free_list_root_id, deserialized.free_list_root_id);
+        assert_eq!(header_node.freetree_root_id, deserialized.freetree_root_id);
         assert_eq!(header_node.position_root_id, deserialized.position_root_id);
     }
 

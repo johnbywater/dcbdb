@@ -6,3 +6,4 @@
 /.idea/vcs.xml
 /data/eventstore.wal
 /.idea/junie.xml
+/test-data/

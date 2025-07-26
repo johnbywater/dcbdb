@@ -41,6 +41,7 @@ pub mod mvcc;
 
 // Export the MVCC Nodes module
 pub mod mvcc_nodes;
+mod crc;
 
 #[cfg(test)]
 mod tests {

@@ -6,8 +6,8 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-
-use crate::wal::{calc_crc, Position};
+use crate::crc::calc_crc;
+use crate::wal::Position;
 
 // Constants
 const CHECKPOINT_FILE_NAME: &str = "checkpoint.dat";

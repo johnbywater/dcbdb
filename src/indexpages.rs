@@ -1,5 +1,5 @@
 use crate::pagedfile::{PageID, PagedFile, PagedFileError};
-use crate::wal::calc_crc;
+use crate::crc::calc_crc;
 use lru::LruCache;
 use std::any::Any;
 use std::collections::HashMap;

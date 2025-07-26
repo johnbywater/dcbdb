@@ -8,12 +8,12 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::Mutex;
 
-use crc32fast::Hasher;
 use rmp_serde::Serializer;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::api::DCBEvent;
+use crate::crc;
 
 // Constants
 const MAGIC: &[u8; 4] = b"DCA5";
@@ -372,7 +372,7 @@ impl TransactionWAL {
             let crc = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
             let data = &payload[EVENT_CRC_LEN_SIZE..];
 
-            if calc_crc(data) != crc {
+            if crc::calc_crc(data) != crc {
                 return Err(WalError::InvalidChecksum);
             }
         }
@@ -436,19 +436,12 @@ impl Drop for TransactionWAL {
     }
 }
 
-/// Calculate CRC32 checksum for data
-pub fn calc_crc(data: &[u8]) -> u32 {
-    let mut hasher = Hasher::new();
-    hasher.update(data);
-    hasher.finalize()
-}
-
 /// Pack a DCB event with CRC
 pub fn pack_dcb_event_with_crc(position: Position, dcb_event: DCBEvent) -> Vec<u8> {
     let event_with_pos = DCBEventWithPosition::from((position, dcb_event));
     let blob = serialize_dcb_event(&event_with_pos).unwrap_or_default();
 
-    let crc = calc_crc(&blob);
+    let crc = crc::calc_crc(&blob);
     let len = blob.len() as u32;
 
     let mut result = Vec::with_capacity(EVENT_CRC_LEN_SIZE + blob.len());

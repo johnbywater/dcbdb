@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::api::DCBEvent;
-use crate::wal::{calc_crc, Position};
+use crate::crc::calc_crc;
+use crate::wal::Position;
 
 /// Event with position for serialization
 #[derive(Debug, Clone, Serialize, Deserialize)]

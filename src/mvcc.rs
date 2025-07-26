@@ -1,10 +1,7 @@
 use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::Mutex;
-use std::io::{Read, Seek, Write};
 use std::collections::HashMap;
-use std::os::unix::io::AsRawFd;
-use libc;
 
 use crate::crc::calc_crc;
 use crate::mvcc_nodes::{FreeListInternalNode, FreeListLeafNode, FreeListLeafValue, HeaderNode, LmdbError, Node, PageID, Position, PositionIndexRecord, PositionInternalNode, PositionLeafNode, TSN};
@@ -181,73 +178,21 @@ impl Lmdb {
 
         // Get free page IDs
         println!("Getting free page IDs for TSN {:?}...", next_tsn);
-        let free_page_ids = self.get_free_page_ids(header_node.free_list_root_id)?;
-
         // Create the writer
-        let writer = LmdbWriter::new(
+        let mut writer = LmdbWriter::new(
             header.page_id,
             next_tsn,
             header_node.next_page_id,
             header_node.free_list_root_id,
             header_node.position_root_id,
-            free_page_ids,
+            VecDeque::new(),
         );
-        
+
+        // let mut writer= &writer;
+        get_free_page_ids(self, &mut writer)?;
+
+
         Ok(writer)
-    }
-    
-    pub fn get_free_page_ids(&mut self, free_list_root_id: PageID) -> Result<VecDeque<(PageID, TSN)>> {
-        println!("Root page is {:?}", free_list_root_id);
-        let root_page = self.read_page(free_list_root_id)?;
-        let mut free_page_ids = VecDeque::new();
-        
-        // Find the smallest reader TSN
-        let smallest_reader_tsn = {
-            self.reader_tsns.lock().unwrap().values().min().cloned()
-        };
-        println!("Smallest reader TSN: {:?}", smallest_reader_tsn);
-
-        // Walk the tree to find leaf nodes
-        let mut stack = vec![(root_page, 0)];
-        
-        while let Some((page, idx)) = stack.pop() {
-            match &page.node {
-                Node::FreeListInternal(node) => {
-                    println!("Page {:?} is internal node", page.page_id);
-
-                    if idx < node.child_ids.len() {
-                        stack.push((page.clone(), idx + 1));
-                        let child_id = node.child_ids[idx];
-                        let child = self.read_page(child_id)?;
-                        stack.push((child, 0));
-                    }
-                }
-                Node::FreeListLeaf(node) => {
-                    println!("Page {:?} is leaf node", page.page_id);
-                    for i in 0..node.keys.len() {
-                        let tsn = node.keys[i];
-                        if let Some(smallest) = smallest_reader_tsn {
-                            if tsn > smallest {
-                                return Ok(free_page_ids);
-                            }
-                        }
-                        
-                        let leaf_value = &node.values[i];
-                        if leaf_value.root_id.is_none() {
-                            for &page_id in &leaf_value.page_ids {
-                                free_page_ids.push_back((page_id, tsn));
-                            }
-                        } else {
-                            // TODO: Traverse into free list subtree
-                            return Err(LmdbError::DatabaseCorrupted("Free list subtree not implemented".to_string()));
-                        }
-                    }
-                }
-                _ => return Err(LmdbError::DatabaseCorrupted("Invalid node type in free list tree".to_string())),
-            }
-        }
-        
-        Ok(free_page_ids)
     }
     
     pub fn commit(&mut self, writer: &mut LmdbWriter) -> Result<()> {
@@ -459,6 +404,58 @@ impl LmdbWriter {
     }
 }
 
+pub fn get_free_page_ids(db: &mut Lmdb, writer: &mut LmdbWriter) -> Result<()> {
+    println!("Root page is {:?}", writer.free_list_root_id);
+    let root_page = db.get_page(writer, writer.free_list_root_id)?;
+
+    // Find the smallest reader TSN
+    let smallest_reader_tsn = {
+        db.reader_tsns.lock().unwrap().values().min().cloned()
+    };
+    println!("Smallest reader TSN: {:?}", smallest_reader_tsn);
+
+    // Walk the tree to find leaf nodes
+    let mut stack = vec![(root_page, 0)];
+
+    while let Some((page, idx)) = stack.pop() {
+        match &page.node {
+            Node::FreeListInternal(node) => {
+                println!("Page {:?} is internal node", page.page_id);
+
+                if idx < node.child_ids.len() {
+                    stack.push((page.clone(), idx + 1));
+                    let child_id = node.child_ids[idx];
+                    let child = db.get_page(writer, child_id)?;
+                    stack.push((child, 0));
+                }
+            }
+            Node::FreeListLeaf(node) => {
+                println!("Page {:?} is leaf node", page.page_id);
+                for i in 0..node.keys.len() {
+                    let tsn = node.keys[i];
+                    if let Some(smallest) = smallest_reader_tsn {
+                        if tsn > smallest {
+                            return Ok(());
+                        }
+                    }
+
+                    let leaf_value = &node.values[i];
+                    if leaf_value.root_id.is_none() {
+                        for &page_id in &leaf_value.page_ids {
+                            writer.free_page_ids.push_back((page_id, tsn));
+                        }
+                    } else {
+                        // TODO: Traverse into free list subtree
+                        return Err(LmdbError::DatabaseCorrupted("Free list subtree not implemented".to_string()));
+                    }
+                }
+            }
+            _ => return Err(LmdbError::DatabaseCorrupted("Invalid node type in free list tree".to_string())),
+        }
+    }
+
+    Ok(())
+}
 
 // Free list management functions
 pub fn insert_freed_page_id(db: &mut Lmdb, writer: &mut LmdbWriter, tsn: TSN, freed_page_id: PageID) -> Result<()> {

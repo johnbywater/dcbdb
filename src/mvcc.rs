@@ -1356,7 +1356,7 @@ mod tests {
 
         #[test]
         fn test_insert_freed_page_id_to_empty_leaf_root() {
-            let (_temp_dir, mut db) = construct_db(32);
+            let (_temp_dir, mut db) = construct_db(64);
             
             // Get latest header
             let header = db.get_latest_header().unwrap();
@@ -1433,7 +1433,7 @@ mod tests {
         
         #[test]
         fn test_remove_freed_page_id_from_root_leaf_root() {
-            let (_temp_dir, mut db) = construct_db(32);
+            let (_temp_dir, mut db) = construct_db(64);
             
             // First, insert a page ID
             let mut txn;

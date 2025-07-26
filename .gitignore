@@ -1,9 +1,4 @@
 /target
-/.idea/dcbsd.iml
-/.idea/modules.xml
-/.idea/inspectionProfiles/Project_Default.xml
-/.idea/.gitignore
-/.idea/vcs.xml
-/data/eventstore.wal
-/.idea/junie.xml
-/test-data/
+/.idea
+/data
+/test-data

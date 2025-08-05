@@ -398,9 +398,9 @@ pub fn get_reusable_page_ids(db: &mut Lmdb, writer: &mut LmdbWriter) -> Result<(
                 println!("Page {:?} is internal node", page.page_id);
 
                 if idx < node.child_ids.len() {
-                    stack.push((page.clone(), idx + 1));
                     let child_id = node.child_ids[idx];
                     let child = db.get_page(writer, child_id)?;
+                    stack.push((page, idx + 1));
                     stack.push((child, 0));
                 }
             }

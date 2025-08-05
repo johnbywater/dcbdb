@@ -26,6 +26,7 @@ libc = "0.2.174"
 
 [dev-dependencies]
 # Add test dependencies as needed
+serial_test = "2.0.0"
 
 [build-dependencies]
 tonic-build = "0.13.1"

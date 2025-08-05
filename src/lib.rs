@@ -43,6 +43,7 @@ pub mod mvcc;
 pub mod mvcc_nodes;
 mod crc;
 mod mvcc_pager;
+mod mvcc_page;
 
 #[cfg(test)]
 mod tests {

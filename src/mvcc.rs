@@ -193,7 +193,7 @@ impl Lmdb {
         );
 
         // Find the reusable page IDs.
-        get_reusable_page_ids(self, &mut writer)?;
+        writer.find_reusable_page_ids(self)?;
 
         Ok(writer)
     }
@@ -374,62 +374,63 @@ impl LmdbWriter {
             }
         }
     }
-}
 
-pub fn get_reusable_page_ids(db: &mut Lmdb, writer: &mut LmdbWriter) -> Result<()> {
-    // Get free page IDs
-    println!("Getting free page IDs for TSN {:?}...", writer.tsn);
+    pub fn find_reusable_page_ids(&mut self, db: &Lmdb) -> Result<()> {
+        // Get free page IDs
+        println!("Getting free page IDs for TSN {:?}...", self.tsn);
 
-    // Find the smallest reader TSN
-    let smallest_reader_tsn = {
-        db.reader_tsns.lock().unwrap().values().min().cloned()
-    };
-    println!("Smallest reader TSN: {:?}", smallest_reader_tsn);
+        // Find the smallest reader TSN
+        let smallest_reader_tsn = {
+            db.reader_tsns.lock().unwrap().values().min().cloned()
+        };
+        println!("Smallest reader TSN: {:?}", smallest_reader_tsn);
 
-    let root_page = db.get_page(writer, writer.freetree_root_id)?;
-    println!("Root page is {:?}", writer.freetree_root_id);
+        let root_page = db.get_page(self, self.freetree_root_id)?;
+        println!("Root page is {:?}", self.freetree_root_id);
 
-    // Walk the tree to find leaf nodes
-    let mut stack = vec![(root_page, 0)];
+        // Walk the tree to find leaf nodes
+        let mut stack = vec![(root_page, 0)];
 
-    while let Some((page, idx)) = stack.pop() {
-        match &page.node {
-            Node::FreeListInternal(node) => {
-                println!("Page {:?} is internal node", page.page_id);
+        while let Some((page, idx)) = stack.pop() {
+            match &page.node {
+                Node::FreeListInternal(node) => {
+                    println!("Page {:?} is internal node", page.page_id);
 
-                if idx < node.child_ids.len() {
-                    let child = db.get_page(writer, node.child_ids[idx])?;
-                    stack.push((page, idx + 1));
-                    stack.push((child, 0));
-                }
-            }
-            Node::FreeListLeaf(node) => {
-                println!("Page {:?} is leaf node", page.page_id);
-                for i in 0..node.keys.len() {
-                    let tsn = node.keys[i];
-                    if let Some(smallest) = smallest_reader_tsn {
-                        if tsn > smallest {
-                            return Ok(());
-                        }
-                    }
-
-                    let leaf_value = &node.values[i];
-                    if leaf_value.root_id.is_none() {
-                        for &page_id in &leaf_value.page_ids {
-                            writer.reusable_page_ids.push_back((page_id, tsn));
-                        }
-                    } else {
-                        // TODO: Traverse into free list subtree
-                        return Err(LmdbError::DatabaseCorrupted("Free list subtree not implemented".to_string()));
+                    if idx < node.child_ids.len() {
+                        let child = db.get_page(self, node.child_ids[idx])?;
+                        stack.push((page, idx + 1));
+                        stack.push((child, 0));
                     }
                 }
+                Node::FreeListLeaf(node) => {
+                    println!("Page {:?} is leaf node", page.page_id);
+                    for i in 0..node.keys.len() {
+                        let tsn = node.keys[i];
+                        if let Some(smallest) = smallest_reader_tsn {
+                            if tsn > smallest {
+                                return Ok(());
+                            }
+                        }
+
+                        let leaf_value = &node.values[i];
+                        if leaf_value.root_id.is_none() {
+                            for &page_id in &leaf_value.page_ids {
+                                self.reusable_page_ids.push_back((page_id, tsn));
+                            }
+                        } else {
+                            // TODO: Traverse into free list subtree
+                            return Err(LmdbError::DatabaseCorrupted("Free list subtree not implemented".to_string()));
+                        }
+                    }
+                }
+                _ => return Err(LmdbError::DatabaseCorrupted("Invalid node type in free list tree".to_string())),
             }
-            _ => return Err(LmdbError::DatabaseCorrupted("Invalid node type in free list tree".to_string())),
         }
-    }
 
-    Ok(())
+        Ok(())
+    }
 }
+
 
 // Free list management functions
 pub fn insert_freed_page_id(db: &mut Lmdb, writer: &mut LmdbWriter, tsn: TSN, freed_page_id: PageID) -> Result<()> {

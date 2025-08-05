@@ -314,6 +314,25 @@ impl LmdbWriter {
         }
     }
 
+    pub fn get_page_ref(&mut self, db: &Lmdb, page_id: PageID) -> Result<&Page> {
+        // Check the dirty pages first
+        if self.dirty.contains_key(&page_id) {
+            return Ok(self.dirty.get(&page_id).unwrap());
+        }
+
+        // Then check deserialized pages
+        if self.deserialized.contains_key(&page_id) {
+            return Ok(self.deserialized.get(&page_id).unwrap());
+        }
+
+        // Need to deserialize the page
+        let deserialized_page = db.read_page(page_id)?;
+        self.insert_deserialized(deserialized_page);
+
+        // Return the deserialized page
+        Ok(self.deserialized.get(&page_id).unwrap())
+    }
+
     pub fn insert_deserialized(&mut self, page: Page) {
         self.deserialized.insert(page.page_id, page);
     }
@@ -376,8 +395,9 @@ impl LmdbWriter {
     }
 
     pub fn find_reusable_page_ids(&mut self, db: &Lmdb) -> Result<()> {
+        let mut reusable_page_ids: VecDeque<(PageID, TSN)> = VecDeque::new();
         // Get free page IDs
-        println!("Getting free page IDs for TSN {:?}...", self.tsn);
+        println!("Finding reusable page IDs for TSN {:?}...", self.tsn);
 
         // Find the smallest reader TSN
         let smallest_reader_tsn = {
@@ -385,21 +405,23 @@ impl LmdbWriter {
         };
         println!("Smallest reader TSN: {:?}", smallest_reader_tsn);
 
-        let root_page = db.get_page(self, self.freetree_root_id)?;
         println!("Root page is {:?}", self.freetree_root_id);
 
         // Walk the tree to find leaf nodes
-        let mut stack = vec![(root_page, 0)];
+        let mut stack = vec![(self.freetree_root_id, 0)];
 
-        while let Some((page, idx)) = stack.pop() {
+        while let Some((page_id, idx)) = stack.pop() {
+            let page = {
+                self.get_page_ref(db, page_id)?
+            }; 
             match &page.node {
                 Node::FreeListInternal(node) => {
                     println!("Page {:?} is internal node", page.page_id);
 
                     if idx < node.child_ids.len() {
-                        let child = db.get_page(self, node.child_ids[idx])?;
-                        stack.push((page, idx + 1));
-                        stack.push((child, 0));
+                        let child_page_id = node.child_ids[idx];
+                        stack.push((page.page_id, idx + 1));
+                        stack.push((child_page_id, 0));
                     }
                 }
                 Node::FreeListLeaf(node) => {
@@ -415,7 +437,7 @@ impl LmdbWriter {
                         let leaf_value = &node.values[i];
                         if leaf_value.root_id.is_none() {
                             for &page_id in &leaf_value.page_ids {
-                                self.reusable_page_ids.push_back((page_id, tsn));
+                                reusable_page_ids.push_back((page_id, tsn));
                             }
                         } else {
                             // TODO: Traverse into free list subtree
@@ -427,6 +449,8 @@ impl LmdbWriter {
             }
         }
 
+        self.reusable_page_ids = reusable_page_ids;
+        println!("Found reusable page IDs: {:?}", self.reusable_page_ids);
         Ok(())
     }
 }

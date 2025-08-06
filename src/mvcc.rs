@@ -493,7 +493,7 @@ impl LmdbWriter {
         println!("Page {:?} is leaf node", current_page_id);
 
         // Make the leaf page dirty
-        let mut dirty_page_id= {
+        let dirty_page_id= {
             self.get_dirty_page_id(current_page_id)
         };
         let replacement_info: Option<(PageID, PageID)> = {
@@ -504,7 +504,7 @@ impl LmdbWriter {
             }
         };
         // Get a mutable leaf node....
-        let mut dirty_leaf_page = self.get_mut_dirty(dirty_page_id)?;
+        let dirty_leaf_page = self.get_mut_dirty(dirty_page_id)?;
 
         if let Node::FreeListLeaf(dirty_leaf_node) = &mut dirty_leaf_page.node {
             println!("Page {:?} is leaf node", dirty_leaf_page.page_id);
@@ -513,7 +513,6 @@ impl LmdbWriter {
         } else {
             return Err(LmdbError::DatabaseCorrupted("Expected FreeListLeaf node".to_string()));
         }
-
 
         // Check if the page needs splitting by estimating the serialized size
         let needs_splitting = dirty_leaf_page.serialize()?.len() > db.page_size;
@@ -558,7 +557,7 @@ impl LmdbWriter {
                 while let Some(parent_page_id) = stack.pop() {
 
                     // Make the internal page dirty
-                    let mut dirty_page_id= {
+                    let dirty_page_id= {
                         self.get_dirty_page_id(parent_page_id)
                     };
                     let parent_replacement_info: Option<(PageID, PageID)> = {
@@ -569,7 +568,7 @@ impl LmdbWriter {
                         }
                     };
                     // Get a mutable internal node....
-                    let mut dirty_internal_page = self.get_mut_dirty(dirty_page_id)?;
+                    let dirty_internal_page = self.get_mut_dirty(dirty_page_id)?;
 
                     if let Node::FreeListInternal(dirty_internal_node) = &mut dirty_internal_page.node {
                         println!("Page {:?} is internal node", dirty_internal_page.page_id);

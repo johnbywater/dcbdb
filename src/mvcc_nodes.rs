@@ -446,6 +446,31 @@ impl FreeListInternalNode {
             child_ids,
         })
     }
+
+    pub fn replace_last_child_id(&mut self, old_id: PageID, new_id: PageID) -> Result<()> {
+        // Replace the last child ID.
+        let last_idx = self.child_ids.len() - 1;
+        if self.child_ids[last_idx] == old_id {
+            self.child_ids[last_idx] = new_id;
+        } else {
+            return Err(LmdbError::DatabaseCorrupted("Child ID mismatch".to_string()));
+        }
+        Ok(())
+    }
+
+    pub fn append_promoted_key_and_page_id(&mut self, promoted_key: TSN, promoted_page_id: PageID) -> Result<()> {
+        self.keys.push(promoted_key);
+        self.child_ids.push(promoted_page_id);
+        Ok(())
+    }
+
+    pub(crate) fn split_off(&mut self) -> Result<(TSN, Vec<TSN>, Vec<PageID>)> {
+        let middle_idx = self.keys.len() - 2;
+        let promoted_key = self.keys.remove(middle_idx);
+        let new_keys = self.keys.split_off(middle_idx);
+        let new_child_ids = self.child_ids.split_off(middle_idx + 1);
+        Ok((promoted_key, new_keys, new_child_ids))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

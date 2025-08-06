@@ -146,6 +146,7 @@ impl Lmdb {
     pub fn write_page(&mut self, page: &Page) -> Result<()> {
         let serialized = &page.serialize()?;
         self.pager.write_page(page.page_id, serialized)?;
+        println!("Wrote {:?} to file", page.page_id);
         Ok(())
     }
     
@@ -192,6 +193,9 @@ impl Lmdb {
             header_node.position_root_id,
         );
 
+        println!("");
+        println!("Constructed writer with {:?}", writer.tsn);
+
         // Find the reusable page IDs.
         writer.find_reusable_page_ids(self)?;
 
@@ -200,6 +204,9 @@ impl Lmdb {
     
     pub fn commit(&mut self, writer: &mut LmdbWriter) -> Result<()> {
         // Process reused and freed page IDs
+        println!("");
+        println!("Commiting writer with {:?}", writer.tsn);
+
         while !writer.reused_page_ids.is_empty() || !writer.freed_page_ids.is_empty() {
             // Process reused page IDs
             while let Some((reused_page_id, tsn)) = writer.reused_page_ids.pop_front() {
@@ -244,7 +251,9 @@ impl Lmdb {
         
         // Flush changes to disk
         self.flush()?;
-        
+
+        println!("Committed writer with {:?}", writer.tsn);
+
         Ok(())
     }
     
@@ -313,7 +322,11 @@ impl LmdbWriter {
 
 
     pub fn get_mut_dirty(&mut self, page_id: PageID) -> Result<&mut Page> {
-        self.dirty.get_mut(&page_id).ok_or(LmdbError::PageNotFound(page_id))
+        if let Some(page) = self.dirty.get_mut(&page_id) {
+            Ok(page)
+        } else {
+            Err(LmdbError::DirtyPageNotFound(page_id))
+        }
     }
 
 
@@ -323,7 +336,7 @@ impl LmdbWriter {
 
     pub fn mark_dirty(&mut self, page: Page) {
         if !self.freed_page_ids.contains(&page.page_id) {
-            println!("Marking dirty {:?}: {:?}", page.page_id, page.node);
+            // println!("Marking dirty {:?}: {:?}", page.page_id, page.node);
             self.dirty.insert(page.page_id, page);
         }
     }
@@ -355,8 +368,7 @@ impl LmdbWriter {
                 
                 self.dirty.insert(new_page_id, new_page.clone());
                 replacement_info = Some((old_page_id, new_page_id));
-                println!("Copied {:?} to {:?}: {:?}", old_page_id.0, new_page_id.0, page);
-                println!("Freed page IDs: {:?}", self.freed_page_ids);
+                println!("Copied {:?} to {:?}: {:?}", old_page_id, new_page_id, page);
                 return (new_page, replacement_info);
             }
         }
@@ -364,7 +376,7 @@ impl LmdbWriter {
         (page, replacement_info)
     }
 
-    pub fn get_dirty_page_id(&mut self, page_id: PageID) -> PageID {
+    pub fn get_dirty_page_id(&mut self, page_id: PageID) -> Result<PageID> {
         let mut dirty_page_id = page_id;
         if !self.freed_page_ids.iter().any(|&id| id == page_id) {
             if !self.dirty.contains_key(&page_id) {
@@ -379,12 +391,16 @@ impl LmdbWriter {
                 };
 
                 self.dirty.insert(new_page_id, new_page);
-                println!("Copied {:?} to {:?}: {:?}", old_page_id.0, new_page_id.0, old_page);
-                println!("Freed page IDs: {:?}", self.freed_page_ids);
+                println!("Copied {:?} to {:?}: {:?}", old_page_id, new_page_id, old_page.node);
                 dirty_page_id = new_page_id;
+            } else {
+                println!("{:?} is already dirty", page_id);
             }
+        } else {
+            return Err(LmdbError::PageAlreadyFreedError(page_id));
+
         }
-        dirty_page_id
+        Ok(dirty_page_id)
     }
 
     pub fn append_freed_page_id(&mut self, page_id: PageID) {
@@ -412,7 +428,7 @@ impl LmdbWriter {
         };
         println!("Smallest reader TSN: {:?}", smallest_reader_tsn);
 
-        println!("Root page is {:?}", self.freetree_root_id);
+        println!("Root is {:?}", self.freetree_root_id);
 
         // Walk the tree to find leaf nodes
         let mut stack = vec![(self.freetree_root_id, 0)];
@@ -427,7 +443,7 @@ impl LmdbWriter {
             }; 
             match &page.node {
                 Node::FreeListInternal(node) => {
-                    println!("Page {:?} is internal node", page.page_id);
+                    println!("{:?} is internal node", page.page_id);
 
                     if idx < node.child_ids.len() {
                         let child_page_id = node.child_ids[idx];
@@ -436,7 +452,7 @@ impl LmdbWriter {
                     }
                 }
                 Node::FreeListLeaf(node) => {
-                    println!("Page {:?} is leaf node", page.page_id);
+                    println!("{:?} is leaf node", page.page_id);
                     for i in 0..node.keys.len() {
                         let tsn = node.keys[i];
                         if let Some(smallest) = smallest_reader_tsn {
@@ -468,33 +484,31 @@ impl LmdbWriter {
 
     // Free list tree methods
     pub fn insert_freed_page_id(&mut self, db: &Lmdb, tsn: TSN, freed_page_id: PageID) -> Result<()> {
-        println!("");
-        println!("Inserting freed page ID {:?} for TSN {:?}...", freed_page_id, tsn);
-        println!("Root page is {:?}", self.freetree_root_id);
-        // Get the root page
+        println!("Inserting {:?} for {:?}", freed_page_id, tsn);
+        println!("Root is {:?}", self.freetree_root_id);
+        // Get the root page ID.
         let mut current_page_id = self.freetree_root_id;
 
         // Traverse the tree to find a leaf node
         let mut stack: Vec<PageID> = Vec::new();
-        // let mut current_node = current_page_ref.node.clone();
         loop {
             let current_page_ref = self.get_page_ref(db, current_page_id)?;
             if matches!(current_page_ref.node, Node::FreeListLeaf(_)) {
                 break;
             }
             if let Node::FreeListInternal(internal_node) = &current_page_ref.node {
-                println!("Page {:?} is internal node", current_page_ref.page_id);
+                println!("{:?} is internal node", current_page_ref.page_id);
                 stack.push(current_page_id);
                 current_page_id = *internal_node.child_ids.last().unwrap();
             } else {
                 return Err(LmdbError::DatabaseCorrupted("Expected FreeListInternal node".to_string()));
             }
         }
-        println!("Page {:?} is leaf node", current_page_id);
+        println!("{:?} is leaf node", current_page_id);
 
         // Make the leaf page dirty
         let dirty_page_id= {
-            self.get_dirty_page_id(current_page_id)
+            self.get_dirty_page_id(current_page_id)?
         };
         let replacement_info: Option<(PageID, PageID)> = {
             if dirty_page_id != current_page_id {
@@ -506,23 +520,25 @@ impl LmdbWriter {
         // Get a mutable leaf node....
         let dirty_leaf_page = self.get_mut_dirty(dirty_page_id)?;
 
+        // Insert or append freed page ID to TSN's list of page IDs.
         if let Node::FreeListLeaf(dirty_leaf_node) = &mut dirty_leaf_page.node {
-            println!("Page {:?} is leaf node", dirty_leaf_page.page_id);
             dirty_leaf_node.insert_or_append(tsn, freed_page_id)?;
-
+            println!("Inserted {:?} for {:?} in {:?}: {:?}", freed_page_id, tsn, dirty_page_id, dirty_leaf_node);
         } else {
             return Err(LmdbError::DatabaseCorrupted("Expected FreeListLeaf node".to_string()));
         }
 
-        // Check if the page needs splitting by estimating the serialized size
-        let needs_splitting = dirty_leaf_page.serialize()?.len() > db.page_size;
+        // Check if the leaf needs splitting by estimating the serialized size
+        let mut split_info: Option<(TSN, PageID)> = None;
 
-        if needs_splitting {
+        let leaf_needs_splitting = dirty_leaf_page.serialize()?.len() > db.page_size;
+
+        if leaf_needs_splitting {
             // Split the leaf node
-            println!("Splitting leaf page {:?}...", dirty_leaf_page.page_id);
             if let Node::FreeListLeaf(dirty_leaf_node) = &mut dirty_leaf_page.node {
-                println!("Page {:?} is leaf node", dirty_leaf_page.page_id);
                 let (last_key, last_value) = dirty_leaf_node.pop_last_key_and_value().unwrap();
+
+                println!("Split leaf {:?}: {:?}", dirty_page_id, dirty_leaf_node.clone());
 
                 let new_leaf_node = FreeListLeafNode {
                     keys: vec![last_key],
@@ -541,156 +557,144 @@ impl LmdbWriter {
                     return Err(LmdbError::DatabaseCorrupted("Overflow freed page IDs for TSN to subtree not implemented".to_string()));
                 }
 
-                println!("Created page {:?}: {:?}", new_leaf_page_id, new_leaf_page.node);
+                println!("Created new leaf {:?}: {:?}", new_leaf_page_id, new_leaf_page.node);
                 self.mark_dirty(new_leaf_page);
 
                 // Propagate the split up the tree
-                println!("Promoting TSN {:?} and page {:?}", last_key, new_leaf_page_id);
+                println!("Promoting {:?} and {:?}", last_key, new_leaf_page_id);
 
-                let mut split_info = Some((last_key, new_leaf_page_id));
-                let mut current_replacement_info = replacement_info;
-
-                // Propagate splits and replacements up the stack
-                while let Some(parent_page_id) = stack.pop() {
-
-                    // Make the internal page dirty
-                    let dirty_page_id= {
-                        self.get_dirty_page_id(parent_page_id)
-                    };
-                    let parent_replacement_info: Option<(PageID, PageID)> = {
-                        if dirty_page_id != current_page_id {
-                            Some((parent_page_id, dirty_page_id))
-                        } else {
-                            None
-                        }
-                    };
-                    // Get a mutable internal node....
-                    let dirty_internal_page = self.get_mut_dirty(dirty_page_id)?;
-
-                    if let Node::FreeListInternal(dirty_internal_node) = &mut dirty_internal_page.node {
-                        println!("Page {:?} is internal node", dirty_internal_page.page_id);
-
-                        if let Some((old_id, new_id)) = current_replacement_info {
-                            println!(
-                                "Replacing page {:?} with {:?} in {:?}: {:?}",
-                                old_id, new_id, dirty_page_id, dirty_internal_node
-                            );
-                            dirty_internal_node.replace_last_child_id(old_id, new_id)?;
-                            println!(
-                                "Replaced page {:?} with {:?} in {:?}: {:?}",
-                                old_id, new_id, dirty_page_id, dirty_internal_node
-                            );
-                        }
-
-                    } else {
-                        return Err(LmdbError::DatabaseCorrupted("Expected FreeListInternal node".to_string()));
-                    }
+                split_info = Some((last_key, new_leaf_page_id));
 
 
-                    if let Some((promoted_key, promoted_page_id)) = split_info {
-                        if let Node::FreeListInternal(dirty_internal_node) = &mut dirty_internal_page.node {
-                            // Add the promoted key and page ID
-                            dirty_internal_node.append_promoted_key_and_page_id(promoted_key, promoted_page_id)?;
-
-                            println!(
-                                "Promoted ({:?}, {:?}) to {:?}: {:?}",
-                                promoted_key, promoted_page_id, dirty_page_id, dirty_internal_node
-                            )
-
-                        } else {
-                            return Err(LmdbError::DatabaseCorrupted("Expected FreeListInternal node".to_string()));
-                        }
-                    }
-
-                    // Check if the parent page needs splitting
-                    let serialized_len = dirty_internal_page.serialize()?.len();
-                    let parent_needs_splitting = {
-                        serialized_len > db.page_size
-                    };
-
-                    if parent_needs_splitting {
-                        if let Node::FreeListInternal(dirty_internal_node) = &mut dirty_internal_page.node {
-                            println!("Splitting internal page {:?}...", dirty_page_id);
-                            // Split the internal node
-                            // Ensure we have at least 3 keys and 4 child IDs before splitting
-                            if dirty_internal_node.keys.len() < 3 || dirty_internal_node.child_ids.len() < 4 {
-                                return Err(LmdbError::DatabaseCorrupted("Cannot split internal node with too few keys/children".to_string()));
-                            }
-
-                            // Move the right-most key to new node. Promote the next right-most key.
-                            let (promoted_key, new_keys, new_child_ids) = dirty_internal_node.split_off().unwrap();
-
-                            // Ensure both nodes maintain the B-tree invariant: n keys should have n+1 child pointers
-                            assert_eq!(dirty_internal_node.keys.len() + 1, dirty_internal_node.child_ids.len());
-
-                            let new_internal_node = FreeListInternalNode {
-                                keys: new_keys,
-                                child_ids: new_child_ids,
-                            };
-
-                            // Ensure the new node also maintains the invariant
-                            assert_eq!(new_internal_node.keys.len() + 1, new_internal_node.child_ids.len());
-
-                            // Create new internal page.
-                            let new_internal_page_id = self.alloc_page_id();
-                            let new_internal_page = Page::new(new_internal_page_id, Node::FreeListInternal(new_internal_node));
-                            println!(
-                                "Created page {:?}: {:?}", new_internal_page_id, new_internal_page.node
-                            );
-                            self.mark_dirty(new_internal_page);
-
-                            split_info = Some((promoted_key, new_internal_page_id));
-                        } else {
-                            return Err(LmdbError::DatabaseCorrupted("Expected FreeListInternal node".to_string()));
-                        }
-                    } else {
-                        split_info = None;
-                    }
-                    current_replacement_info = parent_replacement_info;
-                }
-
-                // Update the root if needed
-                if let Some((old_id, new_id)) = current_replacement_info {
-                    println!(
-                        "Replacing root page {:?} with {:?} in header", old_id, new_id
-                    );
-
-                    if self.freetree_root_id == old_id {
-                        self.freetree_root_id = new_id;
-                    } else {
-                        return Err(LmdbError::DatabaseCorrupted("Root ID mismatch".to_string()));
-                    }
-                }
-
-                if let Some((promoted_key, promoted_page_id)) = split_info {
-                    // Create a new root
-                    let new_internal_node = FreeListInternalNode {
-                        keys: vec![promoted_key],
-                        child_ids: vec![self.freetree_root_id, promoted_page_id],
-                    };
-
-                    let new_root_page_id = self.alloc_page_id();
-                    let new_root_page = Page::new(new_root_page_id, Node::FreeListInternal(new_internal_node));
-                    println!(
-                        "Created new internal root node {:?}: {:?}",
-                        new_root_page_id, new_root_page.node
-                    );
-                    self.mark_dirty(new_root_page);
-
-                    self.freetree_root_id = new_root_page_id;
-                }
             } else {
                 return Err(LmdbError::DatabaseCorrupted("Expected FreeListLeaf node".to_string()));
             }
-        } else {
-            // No splitting needed. Update the root ID if needed.
-            if let Some((old_id, new_id)) = replacement_info {
-                if self.freetree_root_id == old_id {
-                    self.freetree_root_id = new_id;
-                    println!(
-                        "Replacing root page ID {:?} with {:?}", old_id, new_id
-                    );
+        }
+        // Propagate splits and replacements up the stack
+        let mut current_replacement_info = replacement_info;
+        while let Some(parent_page_id) = stack.pop() {
+
+            // Make the internal page dirty
+            let dirty_page_id= {
+                self.get_dirty_page_id(parent_page_id)?
+            };
+            let parent_replacement_info: Option<(PageID, PageID)> = {
+                if dirty_page_id != parent_page_id {
+                    Some((parent_page_id, dirty_page_id))
+                } else {
+                    None
                 }
+            };
+            // Get a mutable internal node....
+            let dirty_internal_page = self.get_mut_dirty(dirty_page_id)?;
+
+            if let Node::FreeListInternal(dirty_internal_node) = &mut dirty_internal_page.node {
+
+                if let Some((old_id, new_id)) = current_replacement_info {
+                    // println!(
+                    //     "Replacing {:?} with {:?} in {:?}: {:?}",
+                    //     old_id, new_id, dirty_page_id, dirty_internal_node
+                    // );
+                    dirty_internal_node.replace_last_child_id(old_id, new_id)?;
+                    println!(
+                        "Replaced {:?} with {:?} in {:?}: {:?}",
+                        old_id, new_id, dirty_page_id, dirty_internal_node
+                    );
+                } else {
+                    println!("Nothing to replace in {:?}", dirty_page_id)
+                }
+
+            } else {
+                return Err(LmdbError::DatabaseCorrupted("Expected FreeListInternal node".to_string()));
+            }
+
+
+            if let Some((promoted_key, promoted_page_id)) = split_info {
+                if let Node::FreeListInternal(dirty_internal_node) = &mut dirty_internal_page.node {
+                    // Add the promoted key and page ID
+                    dirty_internal_node.append_promoted_key_and_page_id(promoted_key, promoted_page_id)?;
+
+                    println!(
+                        "Appended promoted key {:?} and child {:?} in {:?}: {:?}",
+                        promoted_key, promoted_page_id, dirty_page_id, dirty_internal_node
+                    )
+
+                } else {
+                    return Err(LmdbError::DatabaseCorrupted("Expected FreeListInternal node".to_string()));
+                }
+            }
+
+            // Check if the internal page needs splitting
+            let serialized_len = dirty_internal_page.serialize()?.len();
+            let internal_needs_splitting = {
+                serialized_len > db.page_size
+            };
+
+            if internal_needs_splitting {
+                if let Node::FreeListInternal(dirty_internal_node) = &mut dirty_internal_page.node {
+                    println!("Splitting internal {:?}...", dirty_page_id);
+                    // Split the internal node
+                    // Ensure we have at least 3 keys and 4 child IDs before splitting
+                    if dirty_internal_node.keys.len() < 3 || dirty_internal_node.child_ids.len() < 4 {
+                        return Err(LmdbError::DatabaseCorrupted("Cannot split internal node with too few keys/children".to_string()));
+                    }
+
+                    // Move the right-most key to new node. Promote the next right-most key.
+                    let (promoted_key, new_keys, new_child_ids) = dirty_internal_node.split_off().unwrap();
+
+                    // Ensure both nodes maintain the B-tree invariant: n keys should have n+1 child pointers
+                    assert_eq!(dirty_internal_node.keys.len() + 1, dirty_internal_node.child_ids.len());
+
+                    let new_internal_node = FreeListInternalNode {
+                        keys: new_keys,
+                        child_ids: new_child_ids,
+                    };
+
+                    // Ensure the new node also maintains the invariant
+                    assert_eq!(new_internal_node.keys.len() + 1, new_internal_node.child_ids.len());
+
+                    // Create new internal page.
+                    let new_internal_page_id = self.alloc_page_id();
+                    let new_internal_page = Page::new(new_internal_page_id, Node::FreeListInternal(new_internal_node));
+                    println!(
+                        "Created internal {:?}: {:?}", new_internal_page_id, new_internal_page.node
+                    );
+                    self.mark_dirty(new_internal_page);
+
+                    split_info = Some((promoted_key, new_internal_page_id));
+                } else {
+                    return Err(LmdbError::DatabaseCorrupted("Expected FreeListInternal node".to_string()));
+                }
+            } else {
+                split_info = None;
+            }
+            current_replacement_info = parent_replacement_info;
+        }
+
+        if let Some((promoted_key, promoted_page_id)) = split_info {
+            // Create a new root
+            let new_internal_node = FreeListInternalNode {
+                keys: vec![promoted_key],
+                child_ids: vec![self.freetree_root_id, promoted_page_id],
+            };
+
+            let new_root_page_id = self.alloc_page_id();
+            let new_root_page = Page::new(new_root_page_id, Node::FreeListInternal(new_internal_node));
+            println!(
+                "Created new internal root {:?}: {:?}",
+                new_root_page_id, new_root_page.node
+            );
+            self.mark_dirty(new_root_page);
+
+            self.freetree_root_id = new_root_page_id;
+        } else if let Some((old_id, new_id)) = current_replacement_info {
+            if self.freetree_root_id == old_id {
+                self.freetree_root_id = new_id;
+                println!(
+                    "Replaced root {:?} with {:?}", old_id, new_id
+                );
+            } else {
+                return Err(LmdbError::RootIDMismatchError(old_id, new_id));
             }
         }
 
@@ -702,39 +706,51 @@ impl LmdbWriter {
         println!("Removing {:?} from {:?}...", used_page_id, tsn);
         println!("Root is {:?}", self.freetree_root_id);
         // Get the root page
-        let mut current_page = db.get_page(self, self.freetree_root_id)?;
+        let mut current_page_id = self.freetree_root_id;
 
         // Traverse the tree to find a leaf node
         let mut stack: Vec<PageID> = Vec::new();
-        let mut current_node = current_page.node.clone();
+        let mut removed_page_ids: Vec<PageID> = Vec::new();
 
-        while !matches!(current_node, Node::FreeListLeaf(_)) {
-            if let Node::FreeListInternal(internal_node) = &current_node {
-                println!("{:?} is internal node: {:?}", current_page.page_id, internal_node);
-                stack.push(current_page.page_id);
-                let child_page_id = internal_node.child_ids[0];
-                current_page = db.get_page(self, child_page_id)?;
-                current_node = current_page.node.clone();
+        loop {
+            let current_page_ref = self.get_page_ref(db, current_page_id)?;
+            if matches!(current_page_ref.node, Node::FreeListLeaf(_)) {
+                break;
+            }
+            if let Node::FreeListInternal(internal_node) = &current_page_ref.node {
+                println!("Page {:?} is internal node", current_page_ref.page_id);
+                stack.push(current_page_id);
+                current_page_id = *internal_node.child_ids.first().unwrap();
             } else {
                 return Err(LmdbError::DatabaseCorrupted("Expected FreeListInternal node".to_string()));
             }
         }
-        println!("{:?} is leaf node: {:?}", current_page.page_id, current_node);
-
+        println!("Page {:?} is leaf node", current_page_id);
 
         // Make the leaf page dirty
-        let (mut leaf_page, replacement_info) = self.make_dirty(current_page);
+        let dirty_page_id= {
+            self.get_dirty_page_id(current_page_id)?
+        };
+        let replacement_info: Option<(PageID, PageID)> = {
+            if dirty_page_id != current_page_id {
+                Some((current_page_id, dirty_page_id))
+            } else {
+                None
+            }
+        };
+        // Get a mutable leaf node....
+        let dirty_leaf_page = self.get_mut_dirty(dirty_page_id)?;
 
         // Remove the page ID from the leaf node
         let mut removal_info = None;
 
-        if let Node::FreeListLeaf(ref mut leaf_node) = leaf_page.node {
+        if let Node::FreeListLeaf(dirty_leaf_node) = &mut dirty_leaf_page.node {
             // Assume we are exhausting page IDs from the lowest TSNs first
-            if leaf_node.keys.is_empty() || leaf_node.keys[0] != tsn {
-                return Err(LmdbError::DatabaseCorrupted(format!("Expected TSN {} not found: {:?}", tsn.0, leaf_node)));
+            if dirty_leaf_node.keys.is_empty() || dirty_leaf_node.keys[0] != tsn {
+                return Err(LmdbError::DatabaseCorrupted(format!("Expected TSN {} not found: {:?}", tsn.0, dirty_leaf_node)));
             }
 
-            let leaf_value = &mut leaf_node.values[0];
+            let leaf_value = &mut dirty_leaf_node.values[0];
 
             if leaf_value.root_id.is_some() {
                 return Err(LmdbError::DatabaseCorrupted("Free list subtree not implemented".to_string()));
@@ -745,44 +761,55 @@ impl LmdbWriter {
                 } else {
                     return Err(LmdbError::DatabaseCorrupted(format!("{:?} not found in {:?}", used_page_id, tsn)));
                 }
-                println!("Removed {:?} from {:?} in {:?}", used_page_id, tsn, leaf_page.page_id);
+                println!("Removed {:?} from {:?} in {:?}", used_page_id, tsn, dirty_page_id);
 
                 // If no more page IDs, remove the TSN entry
                 if leaf_value.page_ids.is_empty() {
-                    leaf_node.keys.remove(0);
-                    leaf_node.values.remove(0);
-                    println!("Removed {:?} from {:?}", tsn, leaf_page.page_id);
+                    dirty_leaf_node.keys.remove(0);
+                    dirty_leaf_node.values.remove(0);
+                    println!("Removed {:?} from {:?}", tsn, dirty_page_id);
                     // If leaf is empty, mark it for removal
-                    if leaf_node.keys.is_empty() {
-                        println!("Empty leaf page {:?}: {:?}", leaf_page.page_id, leaf_page.node);
-                        removal_info = Some(leaf_page.page_id);
+                    if dirty_leaf_node.keys.is_empty() {
+                        println!("Empty leaf page {:?}: {:?}", dirty_page_id, dirty_leaf_node);
+                        removal_info = Some(dirty_page_id);
+                    } else {
+                        println!("Leaf page not empty {:?}: {:?}", dirty_page_id, dirty_leaf_node);
                     }
                 } else {
-                    println!("Leaf page not empty {:?}: {:?}", leaf_page.page_id, leaf_page.node);
+                    println!("Leaf value not empty {:?}: {:?}", tsn, leaf_value);
                 }
             }
         } else {
             return Err(LmdbError::DatabaseCorrupted("Expected FreeListLeaf node".to_string()));
         }
 
-        self.mark_dirty(leaf_page);
-
         // Propagate replacements and removals up the stack
         let mut current_replacement_info = replacement_info;
 
-        while let Some(internal_page_id) = stack.pop() {
-            let internal_page = db.get_page(self, internal_page_id)?;
-            let (mut internal_page, parent_replacement_info) = self.make_dirty(internal_page);
+        while let Some(parent_page_id) = stack.pop() {
+            // Make the internal page dirty
+            let dirty_page_id= {
+                self.get_dirty_page_id(parent_page_id)?
+            };
+            let parent_replacement_info: Option<(PageID, PageID)> = {
+                if dirty_page_id != parent_page_id {
+                    Some((parent_page_id, dirty_page_id))
+                } else {
+                    None
+                }
+            };
+            // Get a mutable internal node....
+            let dirty_internal_page = self.get_mut_dirty(dirty_page_id)?;
 
             if let Some((old_id, new_id)) = current_replacement_info {
-                println!(
-                    "Replacing page {:?} with {:?} in {:?}: {:?}",
-                    old_id, new_id, internal_page.page_id, internal_page.node
-                );
-                if let Node::FreeListInternal(ref mut internal_node) = internal_page.node {
+                // println!(
+                //     "Replacing page {:?} with {:?} in {:?}: {:?}",
+                //     old_id, new_id, dirty_page_id, dirty_internal_page
+                // );
+                if let Node::FreeListInternal(dirty_internal_node) = &mut dirty_internal_page.node {
                     // Replace the child ID
-                    if internal_node.child_ids[0] == old_id {
-                        internal_node.child_ids[0] = new_id;
+                    if dirty_internal_node.child_ids[0] == old_id {
+                        dirty_internal_node.child_ids[0] = new_id;
                     } else {
                         return Err(LmdbError::DatabaseCorrupted("Child ID mismatch".to_string()));
                     }
@@ -791,41 +818,41 @@ impl LmdbWriter {
                 }
                 println!(
                     "Replaced page {:?} with {:?} in {:?}: {:?}",
-                    old_id, new_id, internal_page.page_id, internal_page.node
+                    old_id, new_id, dirty_page_id, dirty_internal_page
                 );
             }
 
             if let Some(removed_page_id) = removal_info {
-                self.append_freed_page_id(removed_page_id);
+                removed_page_ids.push(removed_page_id);
 
-                if let Node::FreeListInternal(ref mut internal_node) = internal_page.node {
+                if let Node::FreeListInternal(dirty_internal_node) = &mut dirty_internal_page.node {
                     println!(
                         "Removing child ID {:?} from {:?}: {:?}",
-                        removed_page_id, internal_page.page_id, internal_node
+                        removed_page_id, dirty_page_id, dirty_internal_node
                     );
                     // Remove the child ID and key
-                    if internal_node.child_ids[0] == removed_page_id {
-                        internal_node.child_ids.remove(0);
-
-                        if !internal_node.keys.is_empty() {
-                            internal_node.keys.remove(0);
+                    if dirty_internal_node.child_ids[0] == removed_page_id {
+                        dirty_internal_node.child_ids.remove(0);
+        
+                        if !dirty_internal_node.keys.is_empty() {
+                            dirty_internal_node.keys.remove(0);
                         }
-
+        
                         // If internal node is empty or has only one child, mark it for removal
-                        if internal_node.keys.is_empty() {
+                        if dirty_internal_node.keys.is_empty() {
                             println!(
                                 "Empty internal page {:?}: {:?}",
-                                internal_page.page_id, internal_node
+                                dirty_page_id, dirty_internal_node
                             );
-                            assert_eq!(internal_node.child_ids.len(), 1);
-                            let orphaned_child_id = internal_node.child_ids[0];
-
-                            self.append_freed_page_id(internal_page.page_id);
-
+                            assert_eq!(dirty_internal_node.child_ids.len(), 1);
+                            let orphaned_child_id = dirty_internal_node.child_ids[0];
+        
+                            removed_page_ids.push(dirty_page_id);
+        
                             if let Some((old_id, _)) = parent_replacement_info {
                                 current_replacement_info = Some((old_id, orphaned_child_id));
                             } else {
-                                current_replacement_info = Some((internal_page.page_id, orphaned_child_id));
+                                current_replacement_info = Some((dirty_page_id, orphaned_child_id));
                             }
                         }
                     } else {
@@ -839,21 +866,22 @@ impl LmdbWriter {
             } else {
                 current_replacement_info = parent_replacement_info;
             }
-            self.mark_dirty(internal_page);
+        }
 
+        for &removed_page_id in &removed_page_ids {
+            self.append_freed_page_id(removed_page_id);
         }
 
         // Update the root if needed
         if let Some((old_id, new_id)) = current_replacement_info {
             if self.freetree_root_id == old_id {
                 self.freetree_root_id = new_id;
+                println!(
+                    "Replaced root {:?} with {:?}", old_id, new_id
+                );
             } else {
-                return Err(LmdbError::DatabaseCorrupted("Root ID mismatch".to_string()));
+                return Err(LmdbError::RootIDMismatchError(old_id, new_id));
             }
-            println!(
-                "Updated header with replacement root page {:?}",
-                self.freetree_root_id
-            );
         }
 
         Ok(())
@@ -1462,7 +1490,7 @@ mod tests {
         #[serial]
         fn test_insert_freed_page_ids_until_split_leaf() {
             let (_temp_dir, mut db) = construct_db(64);
-            
+
             // Get latest header
             let (header_page_id, header_node) = db.get_latest_header().unwrap();
 
@@ -1475,25 +1503,25 @@ mod tests {
                 header_node.freetree_root_id,
                 header_node.position_root_id,
             );
-            
+
             let mut has_split_leaf = false;
             let mut inserted: Vec<(TSN, PageID)> = Vec::new();
-            
+
             // Insert page IDs until we split a leaf
             while !has_split_leaf {
                 // Allocate and insert first page ID
                 let page_id1 = writer.alloc_page_id();
                 writer.insert_freed_page_id(&mut db, tsn, page_id1).unwrap();
                 inserted.push((tsn, page_id1));
-                
+
                 // Allocate and insert second page ID
                 let page_id2 = writer.alloc_page_id();
                 writer.insert_freed_page_id(&mut db, tsn, page_id2).unwrap();
                 inserted.push((tsn, page_id2));
-                
+
                 // Increment TSN for next iteration
                 tsn = TSN(tsn.0 + 1);
-                
+
                 // Check if we've split the leaf
                 let root_page = writer.dirty.get(&writer.freetree_root_id).unwrap();
                 match &root_page.node {
@@ -1503,17 +1531,17 @@ mod tests {
                     _ => {}
                 }
             }
-            
+
             // Check keys and values of all pages
             let mut copy_inserted = inserted.clone();
-            
+
             // Get the root node
             let root_page = writer.dirty.get(&writer.freetree_root_id).unwrap();
             let root_node = match &root_page.node {
                 Node::FreeListInternal(node) => node,
                 _ => panic!("Expected FreeListInternal node"),
             };
-            
+
             // Collect active page IDs
             let mut active_page_ids = vec![
                 db.header_page_id0,
@@ -1521,27 +1549,27 @@ mod tests {
                 writer.freetree_root_id,
                 writer.position_root_id,
             ];
-            
+
             // Collect freed page IDs
             let mut freed_page_ids: Vec<PageID> = writer.freed_page_ids.iter().cloned().collect();
-            
+
             // Check each child of the root
             for (i, &child_id) in root_node.child_ids.iter().enumerate() {
                 active_page_ids.push(child_id);
-                
+
                 let child_page = writer.dirty.get(&child_id).unwrap();
                 assert_eq!(child_id, child_page.page_id);
-                
+
                 let child_node = match &child_page.node {
                     Node::FreeListLeaf(node) => node,
                     _ => panic!("Expected FreeListLeaf node"),
                 };
-                
+
                 // Check that the keys are properly ordered
                 if i > 0 {
                     assert_eq!(root_node.keys[i - 1], child_node.keys[0]);
                 }
-                
+
                 // Check each key and value in the child
                 for (k, &key) in child_node.keys.iter().enumerate() {
                     for &value in &child_node.values[k].page_ids {
@@ -1552,26 +1580,142 @@ mod tests {
                     }
                 }
             }
-            
+
             // We just split a leaf, so now we have 6 pages
             assert_eq!(6, active_page_ids.len());
-            
+
             // Audit page IDs
             let mut all_page_ids = active_page_ids.clone();
             all_page_ids.extend(freed_page_ids.clone());
             all_page_ids.sort();
             all_page_ids.dedup();
-            
+
             assert_eq!(
                 all_page_ids.len(),
                 active_page_ids.len() + freed_page_ids.len() - active_page_ids.iter().filter(|id| freed_page_ids.contains(id)).count()
             );
-            
+
             // Check that all page IDs are accounted for
             let expected_page_ids: Vec<PageID> = (0..writer.next_page_id.0).map(PageID).collect();
             assert_eq!(expected_page_ids, all_page_ids);
         }
-        
+
+        #[test]
+        #[serial]
+        fn test_insert_freed_page_ids_until_replace_internal_node_child_id() {
+            let (_temp_dir, mut db) = construct_db(64);
+
+            // Block inserted page IDs from being reused
+            {
+                db.reader_tsns.lock().unwrap().insert(0, TSN(0));
+            }
+
+            let mut has_split_leaf = false;
+            let mut inserted: Vec<(TSN, PageID)> = Vec::new();
+
+            // Insert page IDs until we split a leaf
+            while !has_split_leaf {
+                // Create a writer
+                let mut writer = db.writer().unwrap();
+                // Allocate and insert first page ID
+                let page_id1 = writer.alloc_page_id();
+                writer.insert_freed_page_id(&db, writer.tsn, page_id1).unwrap();
+                inserted.push((writer.tsn, page_id1));
+
+                // Allocate and insert second page ID
+                let page_id2 = writer.alloc_page_id();
+                writer.insert_freed_page_id(&db, writer.tsn, page_id2).unwrap();
+                inserted.push((writer.tsn, page_id2));
+
+                // Check if we've split the leaf
+                let root_page = writer.dirty.get(&writer.freetree_root_id).unwrap();
+                match &root_page.node {
+                    Node::FreeListInternal(_) => {
+                        has_split_leaf = true;
+                    },
+                    _ => {}
+                }
+
+                db.commit(&mut writer).unwrap();
+
+            }
+
+            let mut writer = db.writer().unwrap();
+            let page_id3 = writer.alloc_page_id();
+            writer.insert_freed_page_id(&db, writer.tsn, page_id3).unwrap();
+            db.commit(&mut writer).unwrap();
+            inserted.push((writer.tsn, page_id3));
+
+            writer = db.writer().unwrap();
+            let page_id4 = writer.alloc_page_id();
+            writer.insert_freed_page_id(&db, writer.tsn, page_id4).unwrap();
+            db.commit(&mut writer).unwrap();
+            inserted.push((writer.tsn, page_id4));
+
+            // Get the root node
+            writer = db.writer().unwrap();
+            let root_page = db.read_page(writer.freetree_root_id).unwrap();
+            let root_node = match &root_page.node {
+                Node::FreeListInternal(node) => node,
+                _ => panic!("Expected FreeListInternal node"),
+            };
+
+            // Collect active page IDs
+            let mut active_page_ids = vec![
+                db.header_page_id0,
+                db.header_page_id1,
+                writer.freetree_root_id,
+                writer.position_root_id,
+            ];
+
+            // Collect freed page IDs from the writer
+            let mut freed_page_ids: Vec<PageID> = writer.freed_page_ids.iter().cloned().collect();
+
+            // Collect child page IDs
+            for (i, &child_id) in root_node.child_ids.iter().enumerate() {
+                active_page_ids.push(child_id);
+
+                // Check each child page
+                let child_page = db.read_page(child_id).unwrap();
+                assert_eq!(child_id, child_page.page_id);
+
+                let child_node = match &child_page.node {
+                    Node::FreeListLeaf(node) => node,
+                    _ => panic!("Expected FreeListLeaf node"),
+                };
+
+                // Check that the keys are properly ordered
+                if i > 0 {
+                    assert_eq!(root_node.keys[i - 1], child_node.keys[0]);
+                }
+
+                // Collect freed page IDs from the child page values
+                for child_value in child_node.values.clone() {
+                    for page_id in child_value.page_ids {
+                        freed_page_ids.push(page_id);
+                    }
+                }
+            }
+
+            // We have split two leaf nodes, so now we have 7 active pages
+            assert_eq!(7, active_page_ids.len());
+
+            // Audit page IDs
+            let mut all_page_ids = active_page_ids.clone();
+            all_page_ids.extend(freed_page_ids.clone());
+            all_page_ids.sort();
+            all_page_ids.dedup();
+
+            assert_eq!(
+                all_page_ids.len(),
+                active_page_ids.len() + freed_page_ids.len() - active_page_ids.iter().filter(|id| freed_page_ids.contains(id)).count()
+            );
+
+            // Check that all page IDs are accounted for
+            let expected_page_ids: Vec<PageID> = (0..writer.next_page_id.0).map(PageID).collect();
+            assert_eq!(expected_page_ids, all_page_ids);
+        }
+
         #[test]
         #[serial]
         fn test_remove_freed_page_ids_from_split_leaf() {
@@ -1654,7 +1798,6 @@ mod tests {
                 
                 // Check root page has been CoW-ed
                 assert_ne!(old_root_id, writer.freetree_root_id);
-                println!("Dirty pages: {:?}", writer.dirty.keys());
 
                 assert_eq!(1, writer.dirty.len());
                 assert!(writer.dirty.contains_key(&writer.freetree_root_id));

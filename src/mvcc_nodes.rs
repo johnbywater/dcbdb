@@ -12,9 +12,13 @@ const PAGE_TYPE_POSITION_INTERNAL: u8 = b'5';
 pub enum LmdbError {
     Io(io::Error),
     PageNotFound(PageID),
+    DirtyPageNotFound(PageID),
+    RootIDMismatchError(PageID, PageID),
     DatabaseCorrupted(String),
     SerializationError(String),
     DeserializationError(String),
+    PageAlreadyFreedError(PageID),
+
 }
 
 impl From<io::Error> for LmdbError {
@@ -28,9 +32,12 @@ impl fmt::Display for LmdbError {
         match self {
             LmdbError::Io(err) => write!(f, "IO error: {}", err),
             LmdbError::PageNotFound(page_id) => write!(f, "Page not found: {:?}", page_id),
+            LmdbError::DirtyPageNotFound(page_id) => write!(f, "Dirty page not found: {:?}", page_id),
+            LmdbError::RootIDMismatchError(old_id, new_id ) => write!(f, "Root ID mismatched: old {:?} new {:?}", old_id, new_id),
             LmdbError::DatabaseCorrupted(msg) => write!(f, "Database corrupted: {}", msg),
             LmdbError::SerializationError(msg) => write!(f, "Serialization error: {}", msg),
             LmdbError::DeserializationError(msg) => write!(f, "Deserialization error: {}", msg),
+            LmdbError::PageAlreadyFreedError(page_id) => write!(f, "Page already freed: {:?}", page_id),
         }
     }
 }

@@ -287,6 +287,7 @@ impl FreeListLeafNode {
             values,
         })
     }
+
     pub fn insert_or_append(&mut self, tsn: TSN, page_id: PageID) -> Result<()> {
         // Find the place to insert the value
         let leaf_idx = self.keys.iter().position(|&k| k == tsn);
@@ -319,6 +320,11 @@ impl FreeListLeafNode {
         Ok(())
     }
 
+    pub fn pop_last_key_and_value(&mut self) -> Result<(TSN, FreeListLeafValue)> {
+        let last_key = self.keys.pop().unwrap();
+        let last_value = self.values.pop().unwrap();
+        Ok((last_key, last_value))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

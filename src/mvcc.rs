@@ -544,14 +544,11 @@ impl LmdbWriter {
                 println!("Created page {:?}: {:?}", new_leaf_page_id, new_leaf_page.node);
                 self.mark_dirty(new_leaf_page);
 
-
                 // Propagate the split up the tree
                 println!("Promoting TSN {:?} and page {:?}", last_key, new_leaf_page_id);
 
                 let mut split_info = Some((last_key, new_leaf_page_id));
                 let mut current_replacement_info = replacement_info;
-
-
 
                 // Propagate splits and replacements up the stack
                 while let Some(parent_page_id) = stack.pop() {
@@ -700,8 +697,6 @@ impl LmdbWriter {
         Ok(())
     }
 }
-
-
 
 pub fn remove_freed_page_id(db: &mut Lmdb, writer: &mut LmdbWriter, tsn: TSN, used_page_id: PageID) -> Result<()> {
     println!("");

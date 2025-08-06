@@ -287,6 +287,38 @@ impl FreeListLeafNode {
             values,
         })
     }
+    pub fn insert_or_append(&mut self, tsn: TSN, page_id: PageID) -> Result<()> {
+        // Find the place to insert the value
+        let leaf_idx = self.keys.iter().position(|&k| k == tsn);
+
+        // Insert the value
+        if let Some(idx) = leaf_idx {
+            // TSN already exists, append to its page_ids
+            if self.values[idx].root_id.is_none() {
+                self.values[idx].page_ids.push(page_id);
+            } else {
+                return Err(LmdbError::DatabaseCorrupted("Free list subtree not implemented".to_string()));
+            }
+            // println!(
+            //     "Appended page ID {:?} to TSN {:?} in page {:?}: {:?}",
+            //     freed_page_id, tsn, dirty_page_id, dirty_leaf_node
+            // );
+
+        } else {
+            // New TSN, add a new entry
+            self.keys.push(tsn);
+            self.values.push(FreeListLeafValue {
+                page_ids: vec![page_id],
+                root_id: None,
+            });
+            // println!(
+            //     "Inserted {:?} and appended {:?} in {:?}: {:?}",
+            //     tsn, freed_page_id, dirty_page_id, dirty_leaf_node
+            // );
+        }
+        Ok(())
+    }
+
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

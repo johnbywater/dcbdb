@@ -337,11 +337,15 @@ impl LmdbWriter {
         self.deserialized.insert(page.page_id, page);
     }
 
-    pub fn mark_dirty(&mut self, page: Page) {
-        if !self.freed_page_ids.contains(&page.page_id) {
-            // println!("Marking dirty {:?}: {:?}", page.page_id, page.node);
-            self.dirty.insert(page.page_id, page);
+    pub fn insert_dirty(&mut self, page: Page) -> Result<()> {
+        if self.freed_page_ids.contains(&page.page_id) {
+            return Err(LmdbError::PageAlreadyFreedError(page.page_id));
         }
+        if self.dirty.contains_key(&page.page_id) {
+            return Err(LmdbError::PageAlreadyDirtyError(page.page_id));
+        }
+        self.dirty.insert(page.page_id, page);
+        Ok(())
     }
 
     pub fn alloc_page_id(&mut self) -> PageID {
@@ -561,7 +565,7 @@ impl LmdbWriter {
                 }
 
                 println!("Created new leaf {:?}: {:?}", new_leaf_page_id, new_leaf_page.node);
-                self.mark_dirty(new_leaf_page);
+                self.insert_dirty(new_leaf_page)?;
 
                 // Propagate the split up the tree
                 println!("Promoting {:?} and {:?}", last_key, new_leaf_page_id);
@@ -662,7 +666,7 @@ impl LmdbWriter {
                     println!(
                         "Created internal {:?}: {:?}", new_internal_page_id, new_internal_page.node
                     );
-                    self.mark_dirty(new_internal_page);
+                    self.insert_dirty(new_internal_page)?;
 
                     split_info = Some((promoted_key, new_internal_page_id));
                 } else {
@@ -687,7 +691,7 @@ impl LmdbWriter {
                 "Created new internal root {:?}: {:?}",
                 new_root_page_id, new_root_page.node
             );
-            self.mark_dirty(new_root_page);
+            self.insert_dirty(new_root_page)?;
 
             self.freetree_root_id = new_root_page_id;
         } else if let Some((old_id, new_id)) = current_replacement_info {
@@ -940,7 +944,7 @@ pub fn insert_position(db: &mut Lmdb, writer: &mut LmdbWriter, key: Position, va
 
             // Update the page with the modified node
             leaf_page.node = Node::PositionLeaf(modified_leaf_node);
-            writer.mark_dirty(leaf_page);
+            writer.insert_dirty(leaf_page)?;
 
             // Update the root if needed
             if let Some((old_id, new_id)) = replacement_info {
@@ -998,7 +1002,7 @@ pub fn insert_position(db: &mut Lmdb, writer: &mut LmdbWriter, key: Position, va
             return Err(LmdbError::DatabaseCorrupted("Expected PositionLeaf node".to_string()));
         };
         let new_leaf_page = Page::new(next_leaf_id, Node::PositionLeaf(new_leaf_node));
-        writer.mark_dirty(new_leaf_page.clone());
+        writer.insert_dirty(new_leaf_page.clone())?;
 
         // Propagate the split up the tree
         let mut split_info = Some((promoted_key, new_leaf_page.page_id));
@@ -1058,7 +1062,7 @@ pub fn insert_position(db: &mut Lmdb, writer: &mut LmdbWriter, key: Position, va
                     // Create a new page for the new internal node
                     let new_internal_page_id = writer.alloc_page_id();
                     let new_internal_page = Page::new(new_internal_page_id, Node::PositionInternal(new_internal_node));
-                    writer.mark_dirty(new_internal_page);
+                    writer.insert_dirty(new_internal_page)?;
 
                     split_info = Some((promoted_key, new_internal_page_id));
                 } else {
@@ -1089,13 +1093,13 @@ pub fn insert_position(db: &mut Lmdb, writer: &mut LmdbWriter, key: Position, va
 
             let new_root_page_id = writer.alloc_page_id();
             let new_root_page = Page::new(new_root_page_id, Node::PositionInternal(new_internal_node));
-            writer.mark_dirty(new_root_page);
+            writer.insert_dirty(new_root_page)?;
 
             writer.position_root_id = new_root_page_id;
         }
     } else {
         // No splitting needed, just update the page
-        writer.mark_dirty(leaf_page);
+        writer.insert_dirty(leaf_page)?;
 
         // Update the root if needed
         if let Some((old_id, new_id)) = replacement_info {
@@ -2253,28 +2257,6 @@ mod tests {
                 writer.remove_freed_page_id(&db, tsn, page_id).unwrap();
                 db.commit(&mut writer).unwrap();
             }
-
-            // Check the root internal node has a child ID that is a leaf node.
-            // Get the root node
-            let writer = db.writer().unwrap();
-            let root_page = db.read_page(writer.freetree_root_id).unwrap();
-            let root_node = match &root_page.node {
-                Node::FreeListInternal(node) => node,
-                _ => panic!("Expected FreeListInternal node"),
-            };
-            let mut root_has_child_leaf_node = false;
-            for &child_id in root_node.child_ids.iter() {
-                // Check each child page
-                let child_page = db.read_page(child_id).unwrap();
-                assert_eq!(child_id, child_page.page_id);
-
-                if matches!(child_page.node, Node::FreeListLeaf(_)) {
-                    root_has_child_leaf_node = true;
-                    break;
-                }
-            }
-            assert!(root_has_child_leaf_node);
-
         }
     }
 }

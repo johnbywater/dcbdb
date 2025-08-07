@@ -18,6 +18,7 @@ pub enum LmdbError {
     SerializationError(String),
     DeserializationError(String),
     PageAlreadyFreedError(PageID),
+    PageAlreadyDirtyError(PageID),
 
 }
 
@@ -38,6 +39,7 @@ impl fmt::Display for LmdbError {
             LmdbError::SerializationError(msg) => write!(f, "Serialization error: {}", msg),
             LmdbError::DeserializationError(msg) => write!(f, "Deserialization error: {}", msg),
             LmdbError::PageAlreadyFreedError(page_id) => write!(f, "Page already freed: {:?}", page_id),
+            LmdbError::PageAlreadyDirtyError(page_id) => write!(f, "Page already dirty: {:?}", page_id),
         }
     }
 }

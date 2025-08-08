@@ -30,22 +30,22 @@ impl From<io::Error> for LmdbError {
 impl fmt::Display for LmdbError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LmdbError::Io(err) => write!(f, "IO error: {}", err),
-            LmdbError::PageNotFound(page_id) => write!(f, "Page not found: {:?}", page_id),
+            LmdbError::Io(err) => write!(f, "IO error: {err}"),
+            LmdbError::PageNotFound(page_id) => write!(f, "Page not found: {page_id:?}"),
             LmdbError::DirtyPageNotFound(page_id) => {
-                write!(f, "Dirty page not found: {:?}", page_id)
+                write!(f, "Dirty page not found: {page_id:?}")
             }
             LmdbError::RootIDMismatchError(old_id, new_id) => {
-                write!(f, "Root ID mismatched: old {:?} new {:?}", old_id, new_id)
+                write!(f, "Root ID mismatched: old {old_id:?} new {new_id:?}")
             }
-            LmdbError::DatabaseCorrupted(msg) => write!(f, "Database corrupted: {}", msg),
-            LmdbError::SerializationError(msg) => write!(f, "Serialization error: {}", msg),
-            LmdbError::DeserializationError(msg) => write!(f, "Deserialization error: {}", msg),
+            LmdbError::DatabaseCorrupted(msg) => write!(f, "Database corrupted: {msg}"),
+            LmdbError::SerializationError(msg) => write!(f, "Serialization error: {msg}"),
+            LmdbError::DeserializationError(msg) => write!(f, "Deserialization error: {msg}"),
             LmdbError::PageAlreadyFreedError(page_id) => {
-                write!(f, "Page already freed: {:?}", page_id)
+                write!(f, "Page already freed: {page_id:?}")
             }
             LmdbError::PageAlreadyDirtyError(page_id) => {
-                write!(f, "Page already dirty: {:?}", page_id)
+                write!(f, "Page already dirty: {page_id:?}")
             }
         }
     }
@@ -949,8 +949,7 @@ impl Node {
                 Ok(Node::PositionInternal(node))
             }
             _ => Err(LmdbError::DatabaseCorrupted(format!(
-                "Invalid node type: {}",
-                node_type
+                "Invalid node type: {node_type}"
             ))),
         }
     }

@@ -63,7 +63,7 @@ impl Page {
         let data = &page_data[PAGE_HEADER_SIZE..PAGE_HEADER_SIZE + data_len];
 
         // Verify CRC
-        let calculated_crc = calc_crc(&data);
+        let calculated_crc = calc_crc(data);
 
         if calculated_crc != crc {
             return Err(LmdbError::DatabaseCorrupted("CRC mismatch".to_string()));

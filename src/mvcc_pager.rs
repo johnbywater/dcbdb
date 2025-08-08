@@ -23,6 +23,7 @@ impl Pager {
                 .read(true)
                 .write(true)
                 .create(true)
+                .truncate(false)
                 .open(path)?
         } else {
             OpenOptions::new().read(true).write(true).open(path)?
@@ -76,7 +77,7 @@ impl Pager {
         if bytes_read < self.page_size {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
-                format!("Page {:?} not found", page_id),
+                format!("Page {page_id:?} not found"),
             ));
         }
         Ok(page)

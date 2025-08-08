@@ -538,9 +538,7 @@ impl LmdbWriter {
         // Check if the leaf needs splitting by estimating the serialized size
         let mut split_info: Option<(TSN, PageID)> = None;
 
-        let leaf_needs_splitting = dirty_leaf_page.serialize()?.len() > db.page_size;
-
-        if leaf_needs_splitting {
+        if dirty_leaf_page.calc_serialized_size() > db.page_size {
             // Split the leaf node
             if let Node::FreeListLeaf(dirty_leaf_node) = &mut dirty_leaf_page.node {
                 let (last_key, last_value) = dirty_leaf_node.pop_last_key_and_value()?;
@@ -556,11 +554,8 @@ impl LmdbWriter {
                 let new_leaf_page = Page::new(new_leaf_page_id, Node::FreeListLeaf(new_leaf_node));
 
                 // Check if the new leaf page needs splitting
-                let new_leaf_needs_splitting = {
-                    new_leaf_page.serialize()?.len() > db.page_size
-                };
 
-                if new_leaf_needs_splitting {
+                if new_leaf_page.calc_serialized_size() > db.page_size {
                     return Err(LmdbError::DatabaseCorrupted("Overflow freed page IDs for TSN to subtree not implemented".to_string()));
                 }
 
@@ -628,12 +623,8 @@ impl LmdbWriter {
             }
 
             // Check if the internal page needs splitting
-            let serialized_len = dirty_internal_page.serialize()?.len();
-            let internal_needs_splitting = {
-                serialized_len > db.page_size
-            };
 
-            if internal_needs_splitting {
+            if dirty_internal_page.calc_serialized_size() > db.page_size {
                 if let Node::FreeListInternal(dirty_internal_node) = &mut dirty_internal_page.node {
                     println!("Splitting internal {:?}...", dirty_page_id);
                     // Split the internal node

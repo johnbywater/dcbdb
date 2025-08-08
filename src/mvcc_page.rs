@@ -20,6 +20,11 @@ impl Page {
             node,
         }
     }
+    
+    pub fn calc_serialized_size(&self) -> usize {
+        // The total serialized size is the size of the page header plus the size of the serialized node
+        PAGE_HEADER_SIZE + self.node.calc_serialized_size()
+    }
 
     pub fn serialize(&self) -> mvcc::Result<Vec<u8>> {
         // Serialize the node
@@ -73,5 +78,49 @@ impl Page {
             page_id,
             node,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mvcc_nodes::{HeaderNode, TSN, PageID};
+
+    #[test]
+    fn test_page_serialization_and_size() {
+        // Create a HeaderNode (simplest node type)
+        let node = Node::Header(HeaderNode {
+            tsn: TSN(42),
+            next_page_id: PageID(123),
+            freetree_root_id: PageID(456),
+            position_root_id: PageID(789),
+        });
+
+        // Create a Page with the node
+        let page_id = PageID(1);
+        let page = Page::new(page_id, node);
+
+        // Calculate the serialized size
+        let calculated_size = page.calc_serialized_size();
+        
+        // Serialize the page
+        let serialized = page.serialize().expect("Failed to serialize page");
+        
+        // Check that the serialized data size matches the calculated size
+        assert_eq!(calculated_size, serialized.len(), 
+            "Calculated size {} should match actual serialized size {}", 
+            calculated_size, serialized.len());
+        
+        // Deserialize the serialized data
+        let deserialized = Page::deserialize(page_id, &serialized)
+            .expect("Failed to deserialize page");
+        
+        // Check that the deserialized page is the same as the original
+        assert_eq!(page.page_id, deserialized.page_id, 
+            "Original page_id {:?} should match deserialized page_id {:?}", 
+            page.page_id, deserialized.page_id);
+        assert_eq!(page.node, deserialized.node, 
+            "Original node {:?} should match deserialized node {:?}", 
+            page.node, deserialized.node);
     }
 }

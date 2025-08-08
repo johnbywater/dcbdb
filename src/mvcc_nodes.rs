@@ -829,6 +829,16 @@ impl Node {
             Node::PositionInternal(_) => PAGE_TYPE_POSITION_INTERNAL,
         }
     }
+    
+    pub fn calc_serialized_size(&self) -> usize {
+        match self {
+            Node::Header(_) => 16, // HeaderNode has a fixed size of 16 bytes
+            Node::FreeListLeaf(node) => node.calc_serialized_node_size(),
+            Node::FreeListInternal(node) => node.calc_serialized_node_size(),
+            Node::PositionLeaf(node) => node.calc_serialized_node_size(),
+            Node::PositionInternal(node) => node.calc_serialized_node_size(),
+        }
+    }
 
     pub fn serialize(&self) -> Result<Vec<u8>> {
         match self {

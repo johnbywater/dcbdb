@@ -1,12 +1,12 @@
 use crate::indexpages::{HeaderNode, IndexPage, IndexPages, Node};
-use crate::pagedfile::{PageID, PAGE_ID_SIZE};
-use crate::wal::{Position, POSITION_SIZE};
+use crate::pagedfile::{PAGE_ID_SIZE, PageID};
+use crate::wal::{POSITION_SIZE, Position};
 use std::any::Any;
 use std::cell::RefCell;
 use std::format;
 use std::io;
 use std::path::Path;
-use uuid::{uuid, Uuid};
+use uuid::{Uuid, uuid};
 
 /// An iterator over positions in a direct position list
 pub struct DirectPositionIterator {

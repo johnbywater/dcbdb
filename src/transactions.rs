@@ -7,10 +7,10 @@ use thiserror::Error;
 
 use crate::api::{DCBEvent, DCBSequencedEvent};
 use crate::checkpoint::CheckpointFile;
-use crate::positions::{hash_type, PositionIndex, PositionIndexRecord};
+use crate::positions::{PositionIndex, PositionIndexRecord, hash_type};
 use crate::segments::{SegmentError, SegmentManager};
 use crate::tags::TagIndex;
-use crate::wal::{pack_dcb_event_with_crc, Position, TransactionWAL, WalError};
+use crate::wal::{Position, TransactionWAL, WalError, pack_dcb_event_with_crc};
 
 /// Error types for transaction operations
 #[derive(Debug, Error)]

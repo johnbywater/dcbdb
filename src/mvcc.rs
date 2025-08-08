@@ -1,15 +1,17 @@
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::Mutex;
-use std::collections::HashMap;
 
-use crate::mvcc_nodes::{FreeListInternalNode, FreeListLeafNode, FreeListLeafValue, HeaderNode, LmdbError, Node, PageID, Position, PositionIndexRecord, PositionInternalNode, PositionLeafNode, TSN};
-use crate::mvcc_page::{Page, PAGE_HEADER_SIZE};
+use crate::mvcc_nodes::{
+    FreeListInternalNode, FreeListLeafNode, FreeListLeafValue, HeaderNode, LmdbError, Node, PageID,
+    Position, PositionIndexRecord, PositionInternalNode, PositionLeafNode, TSN,
+};
+use crate::mvcc_page::{PAGE_HEADER_SIZE, Page};
 use crate::mvcc_pager::Pager;
 
 // Result type alias
 pub type Result<T> = std::result::Result<T, LmdbError>;
-
 
 // Reader transaction
 pub struct LmdbReader {
@@ -64,7 +66,7 @@ impl Lmdb {
         let pager = Pager::new(path, page_size)?;
         let header_page_id0 = PageID(0);
         let header_page_id1 = PageID(1);
-        
+
         let mut lmdb = Self {
             pager,
             reader_tsns: Mutex::new(HashMap::new()),
@@ -74,13 +76,13 @@ impl Lmdb {
             header_page_id1,
             reader_id_counter: Mutex::new(0),
         };
-        
+
         if lmdb.pager.is_file_new {
             // Initialize new database
             let freetree_root_id = PageID(2);
             let position_root_id = PageID(3);
             let next_page_id = PageID(4);
-            
+
             // Create and write header pages
             let header_node0 = HeaderNode {
                 tsn: TSN(0),
@@ -88,13 +90,13 @@ impl Lmdb {
                 freetree_root_id,
                 position_root_id,
             };
-            
+
             let header_page0 = Page::new(header_page_id0, Node::Header(header_node0.clone()));
             lmdb.write_page(&header_page0)?;
-            
+
             let header_page1 = Page::new(header_page_id1, Node::Header(header_node0));
             lmdb.write_page(&header_page1)?;
-            
+
             // Create and write an empty free list root page
             let free_list_leaf = FreeListLeafNode {
                 keys: Vec::new(),
@@ -102,7 +104,7 @@ impl Lmdb {
             };
             let free_list_page = Page::new(freetree_root_id, Node::FreeListLeaf(free_list_leaf));
             lmdb.write_page(&free_list_page)?;
-            
+
             // Create and write an empty position index root page
             let position_leaf = PositionLeafNode {
                 keys: Vec::new(),
@@ -111,13 +113,13 @@ impl Lmdb {
             };
             let position_page = Page::new(position_root_id, Node::PositionLeaf(position_leaf));
             lmdb.write_page(&position_page)?;
-            
+
             lmdb.flush()?;
         }
-        
+
         Ok(lmdb)
     }
-    
+
     pub fn get_latest_header(&mut self) -> Result<(PageID, HeaderNode)> {
         let header0 = self.read_header(self.header_page_id0)?;
         let header1 = self.read_header(self.header_page_id1)?;
@@ -133,7 +135,11 @@ impl Lmdb {
         let header = self.read_page(page_id)?;
         let header_node = match header.node {
             Node::Header(node) => node,
-            _ => return Err(LmdbError::DatabaseCorrupted("Invalid header node type".to_string())),
+            _ => {
+                return Err(LmdbError::DatabaseCorrupted(
+                    "Invalid header node type".to_string(),
+                ));
+            }
         };
         Ok(header_node)
     }
@@ -143,29 +149,29 @@ impl Lmdb {
         println!("Read {:?} from file, deserializing...", page_id);
         Page::deserialize(page_id, &page_data)
     }
-    
+
     pub fn write_page(&mut self, page: &Page) -> Result<()> {
         let serialized = &page.serialize()?;
         self.pager.write_page(page.page_id, serialized)?;
         println!("Wrote {:?} to file", page.page_id);
         Ok(())
     }
-    
+
     pub fn flush(&mut self) -> Result<()> {
         self.pager.flush()?;
         Ok(())
     }
-    
+
     pub fn reader(&mut self) -> Result<LmdbReader> {
         let (header_page_id, header_node) = self.get_latest_header()?;
-        
+
         // Generate a unique ID for this reader using the counter
         let reader_id = {
             let mut counter = self.reader_id_counter.lock().unwrap();
             *counter += 1;
             *counter
         };
-        
+
         // Create the reader with the unique ID
         let reader = LmdbReader {
             header_page_id,
@@ -174,13 +180,16 @@ impl Lmdb {
             reader_id,
             reader_tsns: &self.reader_tsns,
         };
-        
+
         // Register the reader TSN
-        self.reader_tsns.lock().unwrap().insert(reader_id, reader.tsn);
-        
+        self.reader_tsns
+            .lock()
+            .unwrap()
+            .insert(reader_id, reader.tsn);
+
         Ok(reader)
     }
-    
+
     pub fn writer(&mut self) -> Result<LmdbWriter> {
         println!();
         println!("Constructing writer...");
@@ -204,7 +213,7 @@ impl Lmdb {
 
         Ok(writer)
     }
-    
+
     pub fn commit(&mut self, writer: &mut LmdbWriter) -> Result<()> {
         // Process reused and freed page IDs
         println!();
@@ -216,17 +225,17 @@ impl Lmdb {
                 // Remove the reused page ID from the freed list tree
                 writer.remove_freed_page_id(self, tsn, reused_page_id)?;
             }
-            
+
             // Process freed page IDs
             while let Some(freed_page_id) = writer.freed_page_ids.pop_front() {
                 // Remove dirty pages that were also freed
                 writer.dirty.remove(&freed_page_id);
-                
+
                 // Insert the page ID in the freed list tree
                 writer.insert_freed_page_id(self, writer.tsn, freed_page_id)?;
             }
         }
-        
+
         // Write all dirty pages
         for page in writer.dirty.values() {
             self.write_page(&page)?;
@@ -241,17 +250,17 @@ impl Lmdb {
         } else {
             self.header_page_id0
         };
-        
+
         let header_node = HeaderNode {
             tsn: writer.tsn,
             next_page_id: writer.next_page_id,
             freetree_root_id: writer.freetree_root_id,
             position_root_id: writer.position_root_id,
         };
-        
+
         let header_page = Page::new(header_page_id, Node::Header(header_node));
         self.write_page(&header_page)?;
-        
+
         // Flush changes to disk
         self.flush()?;
 
@@ -259,7 +268,7 @@ impl Lmdb {
 
         Ok(())
     }
-    
+
     pub fn get_page(&self, writer: &mut LmdbWriter, page_id: PageID) -> Result<Page> {
         // Check if the page is in the dirty pages
         if let Some(page) = writer.dirty.get(&page_id) {
@@ -279,7 +288,6 @@ impl Lmdb {
         Ok(writer.deserialized.get(&page_id).unwrap().clone())
     }
 }
-
 
 // Implementation for LmdbWriter
 impl LmdbWriter {
@@ -323,7 +331,6 @@ impl LmdbWriter {
         Ok(self.deserialized.get(&page_id).unwrap())
     }
 
-
     pub fn get_mut_dirty(&mut self, page_id: PageID) -> Result<&mut Page> {
         if let Some(page) = self.dirty.get_mut(&page_id) {
             Ok(page)
@@ -331,7 +338,6 @@ impl LmdbWriter {
             Err(LmdbError::DirtyPageNotFound(page_id))
         }
     }
-
 
     pub fn insert_deserialized(&mut self, page: Page) {
         self.deserialized.insert(page.page_id, page);
@@ -353,7 +359,7 @@ impl LmdbWriter {
             self.reused_page_ids.push_back((free_page_id, tsn));
             return free_page_id;
         }
-        
+
         let next_page_id = self.next_page_id;
         self.next_page_id = PageID(next_page_id.0 + 1);
         next_page_id
@@ -361,25 +367,25 @@ impl LmdbWriter {
 
     pub fn make_dirty(&mut self, page: Page) -> (Page, Option<(PageID, PageID)>) {
         let mut replacement_info = None;
-        
+
         if !self.freed_page_ids.iter().any(|&id| id == page.page_id) {
             if !self.dirty.contains_key(&page.page_id) {
                 let old_page_id = page.page_id;
                 self.freed_page_ids.push_back(old_page_id);
-                
+
                 let new_page_id = self.alloc_page_id();
                 let new_page = Page {
                     page_id: new_page_id,
                     node: page.node.clone(),
                 };
-                
+
                 self.dirty.insert(new_page_id, new_page.clone());
                 replacement_info = Some((old_page_id, new_page_id));
                 println!("Copied {:?} to {:?}: {:?}", old_page_id, new_page_id, page);
                 return (new_page, replacement_info);
             }
         }
-        
+
         (page, replacement_info)
     }
 
@@ -398,14 +404,16 @@ impl LmdbWriter {
                 };
 
                 self.dirty.insert(new_page_id, new_page);
-                println!("Copied {:?} to {:?}: {:?}", old_page_id, new_page_id, old_page.node);
+                println!(
+                    "Copied {:?} to {:?}: {:?}",
+                    old_page_id, new_page_id, old_page.node
+                );
                 dirty_page_id = new_page_id;
             } else {
                 println!("{:?} is already dirty", page_id);
             }
         } else {
             return Err(LmdbError::PageAlreadyFreedError(page_id));
-
         }
         Ok(dirty_page_id)
     }
@@ -430,9 +438,7 @@ impl LmdbWriter {
         println!("Finding reusable page IDs for TSN {:?}...", self.tsn);
 
         // Find the smallest reader TSN
-        let smallest_reader_tsn = {
-            db.reader_tsns.lock().unwrap().values().min().cloned()
-        };
+        let smallest_reader_tsn = { db.reader_tsns.lock().unwrap().values().min().cloned() };
         println!("Smallest reader TSN: {:?}", smallest_reader_tsn);
 
         println!("Root is {:?}", self.freetree_root_id);
@@ -445,9 +451,7 @@ impl LmdbWriter {
             if is_finished {
                 break;
             }
-            let page = {
-                self.get_page_ref(db, page_id)?
-            }; 
+            let page = { self.get_page_ref(db, page_id)? };
             match &page.node {
                 Node::FreeListInternal(node) => {
                     println!("{:?} is internal node", page.page_id);
@@ -476,11 +480,17 @@ impl LmdbWriter {
                             }
                         } else {
                             // TODO: Traverse into free list subtree
-                            return Err(LmdbError::DatabaseCorrupted("Free list subtree not implemented".to_string()));
+                            return Err(LmdbError::DatabaseCorrupted(
+                                "Free list subtree not implemented".to_string(),
+                            ));
                         }
                     }
                 }
-                _ => return Err(LmdbError::DatabaseCorrupted("Invalid node type in free list tree".to_string())),
+                _ => {
+                    return Err(LmdbError::DatabaseCorrupted(
+                        "Invalid node type in free list tree".to_string(),
+                    ));
+                }
             }
         }
 
@@ -490,7 +500,12 @@ impl LmdbWriter {
     }
 
     // Free list tree methods
-    pub fn insert_freed_page_id(&mut self, db: &Lmdb, tsn: TSN, freed_page_id: PageID) -> Result<()> {
+    pub fn insert_freed_page_id(
+        &mut self,
+        db: &Lmdb,
+        tsn: TSN,
+        freed_page_id: PageID,
+    ) -> Result<()> {
         println!("Inserting {:?} for {:?}", freed_page_id, tsn);
         println!("Root is {:?}", self.freetree_root_id);
         // Get the root page ID.
@@ -508,15 +523,15 @@ impl LmdbWriter {
                 stack.push(current_page_id);
                 current_page_id = *internal_node.child_ids.last().unwrap();
             } else {
-                return Err(LmdbError::DatabaseCorrupted("Expected FreeListInternal node".to_string()));
+                return Err(LmdbError::DatabaseCorrupted(
+                    "Expected FreeListInternal node".to_string(),
+                ));
             }
         }
         println!("{:?} is leaf node", current_page_id);
 
         // Make the leaf page dirty
-        let dirty_page_id= {
-            self.get_dirty_page_id(current_page_id)?
-        };
+        let dirty_page_id = { self.get_dirty_page_id(current_page_id)? };
         let replacement_info: Option<(PageID, PageID)> = {
             if dirty_page_id != current_page_id {
                 Some((current_page_id, dirty_page_id))
@@ -530,9 +545,14 @@ impl LmdbWriter {
         // Insert or append freed page ID to the list of page IDs for the TSN.
         if let Node::FreeListLeaf(dirty_leaf_node) = &mut dirty_leaf_page.node {
             dirty_leaf_node.insert_or_append(tsn, freed_page_id)?;
-            println!("Inserted {:?} for {:?} in {:?}: {:?}", freed_page_id, tsn, dirty_page_id, dirty_leaf_node);
+            println!(
+                "Inserted {:?} for {:?} in {:?}: {:?}",
+                freed_page_id, tsn, dirty_page_id, dirty_leaf_node
+            );
         } else {
-            return Err(LmdbError::DatabaseCorrupted("Expected FreeListLeaf node".to_string()));
+            return Err(LmdbError::DatabaseCorrupted(
+                "Expected FreeListLeaf node".to_string(),
+            ));
         }
 
         // Check if the leaf needs splitting by estimating the serialized size
@@ -543,7 +563,11 @@ impl LmdbWriter {
             if let Node::FreeListLeaf(dirty_leaf_node) = &mut dirty_leaf_page.node {
                 let (last_key, last_value) = dirty_leaf_node.pop_last_key_and_value()?;
 
-                println!("Split leaf {:?}: {:?}", dirty_page_id, dirty_leaf_node.clone());
+                println!(
+                    "Split leaf {:?}: {:?}",
+                    dirty_page_id,
+                    dirty_leaf_node.clone()
+                );
 
                 let new_leaf_node = FreeListLeafNode {
                     keys: vec![last_key],
@@ -556,30 +580,32 @@ impl LmdbWriter {
                 // Check if the new leaf page needs splitting
 
                 if new_leaf_page.calc_serialized_size() > db.page_size {
-                    return Err(LmdbError::DatabaseCorrupted("Overflow freed page IDs for TSN to subtree not implemented".to_string()));
+                    return Err(LmdbError::DatabaseCorrupted(
+                        "Overflow freed page IDs for TSN to subtree not implemented".to_string(),
+                    ));
                 }
 
-                println!("Created new leaf {:?}: {:?}", new_leaf_page_id, new_leaf_page.node);
+                println!(
+                    "Created new leaf {:?}: {:?}",
+                    new_leaf_page_id, new_leaf_page.node
+                );
                 self.insert_dirty(new_leaf_page)?;
 
                 // Propagate the split up the tree
                 println!("Promoting {:?} and {:?}", last_key, new_leaf_page_id);
 
                 split_info = Some((last_key, new_leaf_page_id));
-
-
             } else {
-                return Err(LmdbError::DatabaseCorrupted("Expected FreeListLeaf node".to_string()));
+                return Err(LmdbError::DatabaseCorrupted(
+                    "Expected FreeListLeaf node".to_string(),
+                ));
             }
         }
         // Propagate splits and replacements up the stack
         let mut current_replacement_info = replacement_info;
         while let Some(parent_page_id) = stack.pop() {
-
             // Make the internal page dirty
-            let dirty_page_id= {
-                self.get_dirty_page_id(parent_page_id)?
-            };
+            let dirty_page_id = { self.get_dirty_page_id(parent_page_id)? };
             let parent_replacement_info: Option<(PageID, PageID)> = {
                 if dirty_page_id != parent_page_id {
                     Some((parent_page_id, dirty_page_id))
@@ -591,7 +617,6 @@ impl LmdbWriter {
             let dirty_internal_page = self.get_mut_dirty(dirty_page_id)?;
 
             if let Node::FreeListInternal(dirty_internal_node) = &mut dirty_internal_page.node {
-
                 if let Some((old_id, new_id)) = current_replacement_info {
                     dirty_internal_node.replace_last_child_id(old_id, new_id)?;
                     println!(
@@ -601,24 +626,26 @@ impl LmdbWriter {
                 } else {
                     println!("Nothing to replace in {:?}", dirty_page_id)
                 }
-
             } else {
-                return Err(LmdbError::DatabaseCorrupted("Expected FreeListInternal node".to_string()));
+                return Err(LmdbError::DatabaseCorrupted(
+                    "Expected FreeListInternal node".to_string(),
+                ));
             }
-
 
             if let Some((promoted_key, promoted_page_id)) = split_info {
                 if let Node::FreeListInternal(dirty_internal_node) = &mut dirty_internal_page.node {
                     // Add the promoted key and page ID
-                    dirty_internal_node.append_promoted_key_and_page_id(promoted_key, promoted_page_id)?;
+                    dirty_internal_node
+                        .append_promoted_key_and_page_id(promoted_key, promoted_page_id)?;
 
                     println!(
                         "Appended promoted key {:?} and child {:?} in {:?}: {:?}",
                         promoted_key, promoted_page_id, dirty_page_id, dirty_internal_node
                     )
-
                 } else {
-                    return Err(LmdbError::DatabaseCorrupted("Expected FreeListInternal node".to_string()));
+                    return Err(LmdbError::DatabaseCorrupted(
+                        "Expected FreeListInternal node".to_string(),
+                    ));
                 }
             }
 
@@ -629,15 +656,22 @@ impl LmdbWriter {
                     println!("Splitting internal {:?}...", dirty_page_id);
                     // Split the internal node
                     // Ensure we have at least 3 keys and 4 child IDs before splitting
-                    if dirty_internal_node.keys.len() < 3 || dirty_internal_node.child_ids.len() < 4 {
-                        return Err(LmdbError::DatabaseCorrupted("Cannot split internal node with too few keys/children".to_string()));
+                    if dirty_internal_node.keys.len() < 3 || dirty_internal_node.child_ids.len() < 4
+                    {
+                        return Err(LmdbError::DatabaseCorrupted(
+                            "Cannot split internal node with too few keys/children".to_string(),
+                        ));
                     }
 
                     // Move the right-most key to a new node. Promote the next right-most key.
-                    let (promoted_key, new_keys, new_child_ids) = dirty_internal_node.split_off().unwrap();
+                    let (promoted_key, new_keys, new_child_ids) =
+                        dirty_internal_node.split_off().unwrap();
 
                     // Ensure old node maintain the B-tree invariant: n keys should have n+1 child pointers
-                    assert_eq!(dirty_internal_node.keys.len() + 1, dirty_internal_node.child_ids.len());
+                    assert_eq!(
+                        dirty_internal_node.keys.len() + 1,
+                        dirty_internal_node.child_ids.len()
+                    );
 
                     let new_internal_node = FreeListInternalNode {
                         keys: new_keys,
@@ -645,19 +679,28 @@ impl LmdbWriter {
                     };
 
                     // Ensure the new node also maintains the invariant
-                    assert_eq!(new_internal_node.keys.len() + 1, new_internal_node.child_ids.len());
+                    assert_eq!(
+                        new_internal_node.keys.len() + 1,
+                        new_internal_node.child_ids.len()
+                    );
 
                     // Create a new internal page.
                     let new_internal_page_id = self.alloc_page_id();
-                    let new_internal_page = Page::new(new_internal_page_id, Node::FreeListInternal(new_internal_node));
+                    let new_internal_page = Page::new(
+                        new_internal_page_id,
+                        Node::FreeListInternal(new_internal_node),
+                    );
                     println!(
-                        "Created internal {:?}: {:?}", new_internal_page_id, new_internal_page.node
+                        "Created internal {:?}: {:?}",
+                        new_internal_page_id, new_internal_page.node
                     );
                     self.insert_dirty(new_internal_page)?;
 
                     split_info = Some((promoted_key, new_internal_page_id));
                 } else {
-                    return Err(LmdbError::DatabaseCorrupted("Expected FreeListInternal node".to_string()));
+                    return Err(LmdbError::DatabaseCorrupted(
+                        "Expected FreeListInternal node".to_string(),
+                    ));
                 }
             } else {
                 split_info = None;
@@ -673,7 +716,8 @@ impl LmdbWriter {
             };
 
             let new_root_page_id = self.alloc_page_id();
-            let new_root_page = Page::new(new_root_page_id, Node::FreeListInternal(new_internal_node));
+            let new_root_page =
+                Page::new(new_root_page_id, Node::FreeListInternal(new_internal_node));
             println!(
                 "Created new internal root {:?}: {:?}",
                 new_root_page_id, new_root_page.node
@@ -684,9 +728,7 @@ impl LmdbWriter {
         } else if let Some((old_id, new_id)) = current_replacement_info {
             if self.freetree_root_id == old_id {
                 self.freetree_root_id = new_id;
-                println!(
-                    "Replaced root {:?} with {:?}", old_id, new_id
-                );
+                println!("Replaced root {:?} with {:?}", old_id, new_id);
             } else {
                 return Err(LmdbError::RootIDMismatchError(old_id, new_id));
             }
@@ -695,7 +737,12 @@ impl LmdbWriter {
         Ok(())
     }
 
-    pub fn remove_freed_page_id(&mut self, db: &Lmdb, tsn: TSN, used_page_id: PageID) -> Result<()> {
+    pub fn remove_freed_page_id(
+        &mut self,
+        db: &Lmdb,
+        tsn: TSN,
+        used_page_id: PageID,
+    ) -> Result<()> {
         println!();
         println!("Removing {:?} from {:?}...", used_page_id, tsn);
         println!("Root is {:?}", self.freetree_root_id);
@@ -716,15 +763,15 @@ impl LmdbWriter {
                 stack.push(current_page_id);
                 current_page_id = *internal_node.child_ids.first().unwrap();
             } else {
-                return Err(LmdbError::DatabaseCorrupted("Expected FreeListInternal node".to_string()));
+                return Err(LmdbError::DatabaseCorrupted(
+                    "Expected FreeListInternal node".to_string(),
+                ));
             }
         }
         println!("Page {:?} is leaf node", current_page_id);
 
         // Make the leaf page dirty
-        let dirty_page_id= {
-            self.get_dirty_page_id(current_page_id)?
-        };
+        let dirty_page_id = { self.get_dirty_page_id(current_page_id)? };
         let replacement_info: Option<(PageID, PageID)> = {
             if dirty_page_id != current_page_id {
                 Some((current_page_id, dirty_page_id))
@@ -741,21 +788,36 @@ impl LmdbWriter {
         if let Node::FreeListLeaf(dirty_leaf_node) = &mut dirty_leaf_page.node {
             // Assume we are exhausting page IDs from the lowest TSNs first
             if dirty_leaf_node.keys.is_empty() || dirty_leaf_node.keys[0] != tsn {
-                return Err(LmdbError::DatabaseCorrupted(format!("Expected TSN {} not found: {:?}", tsn.0, dirty_leaf_node)));
+                return Err(LmdbError::DatabaseCorrupted(format!(
+                    "Expected TSN {} not found: {:?}",
+                    tsn.0, dirty_leaf_node
+                )));
             }
 
             let leaf_value = &mut dirty_leaf_node.values[0];
 
             if leaf_value.root_id.is_some() {
-                return Err(LmdbError::DatabaseCorrupted("Free list subtree not implemented".to_string()));
+                return Err(LmdbError::DatabaseCorrupted(
+                    "Free list subtree not implemented".to_string(),
+                ));
             } else {
                 // Remove the page ID from the list
-                if let Some(pos) = leaf_value.page_ids.iter().position(|&id| id == used_page_id) {
+                if let Some(pos) = leaf_value
+                    .page_ids
+                    .iter()
+                    .position(|&id| id == used_page_id)
+                {
                     leaf_value.page_ids.remove(pos);
                 } else {
-                    return Err(LmdbError::DatabaseCorrupted(format!("{:?} not found in {:?}", used_page_id, tsn)));
+                    return Err(LmdbError::DatabaseCorrupted(format!(
+                        "{:?} not found in {:?}",
+                        used_page_id, tsn
+                    )));
                 }
-                println!("Removed {:?} from {:?} in {:?}", used_page_id, tsn, dirty_page_id);
+                println!(
+                    "Removed {:?} from {:?} in {:?}",
+                    used_page_id, tsn, dirty_page_id
+                );
 
                 // If no more page IDs, remove the TSN entry
                 if leaf_value.page_ids.is_empty() {
@@ -767,14 +829,19 @@ impl LmdbWriter {
                         println!("Empty leaf page {:?}: {:?}", dirty_page_id, dirty_leaf_node);
                         removal_info = Some(dirty_page_id);
                     } else {
-                        println!("Leaf page not empty {:?}: {:?}", dirty_page_id, dirty_leaf_node);
+                        println!(
+                            "Leaf page not empty {:?}: {:?}",
+                            dirty_page_id, dirty_leaf_node
+                        );
                     }
                 } else {
                     println!("Leaf value not empty {:?}: {:?}", tsn, leaf_value);
                 }
             }
         } else {
-            return Err(LmdbError::DatabaseCorrupted("Expected FreeListLeaf node".to_string()));
+            return Err(LmdbError::DatabaseCorrupted(
+                "Expected FreeListLeaf node".to_string(),
+            ));
         }
 
         // Propagate replacements and removals up the stack
@@ -782,9 +849,7 @@ impl LmdbWriter {
 
         while let Some(parent_page_id) = stack.pop() {
             // Make the internal page dirty
-            let dirty_page_id= {
-                self.get_dirty_page_id(parent_page_id)?
-            };
+            let dirty_page_id = { self.get_dirty_page_id(parent_page_id)? };
             let parent_replacement_info: Option<(PageID, PageID)> = {
                 if dirty_page_id != parent_page_id {
                     Some((parent_page_id, dirty_page_id))
@@ -805,10 +870,14 @@ impl LmdbWriter {
                             old_id, new_id, dirty_page_id, dirty_internal_page
                         );
                     } else {
-                        return Err(LmdbError::DatabaseCorrupted("Child ID mismatch".to_string()));
+                        return Err(LmdbError::DatabaseCorrupted(
+                            "Child ID mismatch".to_string(),
+                        ));
                     }
                 } else {
-                    return Err(LmdbError::DatabaseCorrupted("Expected FreeListInternal node".to_string()));
+                    return Err(LmdbError::DatabaseCorrupted(
+                        "Expected FreeListInternal node".to_string(),
+                    ));
                 }
             }
             current_replacement_info = parent_replacement_info;
@@ -819,10 +888,14 @@ impl LmdbWriter {
                 if let Node::FreeListInternal(dirty_internal_node) = &mut dirty_internal_page.node {
                     // Remove the child ID and key
                     if dirty_internal_node.child_ids[0] != removed_page_id {
-                        return Err(LmdbError::DatabaseCorrupted("Child ID mismatch".to_string()));
+                        return Err(LmdbError::DatabaseCorrupted(
+                            "Child ID mismatch".to_string(),
+                        ));
                     }
                     if dirty_internal_node.keys.is_empty() {
-                        return Err(LmdbError::DatabaseCorrupted("Empty internal node keys".to_string()));
+                        return Err(LmdbError::DatabaseCorrupted(
+                            "Empty internal node keys".to_string(),
+                        ));
                     }
                     dirty_internal_node.child_ids.remove(0);
                     dirty_internal_node.keys.remove(0);
@@ -849,7 +922,9 @@ impl LmdbWriter {
                         }
                     }
                 } else {
-                    return Err(LmdbError::DatabaseCorrupted("Expected FreeListInternal node".to_string()));
+                    return Err(LmdbError::DatabaseCorrupted(
+                        "Expected FreeListInternal node".to_string(),
+                    ));
                 }
 
                 removal_info = None;
@@ -864,9 +939,7 @@ impl LmdbWriter {
         if let Some((old_id, new_id)) = current_replacement_info {
             if self.freetree_root_id == old_id {
                 self.freetree_root_id = new_id;
-                println!(
-                    "Replaced root {:?} with {:?}", old_id, new_id
-                );
+                println!("Replaced root {:?} with {:?}", old_id, new_id);
             } else {
                 return Err(LmdbError::RootIDMismatchError(old_id, new_id));
             }
@@ -876,9 +949,13 @@ impl LmdbWriter {
     }
 }
 
-
 // Position index functionality
-pub fn insert_position(db: &mut Lmdb, writer: &mut LmdbWriter, key: Position, value: PositionIndexRecord) -> Result<()> {
+pub fn insert_position(
+    db: &mut Lmdb,
+    writer: &mut LmdbWriter,
+    key: Position,
+    value: PositionIndexRecord,
+) -> Result<()> {
     // Get the root page
     let current_page = db.get_page(writer, writer.position_root_id)?;
 
@@ -902,7 +979,9 @@ pub fn insert_position(db: &mut Lmdb, writer: &mut LmdbWriter, key: Position, va
             let child_page = db.get_page(writer, child_page_id)?;
             current_node = child_page.node.clone();
         } else {
-            return Err(LmdbError::DatabaseCorrupted("Expected PositionInternal node".to_string()));
+            return Err(LmdbError::DatabaseCorrupted(
+                "Expected PositionInternal node".to_string(),
+            ));
         }
     }
 
@@ -913,7 +992,9 @@ pub fn insert_position(db: &mut Lmdb, writer: &mut LmdbWriter, key: Position, va
     let mut modified_leaf_node = if let Node::PositionLeaf(ref node) = leaf_page.node {
         node.clone()
     } else {
-        return Err(LmdbError::DatabaseCorrupted("Expected PositionLeaf node".to_string()));
+        return Err(LmdbError::DatabaseCorrupted(
+            "Expected PositionLeaf node".to_string(),
+        ));
     };
 
     // Find the insertion point
@@ -943,7 +1024,9 @@ pub fn insert_position(db: &mut Lmdb, writer: &mut LmdbWriter, key: Position, va
 
     // Insert the new key and value
     modified_leaf_node.keys.insert(insert_index, key);
-    modified_leaf_node.values.insert(insert_index, value.clone());
+    modified_leaf_node
+        .values
+        .insert(insert_index, value.clone());
 
     // Update the page with the modified node
     leaf_page.node = Node::PositionLeaf(modified_leaf_node.clone());
@@ -958,7 +1041,9 @@ pub fn insert_position(db: &mut Lmdb, writer: &mut LmdbWriter, key: Position, va
         let mut modified_leaf_node = if let Node::PositionLeaf(ref node) = leaf_page.node {
             node.clone()
         } else {
-            return Err(LmdbError::DatabaseCorrupted("Expected PositionLeaf node".to_string()));
+            return Err(LmdbError::DatabaseCorrupted(
+                "Expected PositionLeaf node".to_string(),
+            ));
         };
 
         // Split the leaf node
@@ -982,7 +1067,9 @@ pub fn insert_position(db: &mut Lmdb, writer: &mut LmdbWriter, key: Position, va
         let next_leaf_id = if let Node::PositionLeaf(ref node) = leaf_page.node {
             node.next_leaf_id.unwrap()
         } else {
-            return Err(LmdbError::DatabaseCorrupted("Expected PositionLeaf node".to_string()));
+            return Err(LmdbError::DatabaseCorrupted(
+                "Expected PositionLeaf node".to_string(),
+            ));
         };
         let new_leaf_page = Page::new(next_leaf_id, Node::PositionLeaf(new_leaf_node));
         writer.insert_dirty(new_leaf_page.clone())?;
@@ -1002,10 +1089,14 @@ pub fn insert_position(db: &mut Lmdb, writer: &mut LmdbWriter, key: Position, va
                     if internal_node.child_ids[child_index] == old_id {
                         internal_node.child_ids[child_index] = new_id;
                     } else {
-                        return Err(LmdbError::DatabaseCorrupted("Child ID mismatch".to_string()));
+                        return Err(LmdbError::DatabaseCorrupted(
+                            "Child ID mismatch".to_string(),
+                        ));
                     }
                 } else {
-                    return Err(LmdbError::DatabaseCorrupted("Expected PositionInternal node".to_string()));
+                    return Err(LmdbError::DatabaseCorrupted(
+                        "Expected PositionInternal node".to_string(),
+                    ));
                 }
             }
 
@@ -1013,9 +1104,13 @@ pub fn insert_position(db: &mut Lmdb, writer: &mut LmdbWriter, key: Position, va
                 if let Node::PositionInternal(ref mut internal_node) = parent_page.node {
                     // Insert the promoted key and page ID
                     internal_node.keys.insert(child_index, promoted_key);
-                    internal_node.child_ids.insert(child_index + 1, promoted_page_id);
+                    internal_node
+                        .child_ids
+                        .insert(child_index + 1, promoted_page_id);
                 } else {
-                    return Err(LmdbError::DatabaseCorrupted("Expected PositionInternal node".to_string()));
+                    return Err(LmdbError::DatabaseCorrupted(
+                        "Expected PositionInternal node".to_string(),
+                    ));
                 }
             }
 
@@ -1044,12 +1139,17 @@ pub fn insert_position(db: &mut Lmdb, writer: &mut LmdbWriter, key: Position, va
 
                     // Create a new page for the new internal node
                     let new_internal_page_id = writer.alloc_page_id();
-                    let new_internal_page = Page::new(new_internal_page_id, Node::PositionInternal(new_internal_node));
+                    let new_internal_page = Page::new(
+                        new_internal_page_id,
+                        Node::PositionInternal(new_internal_node),
+                    );
                     writer.insert_dirty(new_internal_page)?;
 
                     split_info = Some((promoted_key, new_internal_page_id));
                 } else {
-                    return Err(LmdbError::DatabaseCorrupted("Expected PositionInternal node".to_string()));
+                    return Err(LmdbError::DatabaseCorrupted(
+                        "Expected PositionInternal node".to_string(),
+                    ));
                 }
             } else {
                 split_info = None;
@@ -1075,7 +1175,8 @@ pub fn insert_position(db: &mut Lmdb, writer: &mut LmdbWriter, key: Position, va
             };
 
             let new_root_page_id = writer.alloc_page_id();
-            let new_root_page = Page::new(new_root_page_id, Node::PositionInternal(new_internal_node));
+            let new_root_page =
+                Page::new(new_root_page_id, Node::PositionInternal(new_internal_node));
             writer.insert_dirty(new_root_page)?;
 
             writer.position_root_id = new_root_page_id;
@@ -1098,20 +1199,20 @@ pub fn insert_position(db: &mut Lmdb, writer: &mut LmdbWriter, key: Position, va
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use serial_test::serial;
+    use tempfile::tempdir;
 
     #[test]
     #[serial]
     fn test_lmdb_init() {
         let temp_dir = tempdir().unwrap();
         let db_path = temp_dir.path().join("lmdb-test.db");
-        
+
         {
             let db = Lmdb::new(&db_path, 4096).unwrap();
             assert!(db.pager.is_file_new);
         }
-        
+
         {
             let db = Lmdb::new(&db_path, 4096).unwrap();
             assert!(!db.pager.is_file_new);
@@ -1124,35 +1225,35 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let db_path = temp_dir.path().join("lmdb-test.db");
         let mut db = Lmdb::new(&db_path, 4096).unwrap();
-        
+
         {
             let mut writer = db.writer().unwrap();
             assert_eq!(TSN(1), writer.tsn);
             assert_eq!(PageID(0), writer.header_page_id);
             db.commit(&mut writer).unwrap();
         }
-        
+
         {
             let mut writer = db.writer().unwrap();
             assert_eq!(TSN(2), writer.tsn);
             assert_eq!(PageID(1), writer.header_page_id);
             db.commit(&mut writer).unwrap();
         }
-        
+
         {
             let mut writer = db.writer().unwrap();
             assert_eq!(TSN(3), writer.tsn);
             assert_eq!(PageID(0), writer.header_page_id);
             db.commit(&mut writer).unwrap();
         }
-        
+
         {
             let mut writer = db.writer().unwrap();
             assert_eq!(TSN(4), writer.tsn);
             assert_eq!(PageID(1), writer.header_page_id);
             db.commit(&mut writer).unwrap();
         }
-        
+
         {
             let mut writer = db.writer().unwrap();
             assert_eq!(TSN(5), writer.tsn);
@@ -1167,41 +1268,73 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let db_path = temp_dir.path().join("lmdb-test.db");
         let mut db = Lmdb::new(&db_path, 4096).unwrap();
-        
+
         // Initial reader should see TSN 0
         {
             assert_eq!(0, db.reader_tsns.lock().unwrap().len());
             let reader = db.reader().unwrap();
             assert_eq!(1, db.reader_tsns.lock().unwrap().len());
-            assert_eq!(vec![TSN(0)], db.reader_tsns.lock().unwrap().values().cloned().collect::<Vec<_>>());
+            assert_eq!(
+                vec![TSN(0)],
+                db.reader_tsns
+                    .lock()
+                    .unwrap()
+                    .values()
+                    .cloned()
+                    .collect::<Vec<_>>()
+            );
             assert_eq!(PageID(0), reader.header_page_id);
             assert_eq!(TSN(0), reader.tsn);
         }
         assert_eq!(0, db.reader_tsns.lock().unwrap().len());
-        
+
         // Multiple nested readers
         {
             let reader1 = db.reader().unwrap();
-            assert_eq!(vec![TSN(0)], db.reader_tsns.lock().unwrap().values().cloned().collect::<Vec<_>>());
+            assert_eq!(
+                vec![TSN(0)],
+                db.reader_tsns
+                    .lock()
+                    .unwrap()
+                    .values()
+                    .cloned()
+                    .collect::<Vec<_>>()
+            );
             assert_eq!(PageID(0), reader1.header_page_id);
             assert_eq!(TSN(0), reader1.tsn);
-            
+
             {
                 let reader2 = db.reader().unwrap();
-                assert_eq!(vec![TSN(0), TSN(0)], db.reader_tsns.lock().unwrap().values().cloned().collect::<Vec<_>>());
+                assert_eq!(
+                    vec![TSN(0), TSN(0)],
+                    db.reader_tsns
+                        .lock()
+                        .unwrap()
+                        .values()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                );
                 assert_eq!(PageID(0), reader2.header_page_id);
                 assert_eq!(TSN(0), reader2.tsn);
-                
+
                 {
                     let reader3 = db.reader().unwrap();
-                    assert_eq!(vec![TSN(0), TSN(0), TSN(0)], db.reader_tsns.lock().unwrap().values().cloned().collect::<Vec<_>>());
+                    assert_eq!(
+                        vec![TSN(0), TSN(0), TSN(0)],
+                        db.reader_tsns
+                            .lock()
+                            .unwrap()
+                            .values()
+                            .cloned()
+                            .collect::<Vec<_>>()
+                    );
                     assert_eq!(PageID(0), reader3.header_page_id);
                     assert_eq!(TSN(0), reader3.tsn);
                 }
             }
         }
         assert_eq!(0, db.reader_tsns.lock().unwrap().len());
-        
+
         // Writer transaction
         {
             let mut writer = db.writer().unwrap();
@@ -1210,11 +1343,19 @@ mod tests {
             assert_eq!(PageID(0), writer.header_page_id);
             db.commit(&mut writer).unwrap();
         }
-        
+
         // Reader after writer
         {
             let reader = db.reader().unwrap();
-            assert_eq!(vec![TSN(1)], db.reader_tsns.lock().unwrap().values().cloned().collect::<Vec<_>>());
+            assert_eq!(
+                vec![TSN(1)],
+                db.reader_tsns
+                    .lock()
+                    .unwrap()
+                    .values()
+                    .cloned()
+                    .collect::<Vec<_>>()
+            );
             assert_eq!(PageID(1), reader.header_page_id);
             assert_eq!(TSN(1), reader.tsn);
         }
@@ -1321,8 +1462,8 @@ mod tests {
     // FreeListTree tests
     mod free_list_tree_tests {
         use super::*;
-        use tempfile::tempdir;
         use serial_test::serial;
+        use tempfile::tempdir;
 
         // Helper function to create a test database with a specified page size
         fn construct_db(page_size: usize) -> (tempfile::TempDir, Lmdb) {
@@ -1336,14 +1477,14 @@ mod tests {
         #[serial]
         fn test_insert_freed_page_id_to_empty_leaf_root() {
             let (_temp_dir, mut db) = construct_db(64);
-            
+
             // Get latest header
             let (header_page_id, header_node) = db.get_latest_header().unwrap();
             assert_eq!(PageID(0), header_page_id);
-            
+
             // Get next page ID
             assert_eq!(PageID(4), header_node.next_page_id);
-            
+
             // Construct a writer
             let tsn = TSN(1001);
 
@@ -1354,126 +1495,132 @@ mod tests {
                 header_node.freetree_root_id,
                 header_node.position_root_id,
             );
-            
+
             // Check the free list tree root ID
             let initial_root_id = writer.freetree_root_id;
             assert_eq!(PageID(2), initial_root_id);
-            
+
             // Allocate a page ID (to be inserted as "freed")
             let page_id = writer.alloc_page_id();
-            
+
             // Check the allocated page ID is the "next" page ID
             assert_eq!(header_node.next_page_id, page_id);
-            
+
             // Insert the allocated page ID in the free list tree
             let current_tsn = writer.tsn;
-            writer.insert_freed_page_id(&mut db, current_tsn, page_id).unwrap();
-            
+            writer
+                .insert_freed_page_id(&mut db, current_tsn, page_id)
+                .unwrap();
+
             // Check the root page has been CoW-ed
             let expected_new_root_id = PageID(header_node.next_page_id.0 + 1);
             assert_eq!(expected_new_root_id, writer.freetree_root_id);
             assert_eq!(1, writer.dirty.len());
             assert!(writer.dirty.contains_key(&expected_new_root_id));
-            
+
             let new_root_page = writer.dirty.get(&expected_new_root_id).unwrap();
             assert_eq!(expected_new_root_id, new_root_page.page_id);
-            
+
             let freed_page_ids: Vec<PageID> = writer.freed_page_ids.iter().cloned().collect();
             assert_eq!(vec![initial_root_id], freed_page_ids);
-            
+
             // Check keys and values of the new root page
             match &new_root_page.node {
                 Node::FreeListLeaf(node) => {
                     let expected_keys = vec![tsn];
                     assert_eq!(expected_keys, node.keys);
-                    
+
                     let expected_values = vec![FreeListLeafValue {
                         page_ids: vec![header_node.next_page_id],
                         root_id: None,
                     }];
                     assert_eq!(expected_values, node.values);
-                },
+                }
                 _ => panic!("Expected FreeListLeaf node"),
             }
         }
-        
+
         #[test]
         #[serial]
         fn test_remove_freed_page_id_from_root_leaf_root() {
             let (_temp_dir, mut db) = construct_db(64);
-            
+
             // First, insert a page ID
             let mut writer;
             let inserted_tsn;
             let inserted_page_id;
             let previous_root_id;
-            
+
             {
                 // Get a writer
                 writer = db.writer().unwrap();
-                
+
                 // Remember the initial root ID
                 previous_root_id = writer.freetree_root_id;
-                
+
                 // Allocate a page ID
                 inserted_page_id = writer.alloc_page_id();
-                
+
                 // Insert the page ID
                 inserted_tsn = writer.tsn;
-                writer.insert_freed_page_id(&mut db, inserted_tsn, inserted_page_id).unwrap();
-                
+                writer
+                    .insert_freed_page_id(&mut db, inserted_tsn, inserted_page_id)
+                    .unwrap();
+
                 // Commit the transaction
                 db.commit(&mut writer).unwrap();
             }
-            
+
             // Block inserted page IDs from being reused
             {
                 db.reader_tsns.lock().unwrap().insert(0, TSN(0));
             }
-            
+
             // Start a new writer to remove inserted freed page ID
             {
                 writer = db.writer().unwrap();
-                
+
                 // Check there are no free pages (because we blocked them with a reader)
                 assert_eq!(0, writer.reusable_page_ids.len());
-                
+
                 // Remember the initial root ID and next page ID
                 let initial_root_id = writer.freetree_root_id;
                 let next_page_id = writer.next_page_id;
-                
+
                 // Remove what was inserted
-                writer.remove_freed_page_id(&db, inserted_tsn, inserted_page_id).unwrap();
-                
+                writer
+                    .remove_freed_page_id(&db, inserted_tsn, inserted_page_id)
+                    .unwrap();
+
                 // Check the root page has been CoW-ed
                 let expected_new_root_id = next_page_id;
                 assert_eq!(expected_new_root_id, writer.freetree_root_id);
                 assert_eq!(1, writer.dirty.len());
                 assert!(writer.dirty.contains_key(&expected_new_root_id));
-                
+
                 let new_root_page = writer.dirty.get(&expected_new_root_id).unwrap();
                 assert_eq!(expected_new_root_id, new_root_page.page_id);
-                
+
                 let freed_page_ids: Vec<PageID> = writer.freed_page_ids.iter().cloned().collect();
                 assert_eq!(vec![initial_root_id], freed_page_ids);
-                
+
                 // Check keys and values of the new root page
                 match &new_root_page.node {
                     Node::FreeListLeaf(node) => {
                         let expected_keys = vec![inserted_tsn];
                         assert_eq!(expected_keys, node.keys);
-                        
+
                         let expected_values = vec![FreeListLeafValue {
                             page_ids: vec![previous_root_id],
                             root_id: None,
                         }];
                         assert_eq!(expected_values, node.values);
-                    },
+                    }
                     _ => panic!("Expected FreeListLeaf node"),
                 }
             }
         }
-        
+
         #[test]
         #[serial]
         fn test_insert_freed_page_ids_until_split_leaf() {
@@ -1515,7 +1662,7 @@ mod tests {
                 match &root_page.node {
                     Node::FreeListInternal(_) => {
                         has_split_leaf = true;
-                    },
+                    }
                     _ => {}
                 }
             }
@@ -1580,7 +1727,11 @@ mod tests {
 
             assert_eq!(
                 all_page_ids.len(),
-                active_page_ids.len() + freed_page_ids.len() - active_page_ids.iter().filter(|id| freed_page_ids.contains(id)).count()
+                active_page_ids.len() + freed_page_ids.len()
+                    - active_page_ids
+                        .iter()
+                        .filter(|id| freed_page_ids.contains(id))
+                        .count()
             );
 
             // Check that all page IDs are accounted for
@@ -1607,12 +1758,16 @@ mod tests {
                 let mut writer = db.writer().unwrap();
                 // Allocate and insert the first page ID
                 let page_id1 = writer.alloc_page_id();
-                writer.insert_freed_page_id(&db, writer.tsn, page_id1).unwrap();
+                writer
+                    .insert_freed_page_id(&db, writer.tsn, page_id1)
+                    .unwrap();
                 inserted.push((writer.tsn, page_id1));
 
                 // Allocate and insert second page ID
                 let page_id2 = writer.alloc_page_id();
-                writer.insert_freed_page_id(&db, writer.tsn, page_id2).unwrap();
+                writer
+                    .insert_freed_page_id(&db, writer.tsn, page_id2)
+                    .unwrap();
                 inserted.push((writer.tsn, page_id2));
 
                 // Check if we've split the leaf
@@ -1620,7 +1775,7 @@ mod tests {
                 match &root_page.node {
                     Node::FreeListInternal(_) => {
                         has_split_leaf = true;
-                    },
+                    }
                     _ => {}
                 }
 
@@ -1629,13 +1784,17 @@ mod tests {
 
             let mut writer = db.writer().unwrap();
             let page_id3 = writer.alloc_page_id();
-            writer.insert_freed_page_id(&db, writer.tsn, page_id3).unwrap();
+            writer
+                .insert_freed_page_id(&db, writer.tsn, page_id3)
+                .unwrap();
             db.commit(&mut writer).unwrap();
             inserted.push((writer.tsn, page_id3));
 
             writer = db.writer().unwrap();
             let page_id4 = writer.alloc_page_id();
-            writer.insert_freed_page_id(&db, writer.tsn, page_id4).unwrap();
+            writer
+                .insert_freed_page_id(&db, writer.tsn, page_id4)
+                .unwrap();
             db.commit(&mut writer).unwrap();
             inserted.push((writer.tsn, page_id4));
 
@@ -1695,7 +1854,11 @@ mod tests {
 
             assert_eq!(
                 all_page_ids.len(),
-                active_page_ids.len() + freed_page_ids.len() - active_page_ids.iter().filter(|id| freed_page_ids.contains(id)).count()
+                active_page_ids.len() + freed_page_ids.len()
+                    - active_page_ids
+                        .iter()
+                        .filter(|id| freed_page_ids.contains(id))
+                        .count()
             );
 
             // Check that all page IDs are accounted for
@@ -1744,7 +1907,7 @@ mod tests {
                     match &root_page.node {
                         Node::FreeListInternal(_) => {
                             has_split_leaf = true;
-                        },
+                        }
                         _ => {}
                     }
                 }
@@ -1780,7 +1943,6 @@ mod tests {
                 for (tsn, page_id) in inserted.iter() {
                     writer.remove_freed_page_id(&db, *tsn, *page_id).unwrap();
                     println!("Dirty pages: {:?}", writer.dirty.keys());
-
                 }
 
                 // Check the root page has been CoW-ed
@@ -1811,7 +1973,7 @@ mod tests {
                             root_id: None,
                         }];
                         assert_eq!(expected_values, node.values);
-                    },
+                    }
                     _ => panic!("Expected FreeListLeaf node"),
                 }
 
@@ -1832,7 +1994,7 @@ mod tests {
                         for (_, value) in node.keys.iter().zip(node.values.iter()) {
                             all_freed_page_ids.extend(value.page_ids.clone());
                         }
-                    },
+                    }
                     _ => panic!("Expected FreeListLeaf node"),
                 }
 
@@ -1847,7 +2009,8 @@ mod tests {
                 all_page_ids.dedup();
 
                 // Check that all page IDs are accounted for
-                let expected_page_ids: Vec<PageID> = (0..writer.next_page_id.0).map(PageID).collect();
+                let expected_page_ids: Vec<PageID> =
+                    (0..writer.next_page_id.0).map(PageID).collect();
                 assert_eq!(expected_page_ids, all_page_ids);
             }
         }
@@ -1900,12 +2063,12 @@ mod tests {
                                 match &child_page.node {
                                     Node::FreeListInternal(_) => {
                                         has_split_internal = true;
-                                    },
+                                    }
                                     _ => {}
                                 }
                             }
                         }
-                    },
+                    }
                     _ => {}
                 }
                 if inserted.len() > 100 {
@@ -2053,12 +2216,12 @@ mod tests {
                                     match &child_page.node {
                                         Node::FreeListInternal(_) => {
                                             has_split_internal = true;
-                                        },
+                                        }
                                         _ => {}
                                     }
                                 }
                             }
-                        },
+                        }
                         _ => {}
                     }
                 }
@@ -2119,7 +2282,7 @@ mod tests {
                             root_id: None,
                         }];
                         assert_eq!(expected_values, node.values);
-                    },
+                    }
                     _ => panic!("Expected FreeListLeaf node"),
                 }
 
@@ -2140,7 +2303,7 @@ mod tests {
                         for (_, value) in node.keys.iter().zip(node.values.iter()) {
                             all_freed_page_ids.extend(value.page_ids.clone());
                         }
-                    },
+                    }
                     _ => panic!("Expected FreeListLeaf node"),
                 }
 
@@ -2155,7 +2318,8 @@ mod tests {
                 all_page_ids.dedup();
 
                 // Check that all page IDs are accounted for
-                let expected_page_ids: Vec<PageID> = (0..writer.next_page_id.0).map(PageID).collect();
+                let expected_page_ids: Vec<PageID> =
+                    (0..writer.next_page_id.0).map(PageID).collect();
                 assert_eq!(expected_page_ids, all_page_ids);
             }
         }
@@ -2212,12 +2376,12 @@ mod tests {
                                     match &child_page.node {
                                         Node::FreeListInternal(_) => {
                                             has_split_internal = true;
-                                        },
+                                        }
                                         _ => {}
                                     }
                                 }
                             }
-                        },
+                        }
                         _ => {}
                     }
                 }

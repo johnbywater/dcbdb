@@ -1,10 +1,10 @@
-use std::sync::{Mutex, MutexGuard};
+use crate::mvcc_nodes::PageID;
 use std::fs::{File, OpenOptions};
-use std::path::Path;
 use std::io;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
-use crate::mvcc_nodes::PageID;
+use std::path::Path;
+use std::sync::{Mutex, MutexGuard};
 
 // Pager for file I/O
 pub struct Pager {
@@ -17,7 +17,7 @@ pub struct Pager {
 impl Pager {
     pub fn new(path: &Path, page_size: usize) -> io::Result<Self> {
         let is_file_new = !path.exists();
-        
+
         let file = if is_file_new {
             OpenOptions::new()
                 .read(true)
@@ -25,12 +25,9 @@ impl Pager {
                 .create(true)
                 .open(path)?
         } else {
-            OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(path)?
+            OpenOptions::new().read(true).write(true).open(path)?
         };
-        
+
         Ok(Self {
             file: Mutex::new(file),
             page_size,
@@ -43,24 +40,30 @@ impl Pager {
         if page.len() > self.page_size {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("Page overflow: page_id={:?} size={} > PAGE_SIZE={}", 
-                        page_id, page.len(), self.page_size),
+                format!(
+                    "Page overflow: page_id={:?} size={} > PAGE_SIZE={}",
+                    page_id,
+                    page.len(),
+                    self.page_size
+                ),
             ));
         }
-        
+
         // Seek to the correct position
-        file.seek(SeekFrom::Start((page_id.0 as u64) * (self.page_size as u64)))?;
-        
+        file.seek(SeekFrom::Start(
+            (page_id.0 as u64) * (self.page_size as u64),
+        ))?;
+
         // Write the page data
         file.write_all(page)?;
-        
+
         // Pad with zeros if needed
         let padding_size = self.page_size - page.len();
         if padding_size > 0 {
             let padding = vec![0u8; padding_size];
             file.write_all(&padding)?;
         }
-        
+
         Ok(())
     }
 

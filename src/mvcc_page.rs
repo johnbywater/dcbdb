@@ -15,12 +15,9 @@ pub const PAGE_HEADER_SIZE: usize = 9;
 // Implementation for Page
 impl Page {
     pub fn new(page_id: PageID, node: Node) -> Self {
-        Self {
-            page_id,
-            node,
-        }
+        Self { page_id, node }
     }
-    
+
     pub fn calc_serialized_size(&self) -> usize {
         // The total serialized size is the size of the page header plus the size of the serialized node
         PAGE_HEADER_SIZE + self.node.calc_serialized_size()
@@ -45,20 +42,21 @@ impl Page {
 
     pub fn deserialize(page_id: PageID, page_data: &[u8]) -> mvcc::Result<Self> {
         if page_data.len() < PAGE_HEADER_SIZE {
-            return Err(LmdbError::DatabaseCorrupted("Page data too short".to_string()));
+            return Err(LmdbError::DatabaseCorrupted(
+                "Page data too short".to_string(),
+            ));
         }
 
         // Extract header information
         let node_type = page_data[0];
-        let crc = u32::from_le_bytes([
-            page_data[1], page_data[2], page_data[3], page_data[4]
-        ]);
-        let data_len = u32::from_le_bytes([
-            page_data[5], page_data[6], page_data[7], page_data[8]
-        ]) as usize;
+        let crc = u32::from_le_bytes([page_data[1], page_data[2], page_data[3], page_data[4]]);
+        let data_len =
+            u32::from_le_bytes([page_data[5], page_data[6], page_data[7], page_data[8]]) as usize;
 
         if PAGE_HEADER_SIZE + data_len > page_data.len() {
-            return Err(LmdbError::DatabaseCorrupted("Page data length mismatch".to_string()));
+            return Err(LmdbError::DatabaseCorrupted(
+                "Page data length mismatch".to_string(),
+            ));
         }
 
         // Extract the data
@@ -74,17 +72,14 @@ impl Page {
         // Deserialize the node
         let node = Node::deserialize(node_type, data)?;
 
-        Ok(Self {
-            page_id,
-            node,
-        })
+        Ok(Self { page_id, node })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mvcc_nodes::{HeaderNode, TSN, PageID};
+    use crate::mvcc_nodes::{HeaderNode, PageID, TSN};
 
     #[test]
     fn test_page_serialization_and_size() {
@@ -102,25 +97,33 @@ mod tests {
 
         // Calculate the serialized size
         let calculated_size = page.calc_serialized_size();
-        
+
         // Serialize the page
         let serialized = page.serialize().expect("Failed to serialize page");
-        
+
         // Check that the serialized data size matches the calculated size
-        assert_eq!(calculated_size, serialized.len(), 
-            "Calculated size {} should match actual serialized size {}", 
-            calculated_size, serialized.len());
-        
+        assert_eq!(
+            calculated_size,
+            serialized.len(),
+            "Calculated size {} should match actual serialized size {}",
+            calculated_size,
+            serialized.len()
+        );
+
         // Deserialize the serialized data
-        let deserialized = Page::deserialize(page_id, &serialized)
-            .expect("Failed to deserialize page");
-        
+        let deserialized =
+            Page::deserialize(page_id, &serialized).expect("Failed to deserialize page");
+
         // Check that the deserialized page is the same as the original
-        assert_eq!(page.page_id, deserialized.page_id, 
-            "Original page_id {:?} should match deserialized page_id {:?}", 
-            page.page_id, deserialized.page_id);
-        assert_eq!(page.node, deserialized.node, 
-            "Original node {:?} should match deserialized node {:?}", 
-            page.node, deserialized.node);
+        assert_eq!(
+            page.page_id, deserialized.page_id,
+            "Original page_id {:?} should match deserialized page_id {:?}",
+            page.page_id, deserialized.page_id
+        );
+        assert_eq!(
+            page.node, deserialized.node,
+            "Original node {:?} should match deserialized node {:?}",
+            page.node, deserialized.node
+        );
     }
 }

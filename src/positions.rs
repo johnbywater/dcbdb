@@ -1,10 +1,10 @@
 use crate::indexpages::{HeaderNode, IndexPage, IndexPages, Node};
-use crate::pagedfile::{PageID, PAGE_ID_SIZE};
-use crate::wal::{Position, POSITION_SIZE};
+use crate::pagedfile::{PAGE_ID_SIZE, PageID};
+use crate::wal::{POSITION_SIZE, Position};
 use std::any::Any;
 use std::format;
 use std::path::Path;
-use uuid::{uuid, Uuid};
+use uuid::{Uuid, uuid};
 
 const NAMESPACE_URL: Uuid = uuid!("6ba7b810-9dad-11d1-80b4-00c04fd430c8");
 const TYPE_HASH_LEN: usize = 8;

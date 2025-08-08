@@ -1,5 +1,5 @@
-use crate::pagedfile::{PageID, PagedFile, PagedFileError};
 use crate::crc::calc_crc;
+use crate::pagedfile::{PageID, PagedFile, PagedFileError};
 use lru::LruCache;
 use std::any::Any;
 use std::collections::HashMap;
@@ -551,7 +551,7 @@ impl IndexPages {
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::NotFound,
                             format!("Page not found in cache: {page_id:?}"),
-                        ))
+                        ));
                     }
                 }
             };

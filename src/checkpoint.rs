@@ -3,11 +3,11 @@
 //! This module provides a checkpoint file implementation for storing
 //! transaction and position information for recovery.
 
+use crate::crc::calc_crc;
+use crate::wal::Position;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use crate::crc::calc_crc;
-use crate::wal::Position;
 
 // Constants
 const CHECKPOINT_FILE_NAME: &str = "checkpoint.dat";

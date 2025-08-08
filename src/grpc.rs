@@ -4,7 +4,7 @@ use std::pin::Pin;
 use std::thread;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
-use tonic::{transport::Server, Request, Response, Status};
+use tonic::{Request, Response, Status, transport::Server};
 
 use crate::api::{
     DCBAppendCondition, DCBEvent, DCBEventStoreAPI, DCBQuery, DCBQueryItem, DCBSequencedEvent,
@@ -18,10 +18,10 @@ pub mod dcbdb {
 }
 
 use dcbdb::{
-    event_store_service_server::{EventStoreService, EventStoreServiceServer},
     AppendConditionProto, AppendRequestProto, AppendResponseProto, EventProto, HeadRequestProto,
     HeadResponseProto, QueryItemProto, QueryProto, ReadRequestProto, ReadResponseProto,
     SequencedEventBatchProto, SequencedEventProto,
+    event_store_service_server::{EventStoreService, EventStoreServiceServer},
 };
 
 // Conversion functions between proto and API types
@@ -473,7 +473,9 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
             match response {
                 Ok(stream) => {
                     // Create a GrpcReadResponse that implements DCBReadResponse
-                    Ok(Box::new(GrpcReadResponse::new_with_current_runtime(stream.into_inner()))
+                    Ok(Box::new(GrpcReadResponse::new_with_current_runtime(
+                        stream.into_inner(),
+                    ))
                         as Box<dyn crate::api::DCBReadResponse + '_>)
                 }
                 Err(status) => Err(EventStoreError::Io(std::io::Error::other(format!(
@@ -488,8 +490,10 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
             match response {
                 Ok(stream) => {
                     // Create a GrpcReadResponse that implements DCBReadResponse
-                    Ok(Box::new(GrpcReadResponse::new_with_runtime(rt, stream.into_inner()))
-                        as Box<dyn crate::api::DCBReadResponse + '_>)
+                    Ok(
+                        Box::new(GrpcReadResponse::new_with_runtime(rt, stream.into_inner()))
+                            as Box<dyn crate::api::DCBReadResponse + '_>,
+                    )
                 }
                 Err(status) => Err(EventStoreError::Io(std::io::Error::other(format!(
                     "gRPC read error: {status}"
@@ -614,9 +618,7 @@ impl GrpcReadResponse {
         }
     }
 
-    fn new_with_current_runtime(
-        stream: tonic::codec::Streaming<ReadResponseProto>,
-    ) -> Self {
+    fn new_with_current_runtime(stream: tonic::codec::Streaming<ReadResponseProto>) -> Self {
         Self {
             runtime_type: RuntimeType::Current,
             stream,
@@ -630,7 +632,9 @@ impl GrpcReadResponse {
         // Use the appropriate method to get the next message from the stream
         let next_message = match &mut self.runtime_type {
             RuntimeType::Owned(rt) => rt.block_on(async { self.stream.message().await }),
-            RuntimeType::Current => futures::executor::block_on(async { self.stream.message().await }),
+            RuntimeType::Current => {
+                futures::executor::block_on(async { self.stream.message().await })
+            }
         };
 
         match next_message {

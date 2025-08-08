@@ -19,7 +19,6 @@ pub enum LmdbError {
     DeserializationError(String),
     PageAlreadyFreedError(PageID),
     PageAlreadyDirtyError(PageID),
-
 }
 
 impl From<io::Error> for LmdbError {
@@ -33,13 +32,21 @@ impl fmt::Display for LmdbError {
         match self {
             LmdbError::Io(err) => write!(f, "IO error: {}", err),
             LmdbError::PageNotFound(page_id) => write!(f, "Page not found: {:?}", page_id),
-            LmdbError::DirtyPageNotFound(page_id) => write!(f, "Dirty page not found: {:?}", page_id),
-            LmdbError::RootIDMismatchError(old_id, new_id ) => write!(f, "Root ID mismatched: old {:?} new {:?}", old_id, new_id),
+            LmdbError::DirtyPageNotFound(page_id) => {
+                write!(f, "Dirty page not found: {:?}", page_id)
+            }
+            LmdbError::RootIDMismatchError(old_id, new_id) => {
+                write!(f, "Root ID mismatched: old {:?} new {:?}", old_id, new_id)
+            }
             LmdbError::DatabaseCorrupted(msg) => write!(f, "Database corrupted: {}", msg),
             LmdbError::SerializationError(msg) => write!(f, "Serialization error: {}", msg),
             LmdbError::DeserializationError(msg) => write!(f, "Deserialization error: {}", msg),
-            LmdbError::PageAlreadyFreedError(page_id) => write!(f, "Page already freed: {:?}", page_id),
-            LmdbError::PageAlreadyDirtyError(page_id) => write!(f, "Page already dirty: {:?}", page_id),
+            LmdbError::PageAlreadyFreedError(page_id) => {
+                write!(f, "Page already freed: {:?}", page_id)
+            }
+            LmdbError::PageAlreadyDirtyError(page_id) => {
+                write!(f, "Page already dirty: {:?}", page_id)
+            }
         }
     }
 }
@@ -97,9 +104,10 @@ impl HeaderNode {
     /// * `Result<Self>` - The deserialized HeaderNode or an error
     pub fn from_slice(slice: &[u8]) -> Result<Self> {
         if slice.len() != 16 {
-            return Err(LmdbError::DeserializationError(
-                format!("Expected 16 bytes, got {}", slice.len())
-            ));
+            return Err(LmdbError::DeserializationError(format!(
+                "Expected 16 bytes, got {}",
+                slice.len()
+            )));
         }
 
         let tsn = u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]);
@@ -206,9 +214,10 @@ impl FreeListLeafNode {
     pub fn from_slice(slice: &[u8]) -> Result<Self> {
         // Check if the slice has at least 2 bytes for keys_len
         if slice.len() < 2 {
-            return Err(LmdbError::DeserializationError(
-                format!("Expected at least 2 bytes, got {}", slice.len())
-            ));
+            return Err(LmdbError::DeserializationError(format!(
+                "Expected at least 2 bytes, got {}",
+                slice.len()
+            )));
         }
 
         // Extract the length of the keys (first 2 bytes)
@@ -217,16 +226,23 @@ impl FreeListLeafNode {
         // Calculate the minimum expected size for the keys
         let min_expected_size = 2 + (keys_len * 4);
         if slice.len() < min_expected_size {
-            return Err(LmdbError::DeserializationError(
-                format!("Expected at least {} bytes for keys, got {}", min_expected_size, slice.len())
-            ));
+            return Err(LmdbError::DeserializationError(format!(
+                "Expected at least {} bytes for keys, got {}",
+                min_expected_size,
+                slice.len()
+            )));
         }
 
         // Extract the keys (4 bytes each)
         let mut keys = Vec::with_capacity(keys_len);
         for i in 0..keys_len {
             let start = 2 + (i * 4);
-            let tsn = u32::from_le_bytes([slice[start], slice[start+1], slice[start+2], slice[start+3]]);
+            let tsn = u32::from_le_bytes([
+                slice[start],
+                slice[start + 1],
+                slice[start + 2],
+                slice[start + 3],
+            ]);
             keys.push(TSN(tsn));
         }
 
@@ -237,17 +253,17 @@ impl FreeListLeafNode {
         for _ in 0..keys_len {
             if offset + 2 > slice.len() {
                 return Err(LmdbError::DeserializationError(
-                    "Unexpected end of data while reading page_ids length".to_string()
+                    "Unexpected end of data while reading page_ids length".to_string(),
                 ));
             }
 
             // Extract the length of page_ids (2 bytes)
-            let page_ids_len = u16::from_le_bytes([slice[offset], slice[offset+1]]) as usize;
+            let page_ids_len = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
             offset += 2;
 
             if offset + (page_ids_len * 4) > slice.len() {
                 return Err(LmdbError::DeserializationError(
-                    "Unexpected end of data while reading page_ids".to_string()
+                    "Unexpected end of data while reading page_ids".to_string(),
                 ));
             }
 
@@ -255,14 +271,19 @@ impl FreeListLeafNode {
             let mut page_ids = Vec::with_capacity(page_ids_len);
             for j in 0..page_ids_len {
                 let start = offset + (j * 4);
-                let page_id = u32::from_le_bytes([slice[start], slice[start+1], slice[start+2], slice[start+3]]);
+                let page_id = u32::from_le_bytes([
+                    slice[start],
+                    slice[start + 1],
+                    slice[start + 2],
+                    slice[start + 3],
+                ]);
                 page_ids.push(PageID(page_id));
             }
             offset += page_ids_len * 4;
 
             if offset >= slice.len() {
                 return Err(LmdbError::DeserializationError(
-                    "Unexpected end of data while reading root_id flag".to_string()
+                    "Unexpected end of data while reading root_id flag".to_string(),
                 ));
             }
 
@@ -274,27 +295,26 @@ impl FreeListLeafNode {
             let root_id = if has_root_id {
                 if offset + 4 > slice.len() {
                     return Err(LmdbError::DeserializationError(
-                        "Unexpected end of data while reading root_id".to_string()
+                        "Unexpected end of data while reading root_id".to_string(),
                     ));
                 }
 
-                let page_id = u32::from_le_bytes([slice[offset], slice[offset+1], slice[offset+2], slice[offset+3]]);
+                let page_id = u32::from_le_bytes([
+                    slice[offset],
+                    slice[offset + 1],
+                    slice[offset + 2],
+                    slice[offset + 3],
+                ]);
                 offset += 4;
                 Some(PageID(page_id))
             } else {
                 None
             };
 
-            values.push(FreeListLeafValue {
-                page_ids,
-                root_id,
-            });
+            values.push(FreeListLeafValue { page_ids, root_id });
         }
 
-        Ok(FreeListLeafNode {
-            keys,
-            values,
-        })
+        Ok(FreeListLeafNode { keys, values })
     }
 
     pub fn insert_or_append(&mut self, tsn: TSN, page_id: PageID) -> Result<()> {
@@ -307,13 +327,14 @@ impl FreeListLeafNode {
             if self.values[idx].root_id.is_none() {
                 self.values[idx].page_ids.push(page_id);
             } else {
-                return Err(LmdbError::DatabaseCorrupted("Free list subtree not implemented".to_string()));
+                return Err(LmdbError::DatabaseCorrupted(
+                    "Free list subtree not implemented".to_string(),
+                ));
             }
             // println!(
             //     "Appended page ID {:?} to TSN {:?} in page {:?}: {:?}",
             //     freed_page_id, tsn, dirty_page_id, dirty_leaf_node
             // );
-
         } else {
             // New TSN, add a new entry
             self.keys.push(tsn);
@@ -400,9 +421,10 @@ impl FreeListInternalNode {
     pub fn from_slice(slice: &[u8]) -> Result<Self> {
         // Check if the slice has at least 2 bytes for keys_len
         if slice.len() < 2 {
-            return Err(LmdbError::DeserializationError(
-                format!("Expected at least 2 bytes, got {}", slice.len())
-            ));
+            return Err(LmdbError::DeserializationError(format!(
+                "Expected at least 2 bytes, got {}",
+                slice.len()
+            )));
         }
 
         // Extract the length of the keys (first 2 bytes)
@@ -411,16 +433,23 @@ impl FreeListInternalNode {
         // Calculate the minimum expected size for the keys
         let min_expected_size = 2 + (keys_len * 4);
         if slice.len() < min_expected_size {
-            return Err(LmdbError::DeserializationError(
-                format!("Expected at least {} bytes for keys, got {}", min_expected_size, slice.len())
-            ));
+            return Err(LmdbError::DeserializationError(format!(
+                "Expected at least {} bytes for keys, got {}",
+                min_expected_size,
+                slice.len()
+            )));
         }
 
         // Extract the keys (4 bytes each)
         let mut keys = Vec::with_capacity(keys_len);
         for i in 0..keys_len {
             let start = 2 + (i * 4);
-            let tsn = u32::from_le_bytes([slice[start], slice[start+1], slice[start+2], slice[start+3]]);
+            let tsn = u32::from_le_bytes([
+                slice[start],
+                slice[start + 1],
+                slice[start + 2],
+                slice[start + 3],
+            ]);
             keys.push(TSN(tsn));
         }
 
@@ -428,32 +457,36 @@ impl FreeListInternalNode {
         let offset = 2 + (keys_len * 4);
         if offset + 2 > slice.len() {
             return Err(LmdbError::DeserializationError(
-                "Unexpected end of data while reading child_ids length".to_string()
+                "Unexpected end of data while reading child_ids length".to_string(),
             ));
         }
 
-        let child_ids_len = u16::from_le_bytes([slice[offset], slice[offset+1]]) as usize;
+        let child_ids_len = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
 
         // Calculate the minimum expected size for the child_ids
         let min_expected_size = offset + 2 + (child_ids_len * 4);
         if slice.len() < min_expected_size {
-            return Err(LmdbError::DeserializationError(
-                format!("Expected at least {} bytes for child_ids, got {}", min_expected_size, slice.len())
-            ));
+            return Err(LmdbError::DeserializationError(format!(
+                "Expected at least {} bytes for child_ids, got {}",
+                min_expected_size,
+                slice.len()
+            )));
         }
 
         // Extract the child_ids (4 bytes each)
         let mut child_ids = Vec::with_capacity(child_ids_len);
         for i in 0..child_ids_len {
             let start = offset + 2 + (i * 4);
-            let page_id = u32::from_le_bytes([slice[start], slice[start+1], slice[start+2], slice[start+3]]);
+            let page_id = u32::from_le_bytes([
+                slice[start],
+                slice[start + 1],
+                slice[start + 2],
+                slice[start + 3],
+            ]);
             child_ids.push(PageID(page_id));
         }
 
-        Ok(FreeListInternalNode {
-            keys,
-            child_ids,
-        })
+        Ok(FreeListInternalNode { keys, child_ids })
     }
 
     pub fn replace_last_child_id(&mut self, old_id: PageID, new_id: PageID) -> Result<()> {
@@ -462,12 +495,18 @@ impl FreeListInternalNode {
         if self.child_ids[last_idx] == old_id {
             self.child_ids[last_idx] = new_id;
         } else {
-            return Err(LmdbError::DatabaseCorrupted("Child ID mismatch".to_string()));
+            return Err(LmdbError::DatabaseCorrupted(
+                "Child ID mismatch".to_string(),
+            ));
         }
         Ok(())
     }
 
-    pub fn append_promoted_key_and_page_id(&mut self, promoted_key: TSN, promoted_page_id: PageID) -> Result<()> {
+    pub fn append_promoted_key_and_page_id(
+        &mut self,
+        promoted_key: TSN,
+        promoted_page_id: PageID,
+    ) -> Result<()> {
         self.keys.push(promoted_key);
         self.child_ids.push(promoted_page_id);
         Ok(())
@@ -579,9 +618,10 @@ impl PositionLeafNode {
     pub fn from_slice(slice: &[u8]) -> Result<Self> {
         // Check if the slice has at least 2 bytes for keys_len
         if slice.len() < 2 {
-            return Err(LmdbError::DeserializationError(
-                format!("Expected at least 2 bytes, got {}", slice.len())
-            ));
+            return Err(LmdbError::DeserializationError(format!(
+                "Expected at least 2 bytes, got {}",
+                slice.len()
+            )));
         }
 
         // Extract the length of the keys (first 2 bytes)
@@ -590,9 +630,11 @@ impl PositionLeafNode {
         // Calculate the minimum expected size for the keys
         let min_expected_size = 2 + (keys_len * 8);
         if slice.len() < min_expected_size {
-            return Err(LmdbError::DeserializationError(
-                format!("Expected at least {} bytes for keys, got {}", min_expected_size, slice.len())
-            ));
+            return Err(LmdbError::DeserializationError(format!(
+                "Expected at least {} bytes for keys, got {}",
+                min_expected_size,
+                slice.len()
+            )));
         }
 
         // Extract the keys (8 bytes each)
@@ -600,8 +642,14 @@ impl PositionLeafNode {
         for i in 0..keys_len {
             let start = 2 + (i * 8);
             let position = u64::from_le_bytes([
-                slice[start], slice[start+1], slice[start+2], slice[start+3],
-                slice[start+4], slice[start+5], slice[start+6], slice[start+7]
+                slice[start],
+                slice[start + 1],
+                slice[start + 2],
+                slice[start + 3],
+                slice[start + 4],
+                slice[start + 5],
+                slice[start + 6],
+                slice[start + 7],
             ]);
             keys.push(Position(position));
         }
@@ -613,37 +661,47 @@ impl PositionLeafNode {
         for _ in 0..keys_len {
             if offset + 8 > slice.len() {
                 return Err(LmdbError::DeserializationError(
-                    "Unexpected end of data while reading PositionIndexRecord".to_string()
+                    "Unexpected end of data while reading PositionIndexRecord".to_string(),
                 ));
             }
 
             // Extract segment (4 bytes)
-            let segment = u32::from_le_bytes([slice[offset], slice[offset+1], slice[offset+2], slice[offset+3]]);
+            let segment = u32::from_le_bytes([
+                slice[offset],
+                slice[offset + 1],
+                slice[offset + 2],
+                slice[offset + 3],
+            ]);
             offset += 4;
 
             // Extract offset (4 bytes)
-            let record_offset = u32::from_le_bytes([slice[offset], slice[offset+1], slice[offset+2], slice[offset+3]]);
+            let record_offset = u32::from_le_bytes([
+                slice[offset],
+                slice[offset + 1],
+                slice[offset + 2],
+                slice[offset + 3],
+            ]);
             offset += 4;
 
             if offset + 2 > slice.len() {
                 return Err(LmdbError::DeserializationError(
-                    "Unexpected end of data while reading type_hash length".to_string()
+                    "Unexpected end of data while reading type_hash length".to_string(),
                 ));
             }
 
             // Extract type_hash length (2 bytes)
-            let type_hash_len = u16::from_le_bytes([slice[offset], slice[offset+1]]) as usize;
+            let type_hash_len = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
             offset += 2;
 
             if offset + type_hash_len > slice.len() {
                 return Err(LmdbError::DeserializationError(
-                    "Unexpected end of data while reading type_hash".to_string()
+                    "Unexpected end of data while reading type_hash".to_string(),
                 ));
             }
 
             // Extract type_hash
             let mut type_hash = Vec::with_capacity(type_hash_len);
-            type_hash.extend_from_slice(&slice[offset..offset+type_hash_len]);
+            type_hash.extend_from_slice(&slice[offset..offset + type_hash_len]);
             offset += type_hash_len;
 
             values.push(PositionIndexRecord {
@@ -655,7 +713,7 @@ impl PositionLeafNode {
 
         if offset >= slice.len() {
             return Err(LmdbError::DeserializationError(
-                "Unexpected end of data while reading next_leaf_id flag".to_string()
+                "Unexpected end of data while reading next_leaf_id flag".to_string(),
             ));
         }
 
@@ -667,11 +725,16 @@ impl PositionLeafNode {
         let next_leaf_id = if has_next_leaf_id {
             if offset + 4 > slice.len() {
                 return Err(LmdbError::DeserializationError(
-                    "Unexpected end of data while reading next_leaf_id".to_string()
+                    "Unexpected end of data while reading next_leaf_id".to_string(),
                 ));
             }
 
-            let page_id = u32::from_le_bytes([slice[offset], slice[offset+1], slice[offset+2], slice[offset+3]]);
+            let page_id = u32::from_le_bytes([
+                slice[offset],
+                slice[offset + 1],
+                slice[offset + 2],
+                slice[offset + 3],
+            ]);
             Some(PageID(page_id))
         } else {
             None
@@ -749,9 +812,10 @@ impl PositionInternalNode {
     pub fn from_slice(slice: &[u8]) -> Result<Self> {
         // Check if the slice has at least 2 bytes for keys_len
         if slice.len() < 2 {
-            return Err(LmdbError::DeserializationError(
-                format!("Expected at least 2 bytes, got {}", slice.len())
-            ));
+            return Err(LmdbError::DeserializationError(format!(
+                "Expected at least 2 bytes, got {}",
+                slice.len()
+            )));
         }
 
         // Extract the length of the keys (first 2 bytes)
@@ -760,9 +824,11 @@ impl PositionInternalNode {
         // Calculate the minimum expected size for the keys
         let min_expected_size = 2 + (keys_len * 8);
         if slice.len() < min_expected_size {
-            return Err(LmdbError::DeserializationError(
-                format!("Expected at least {} bytes for keys, got {}", min_expected_size, slice.len())
-            ));
+            return Err(LmdbError::DeserializationError(format!(
+                "Expected at least {} bytes for keys, got {}",
+                min_expected_size,
+                slice.len()
+            )));
         }
 
         // Extract the keys (8 bytes each)
@@ -770,8 +836,14 @@ impl PositionInternalNode {
         for i in 0..keys_len {
             let start = 2 + (i * 8);
             let position = u64::from_le_bytes([
-                slice[start], slice[start+1], slice[start+2], slice[start+3],
-                slice[start+4], slice[start+5], slice[start+6], slice[start+7]
+                slice[start],
+                slice[start + 1],
+                slice[start + 2],
+                slice[start + 3],
+                slice[start + 4],
+                slice[start + 5],
+                slice[start + 6],
+                slice[start + 7],
             ]);
             keys.push(Position(position));
         }
@@ -780,32 +852,36 @@ impl PositionInternalNode {
         let offset = 2 + (keys_len * 8);
         if offset + 2 > slice.len() {
             return Err(LmdbError::DeserializationError(
-                "Unexpected end of data while reading child_ids length".to_string()
+                "Unexpected end of data while reading child_ids length".to_string(),
             ));
         }
 
-        let child_ids_len = u16::from_le_bytes([slice[offset], slice[offset+1]]) as usize;
+        let child_ids_len = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
 
         // Calculate the minimum expected size for the child_ids
         let min_expected_size = offset + 2 + (child_ids_len * 4);
         if slice.len() < min_expected_size {
-            return Err(LmdbError::DeserializationError(
-                format!("Expected at least {} bytes for child_ids, got {}", min_expected_size, slice.len())
-            ));
+            return Err(LmdbError::DeserializationError(format!(
+                "Expected at least {} bytes for child_ids, got {}",
+                min_expected_size,
+                slice.len()
+            )));
         }
 
         // Extract the child_ids (4 bytes each)
         let mut child_ids = Vec::with_capacity(child_ids_len);
         for i in 0..child_ids_len {
             let start = offset + 2 + (i * 4);
-            let page_id = u32::from_le_bytes([slice[start], slice[start+1], slice[start+2], slice[start+3]]);
+            let page_id = u32::from_le_bytes([
+                slice[start],
+                slice[start + 1],
+                slice[start + 2],
+                slice[start + 3],
+            ]);
             child_ids.push(PageID(page_id));
         }
 
-        Ok(PositionInternalNode {
-            keys,
-            child_ids,
-        })
+        Ok(PositionInternalNode { keys, child_ids })
     }
 }
 
@@ -829,7 +905,7 @@ impl Node {
             Node::PositionInternal(_) => PAGE_TYPE_POSITION_INTERNAL,
         }
     }
-    
+
     pub fn calc_serialized_size(&self) -> usize {
         match self {
             Node::Header(_) => 16, // HeaderNode has a fixed size of 16 bytes
@@ -842,21 +918,11 @@ impl Node {
 
     pub fn serialize(&self) -> Result<Vec<u8>> {
         match self {
-            Node::Header(node) => {
-                Ok(node.serialize())
-            }
-            Node::FreeListLeaf(node) => {
-                node.serialize()
-            }
-            Node::FreeListInternal(node) => {
-                node.serialize()
-            }
-            Node::PositionLeaf(node) => {
-                node.serialize()
-            }
-            Node::PositionInternal(node) => {
-                node.serialize()
-            }
+            Node::Header(node) => Ok(node.serialize()),
+            Node::FreeListLeaf(node) => node.serialize(),
+            Node::FreeListInternal(node) => node.serialize(),
+            Node::PositionLeaf(node) => node.serialize(),
+            Node::PositionInternal(node) => node.serialize(),
         }
     }
 
@@ -882,11 +948,13 @@ impl Node {
                 let node = PositionInternalNode::from_slice(data)?;
                 Ok(Node::PositionInternal(node))
             }
-            _ => Err(LmdbError::DatabaseCorrupted(format!("Invalid node type: {}", node_type)))
+            _ => Err(LmdbError::DatabaseCorrupted(format!(
+                "Invalid node type: {}",
+                node_type
+            ))),
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -921,8 +989,8 @@ mod tests {
         assert_eq!(&[21, 3, 0, 0], &serialized[12..16]);
 
         // Deserialize back to a HeaderNode
-        let deserialized = HeaderNode::from_slice(&serialized)
-            .expect("Failed to deserialize HeaderNode");
+        let deserialized =
+            HeaderNode::from_slice(&serialized).expect("Failed to deserialize HeaderNode");
 
         // Verify that the deserialized node matches the original
         assert_eq!(header_node.tsn, deserialized.tsn);
@@ -1062,7 +1130,8 @@ mod tests {
         assert_eq!(serialized, node_serialized);
 
         // Test deserialization through Node enum
-        let node_deserialized = Node::deserialize(PAGE_TYPE_FREELIST_INTERNAL, &node_serialized).unwrap();
+        let node_deserialized =
+            Node::deserialize(PAGE_TYPE_FREELIST_INTERNAL, &node_serialized).unwrap();
 
         // Verify that deserialization through Node produces the correct result
         if let Node::FreeListInternal(deserialized_internal) = node_deserialized {
@@ -1155,7 +1224,8 @@ mod tests {
         assert_eq!(serialized, node_serialized);
 
         // Test deserialization through Node enum
-        let node_deserialized = Node::deserialize(PAGE_TYPE_POSITION_LEAF, &node_serialized).unwrap();
+        let node_deserialized =
+            Node::deserialize(PAGE_TYPE_POSITION_LEAF, &node_serialized).unwrap();
 
         // Verify that deserialization through Node produces the correct result
         if let Node::PositionLeaf(deserialized_leaf) = node_deserialized {
@@ -1234,7 +1304,8 @@ mod tests {
         assert_eq!(serialized, node_serialized);
 
         // Test deserialization through Node enum
-        let node_deserialized = Node::deserialize(PAGE_TYPE_POSITION_INTERNAL, &node_serialized).unwrap();
+        let node_deserialized =
+            Node::deserialize(PAGE_TYPE_POSITION_INTERNAL, &node_serialized).unwrap();
 
         // Verify that deserialization through Node produces the correct result
         if let Node::PositionInternal(deserialized_internal) = node_deserialized {

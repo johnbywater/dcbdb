@@ -79,15 +79,15 @@ impl Page {
 
 #[cfg(test)]
 mod tests {
-    use crate::mvcc_common::{PageID, TSN};
     use super::*;
+    use crate::mvcc_common::{PageID, Tsn};
     use crate::mvcc_node_header::HeaderNode;
 
     #[test]
     fn test_page_serialization_and_size() {
         // Create a HeaderNode (simplest node type)
         let node = Node::Header(HeaderNode {
-            tsn: TSN(42),
+            tsn: Tsn(42),
             next_page_id: PageID(123),
             freetree_root_id: PageID(456),
             position_root_id: PageID(789),

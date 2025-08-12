@@ -1,10 +1,10 @@
 use crate::mvcc_common;
-use crate::mvcc_common::{LmdbError, PageID, TSN};
+use crate::mvcc_common::{LmdbError, PageID, Tsn};
 
 // Node type definitions
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeaderNode {
-    pub tsn: TSN,
+    pub tsn: Tsn,
     pub next_page_id: PageID,
     pub freetree_root_id: PageID,
     pub position_root_id: PageID,
@@ -51,14 +51,13 @@ impl HeaderNode {
         let position_root_id = u32::from_le_bytes([slice[12], slice[13], slice[14], slice[15]]);
 
         Ok(HeaderNode {
-            tsn: TSN(tsn),
+            tsn: Tsn(tsn),
             next_page_id: PageID(next_page_id),
             freetree_root_id: PageID(freetree_root_id),
             position_root_id: PageID(position_root_id),
         })
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -67,7 +66,7 @@ mod tests {
     fn test_header_serialize() {
         // Create a HeaderNode with known values
         let header_node = HeaderNode {
-            tsn: TSN(42),
+            tsn: Tsn(42),
             next_page_id: PageID(123),
             freetree_root_id: PageID(456),
             position_root_id: PageID(789),

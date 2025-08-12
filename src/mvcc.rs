@@ -1,14 +1,14 @@
-use std::collections::HashMap;
-use std::collections::VecDeque;
-use std::path::Path;
-use std::sync::Mutex;
-use crate::mvcc_common::{LmdbError, PageID, TSN};
+use crate::mvcc_common::{LmdbError, PageID, Tsn};
 use crate::mvcc_node_event::EventLeafNode;
 use crate::mvcc_node_free_list::{FreeListInternalNode, FreeListLeafNode};
 use crate::mvcc_node_header::HeaderNode;
 use crate::mvcc_nodes::Node;
 use crate::mvcc_page::Page;
 use crate::mvcc_pager::Pager;
+use std::collections::HashMap;
+use std::collections::VecDeque;
+use std::path::Path;
+use std::sync::Mutex;
 
 // Result type alias
 pub type Result<T> = std::result::Result<T, LmdbError>;
@@ -16,10 +16,10 @@ pub type Result<T> = std::result::Result<T, LmdbError>;
 // Reader transaction
 pub struct LmdbReader {
     pub header_page_id: PageID,
-    pub tsn: TSN,
+    pub tsn: Tsn,
     pub position_root_id: PageID,
     reader_id: usize,
-    reader_tsns: *const Mutex<HashMap<usize, TSN>>,
+    reader_tsns: *const Mutex<HashMap<usize, Tsn>>,
 }
 
 impl Drop for LmdbReader {
@@ -39,22 +39,22 @@ impl Drop for LmdbReader {
 // Writer transaction
 pub struct LmdbWriter {
     pub header_page_id: PageID,
-    pub tsn: TSN,
+    pub tsn: Tsn,
     pub next_page_id: PageID,
     pub freetree_root_id: PageID,
     pub position_root_id: PageID,
-    pub reusable_page_ids: VecDeque<(PageID, TSN)>,
+    pub reusable_page_ids: VecDeque<(PageID, Tsn)>,
     pub freed_page_ids: VecDeque<PageID>,
     pub deserialized: HashMap<PageID, Page>,
     pub dirty: HashMap<PageID, Page>,
-    pub reused_page_ids: VecDeque<(PageID, TSN)>,
+    pub reused_page_ids: VecDeque<(PageID, Tsn)>,
     pub verbose: bool,
 }
 
 // Main LMDB structure
 pub struct Lmdb {
     pub pager: Pager,
-    pub reader_tsns: Mutex<HashMap<usize, TSN>>,
+    pub reader_tsns: Mutex<HashMap<usize, Tsn>>,
     pub writer_lock: Mutex<()>,
     pub page_size: usize,
     pub header_page_id0: PageID,
@@ -88,7 +88,7 @@ impl Lmdb {
 
             // Create and write header pages
             let header_node0 = HeaderNode {
-                tsn: TSN(0),
+                tsn: Tsn(0),
                 next_page_id,
                 freetree_root_id,
                 position_root_id,
@@ -209,7 +209,7 @@ impl Lmdb {
         // Create the writer
         let mut writer = LmdbWriter::new(
             header_page_id,
-            TSN(header_node.tsn.0 + 1),
+            Tsn(header_node.tsn.0 + 1),
             header_node.next_page_id,
             header_node.freetree_root_id,
             header_node.position_root_id,
@@ -290,7 +290,7 @@ impl Lmdb {
 impl LmdbWriter {
     pub fn new(
         header_page_id: PageID,
-        tsn: TSN,
+        tsn: Tsn,
         next_page_id: PageID,
         freetree_root_id: PageID,
         position_root_id: PageID,
@@ -416,7 +416,7 @@ impl LmdbWriter {
 
     pub fn find_reusable_page_ids(&mut self, db: &Lmdb) -> Result<()> {
         let verbose = self.verbose;
-        let mut reusable_page_ids: VecDeque<(PageID, TSN)> = VecDeque::new();
+        let mut reusable_page_ids: VecDeque<(PageID, Tsn)> = VecDeque::new();
         // Get free page IDs
         if verbose {
             println!("Finding reusable page IDs for TSN {:?}...", self.tsn);
@@ -496,7 +496,7 @@ impl LmdbWriter {
     pub fn insert_freed_page_id(
         &mut self,
         db: &Lmdb,
-        tsn: TSN,
+        tsn: Tsn,
         freed_page_id: PageID,
     ) -> Result<()> {
         let verbose = self.verbose;
@@ -556,7 +556,7 @@ impl LmdbWriter {
         }
 
         // Check if the leaf needs splitting by estimating the serialized size
-        let mut split_info: Option<(TSN, PageID)> = None;
+        let mut split_info: Option<(Tsn, PageID)> = None;
 
         if dirty_leaf_page.calc_serialized_size() > db.page_size {
             // Split the leaf node
@@ -754,7 +754,7 @@ impl LmdbWriter {
     pub fn remove_freed_page_id(
         &mut self,
         db: &Lmdb,
-        tsn: TSN,
+        tsn: Tsn,
         used_page_id: PageID,
     ) -> Result<()> {
         let verbose = self.verbose;
@@ -1256,35 +1256,35 @@ mod tests {
 
         {
             let mut writer = db.writer().unwrap();
-            assert_eq!(TSN(1), writer.tsn);
+            assert_eq!(Tsn(1), writer.tsn);
             assert_eq!(PageID(0), writer.header_page_id);
             db.commit(&mut writer).unwrap();
         }
 
         {
             let mut writer = db.writer().unwrap();
-            assert_eq!(TSN(2), writer.tsn);
+            assert_eq!(Tsn(2), writer.tsn);
             assert_eq!(PageID(1), writer.header_page_id);
             db.commit(&mut writer).unwrap();
         }
 
         {
             let mut writer = db.writer().unwrap();
-            assert_eq!(TSN(3), writer.tsn);
+            assert_eq!(Tsn(3), writer.tsn);
             assert_eq!(PageID(0), writer.header_page_id);
             db.commit(&mut writer).unwrap();
         }
 
         {
             let mut writer = db.writer().unwrap();
-            assert_eq!(TSN(4), writer.tsn);
+            assert_eq!(Tsn(4), writer.tsn);
             assert_eq!(PageID(1), writer.header_page_id);
             db.commit(&mut writer).unwrap();
         }
 
         {
             let mut writer = db.writer().unwrap();
-            assert_eq!(TSN(5), writer.tsn);
+            assert_eq!(Tsn(5), writer.tsn);
             assert_eq!(PageID(0), writer.header_page_id);
             db.commit(&mut writer).unwrap();
         }
@@ -1303,7 +1303,7 @@ mod tests {
             let reader = db.reader().unwrap();
             assert_eq!(1, db.reader_tsns.lock().unwrap().len());
             assert_eq!(
-                vec![TSN(0)],
+                vec![Tsn(0)],
                 db.reader_tsns
                     .lock()
                     .unwrap()
@@ -1312,7 +1312,7 @@ mod tests {
                     .collect::<Vec<_>>()
             );
             assert_eq!(PageID(0), reader.header_page_id);
-            assert_eq!(TSN(0), reader.tsn);
+            assert_eq!(Tsn(0), reader.tsn);
         }
         assert_eq!(0, db.reader_tsns.lock().unwrap().len());
 
@@ -1320,7 +1320,7 @@ mod tests {
         {
             let reader1 = db.reader().unwrap();
             assert_eq!(
-                vec![TSN(0)],
+                vec![Tsn(0)],
                 db.reader_tsns
                     .lock()
                     .unwrap()
@@ -1329,12 +1329,12 @@ mod tests {
                     .collect::<Vec<_>>()
             );
             assert_eq!(PageID(0), reader1.header_page_id);
-            assert_eq!(TSN(0), reader1.tsn);
+            assert_eq!(Tsn(0), reader1.tsn);
 
             {
                 let reader2 = db.reader().unwrap();
                 assert_eq!(
-                    vec![TSN(0), TSN(0)],
+                    vec![Tsn(0), Tsn(0)],
                     db.reader_tsns
                         .lock()
                         .unwrap()
@@ -1343,12 +1343,12 @@ mod tests {
                         .collect::<Vec<_>>()
                 );
                 assert_eq!(PageID(0), reader2.header_page_id);
-                assert_eq!(TSN(0), reader2.tsn);
+                assert_eq!(Tsn(0), reader2.tsn);
 
                 {
                     let reader3 = db.reader().unwrap();
                     assert_eq!(
-                        vec![TSN(0), TSN(0), TSN(0)],
+                        vec![Tsn(0), Tsn(0), Tsn(0)],
                         db.reader_tsns
                             .lock()
                             .unwrap()
@@ -1357,7 +1357,7 @@ mod tests {
                             .collect::<Vec<_>>()
                     );
                     assert_eq!(PageID(0), reader3.header_page_id);
-                    assert_eq!(TSN(0), reader3.tsn);
+                    assert_eq!(Tsn(0), reader3.tsn);
                 }
             }
         }
@@ -1367,7 +1367,7 @@ mod tests {
         {
             let mut writer = db.writer().unwrap();
             assert_eq!(0, db.reader_tsns.lock().unwrap().len());
-            assert_eq!(TSN(1), writer.tsn);
+            assert_eq!(Tsn(1), writer.tsn);
             assert_eq!(PageID(0), writer.header_page_id);
             db.commit(&mut writer).unwrap();
         }
@@ -1376,7 +1376,7 @@ mod tests {
         {
             let reader = db.reader().unwrap();
             assert_eq!(
-                vec![TSN(1)],
+                vec![Tsn(1)],
                 db.reader_tsns
                     .lock()
                     .unwrap()
@@ -1385,7 +1385,7 @@ mod tests {
                     .collect::<Vec<_>>()
             );
             assert_eq!(PageID(1), reader.header_page_id);
-            assert_eq!(TSN(1), reader.tsn);
+            assert_eq!(Tsn(1), reader.tsn);
         }
     }
 
@@ -1510,7 +1510,7 @@ mod tests {
             assert_eq!(PageID(4), header_node.next_page_id);
 
             // Construct a writer
-            let tsn = TSN(1001);
+            let tsn = Tsn(1001);
 
             let mut writer = LmdbWriter::new(
                 header_page_id,
@@ -1598,7 +1598,7 @@ mod tests {
 
             // Block inserted page IDs from being reused
             {
-                db.reader_tsns.lock().unwrap().insert(0, TSN(0));
+                db.reader_tsns.lock().unwrap().insert(0, Tsn(0));
             }
 
             // Start a new writer to remove inserted freed page ID
@@ -1655,10 +1655,10 @@ mod tests {
             let (header_page_id, header_node) = db.get_latest_header().unwrap();
 
             // Create a writer
-            let mut tsn = TSN(100);
+            let mut tsn = Tsn(100);
             let mut writer = LmdbWriter::new(
                 header_page_id,
-                TSN(header_node.tsn.0 + 1),
+                Tsn(header_node.tsn.0 + 1),
                 header_node.next_page_id,
                 header_node.freetree_root_id,
                 header_node.position_root_id,
@@ -1666,7 +1666,7 @@ mod tests {
             );
 
             let mut has_split_leaf = false;
-            let mut inserted: Vec<(TSN, PageID)> = Vec::new();
+            let mut inserted: Vec<(Tsn, PageID)> = Vec::new();
 
             // Insert page IDs until we split a leaf
             while !has_split_leaf {
@@ -1681,7 +1681,7 @@ mod tests {
                 inserted.push((tsn, page_id2));
 
                 // Increment TSN for next iteration
-                tsn = TSN(tsn.0 + 1);
+                tsn = Tsn(tsn.0 + 1);
 
                 // Check if we've split the leaf
                 let root_page = writer.dirty.get(&writer.freetree_root_id).unwrap();
@@ -1772,11 +1772,11 @@ mod tests {
 
             // Block inserted page IDs from being reused
             {
-                db.reader_tsns.lock().unwrap().insert(0, TSN(0));
+                db.reader_tsns.lock().unwrap().insert(0, Tsn(0));
             }
 
             let mut has_split_leaf = false;
-            let mut inserted: Vec<(TSN, PageID)> = Vec::new();
+            let mut inserted: Vec<(Tsn, PageID)> = Vec::new();
 
             // Insert page IDs until we split a leaf
             while !has_split_leaf {
@@ -1901,7 +1901,7 @@ mod tests {
             if VERBOSE {
                 println!("Inserting page IDs......");
             }
-            let mut inserted: Vec<(TSN, PageID)> = Vec::new();
+            let mut inserted: Vec<(Tsn, PageID)> = Vec::new();
             let previous_root_id;
             let previous_writer_tsn;
 
@@ -1918,7 +1918,7 @@ mod tests {
 
                 while !has_split_leaf {
                     // Increment TSN
-                    tsn = TSN(tsn.0 + 1);
+                    tsn = Tsn(tsn.0 + 1);
 
                     // Allocate and insert the first page ID
                     let page_id1 = writer.alloc_page_id();
@@ -1960,7 +1960,7 @@ mod tests {
                 // Create a new writer
                 let mut writer = LmdbWriter::new(
                     header_page_id,
-                    TSN(header_node.tsn.0 + 1),
+                    Tsn(header_node.tsn.0 + 1),
                     header_node.next_page_id,
                     header_node.freetree_root_id,
                     header_node.position_root_id,
@@ -2059,7 +2059,7 @@ mod tests {
             // Create a writer
             let mut writer = LmdbWriter::new(
                 header_page_id,
-                TSN(header_node.tsn.0 + 1),
+                Tsn(header_node.tsn.0 + 1),
                 header_node.next_page_id,
                 header_node.freetree_root_id,
                 header_node.position_root_id,
@@ -2067,8 +2067,8 @@ mod tests {
             );
 
             // Start with TSN 100
-            let mut tsn = TSN(100);
-            let mut inserted: Vec<(TSN, PageID)> = Vec::new();
+            let mut tsn = Tsn(100);
+            let mut inserted: Vec<(Tsn, PageID)> = Vec::new();
             let mut has_split_internal = false;
 
             // Insert page IDs until we split an internal node
@@ -2084,7 +2084,7 @@ mod tests {
                 inserted.push((tsn, page_id2));
 
                 // Increment TSN for next iteration
-                tsn = TSN(tsn.0 + 1);
+                tsn = Tsn(tsn.0 + 1);
 
                 // Check if we've split an internal node
                 let root_page = writer.dirty.get(&writer.freetree_root_id).unwrap();
@@ -2209,7 +2209,7 @@ mod tests {
             let (_temp_dir, mut db) = construct_db(64);
 
             // First, insert page IDs until we split an internal node
-            let mut inserted: Vec<(TSN, PageID)> = Vec::new();
+            let mut inserted: Vec<(Tsn, PageID)> = Vec::new();
             let previous_root_id;
             let previous_writer_tsn;
 
@@ -2226,7 +2226,7 @@ mod tests {
 
                 while !has_split_internal {
                     // Increment TSN
-                    tsn = TSN(tsn.0 + 1);
+                    tsn = Tsn(tsn.0 + 1);
                     writer.tsn = tsn;
 
                     // Allocate and insert the first page ID
@@ -2275,7 +2275,7 @@ mod tests {
                 // Create a new writer
                 let mut writer = LmdbWriter::new(
                     header_page_id,
-                    TSN(header_node.tsn.0 + 1),
+                    Tsn(header_node.tsn.0 + 1),
                     header_node.next_page_id,
                     header_node.freetree_root_id,
                     header_node.position_root_id,
@@ -2375,7 +2375,7 @@ mod tests {
             let (_temp_dir, mut db) = construct_db(64);
 
             // First, insert page IDs until we split an internal node
-            let mut inserted: Vec<(TSN, PageID)> = Vec::new();
+            let mut inserted: Vec<(Tsn, PageID)> = Vec::new();
 
             {
                 // Get a writer
@@ -2387,7 +2387,7 @@ mod tests {
 
                 while !has_split_internal {
                     // Increment TSN
-                    tsn = TSN(tsn.0 + 1);
+                    tsn = Tsn(tsn.0 + 1);
                     writer.tsn = tsn;
 
                     // Allocate and insert the first page ID
@@ -2431,7 +2431,7 @@ mod tests {
             let free_page_ids = writer.reusable_page_ids.clone();
 
             // Block inserted page IDs from being reused
-            db.reader_tsns.lock().unwrap().insert(0, TSN(0));
+            db.reader_tsns.lock().unwrap().insert(0, Tsn(0));
 
             // Remove each free page ID.
             for (page_id, tsn) in free_page_ids {

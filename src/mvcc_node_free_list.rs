@@ -1,5 +1,5 @@
 use crate::mvcc_common;
-use crate::mvcc_common::{LmdbError, PageID, TSN};
+use crate::mvcc_common::{LmdbError, PageID, Tsn};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FreeListLeafValue {
@@ -9,7 +9,7 @@ pub struct FreeListLeafValue {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FreeListLeafNode {
-    pub keys: Vec<TSN>,
+    pub keys: Vec<Tsn>,
     pub values: Vec<FreeListLeafValue>,
 }
 
@@ -120,7 +120,7 @@ impl FreeListLeafNode {
                 slice[start + 2],
                 slice[start + 3],
             ]);
-            keys.push(TSN(tsn));
+            keys.push(Tsn(tsn));
         }
 
         // Extract the values
@@ -194,7 +194,7 @@ impl FreeListLeafNode {
         Ok(FreeListLeafNode { keys, values })
     }
 
-    pub fn insert_or_append(&mut self, tsn: TSN, page_id: PageID) -> mvcc_common::Result<()> {
+    pub fn insert_or_append(&mut self, tsn: Tsn, page_id: PageID) -> mvcc_common::Result<()> {
         // Find the place to insert the value
         let leaf_idx = self.keys.iter().position(|&k| k == tsn);
 
@@ -227,7 +227,7 @@ impl FreeListLeafNode {
         Ok(())
     }
 
-    pub fn pop_last_key_and_value(&mut self) -> mvcc_common::Result<(TSN, FreeListLeafValue)> {
+    pub fn pop_last_key_and_value(&mut self) -> mvcc_common::Result<(Tsn, FreeListLeafValue)> {
         let last_key = self.keys.pop().unwrap();
         let last_value = self.values.pop().unwrap();
         Ok((last_key, last_value))
@@ -236,7 +236,7 @@ impl FreeListLeafNode {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FreeListInternalNode {
-    pub keys: Vec<TSN>,
+    pub keys: Vec<Tsn>,
     pub child_ids: Vec<PageID>,
 }
 
@@ -327,7 +327,7 @@ impl FreeListInternalNode {
                 slice[start + 2],
                 slice[start + 3],
             ]);
-            keys.push(TSN(tsn));
+            keys.push(Tsn(tsn));
         }
 
         // Extract the length of child_ids (2 bytes)
@@ -366,7 +366,11 @@ impl FreeListInternalNode {
         Ok(FreeListInternalNode { keys, child_ids })
     }
 
-    pub fn replace_last_child_id(&mut self, old_id: PageID, new_id: PageID) -> mvcc_common::Result<()> {
+    pub fn replace_last_child_id(
+        &mut self,
+        old_id: PageID,
+        new_id: PageID,
+    ) -> mvcc_common::Result<()> {
         // Replace the last child ID.
         let last_idx = self.child_ids.len() - 1;
         if self.child_ids[last_idx] == old_id {
@@ -381,7 +385,7 @@ impl FreeListInternalNode {
 
     pub fn append_promoted_key_and_page_id(
         &mut self,
-        promoted_key: TSN,
+        promoted_key: Tsn,
         promoted_page_id: PageID,
     ) -> mvcc_common::Result<()> {
         self.keys.push(promoted_key);
@@ -389,7 +393,7 @@ impl FreeListInternalNode {
         Ok(())
     }
 
-    pub(crate) fn split_off(&mut self) -> mvcc_common::Result<(TSN, Vec<TSN>, Vec<PageID>)> {
+    pub(crate) fn split_off(&mut self) -> mvcc_common::Result<(Tsn, Vec<Tsn>, Vec<PageID>)> {
         let middle_idx = self.keys.len() - 2;
         let promoted_key = self.keys.remove(middle_idx);
         let new_keys = self.keys.split_off(middle_idx);
@@ -400,14 +404,14 @@ impl FreeListInternalNode {
 
 #[cfg(test)]
 mod tests {
-    use crate::mvcc_common::{PageID, TSN};
+    use crate::mvcc_common::{PageID, Tsn};
     use crate::mvcc_node_free_list::{FreeListInternalNode, FreeListLeafNode, FreeListLeafValue};
 
     #[test]
     fn test_freelist_leaf_serialize() {
         // Create a FreeListLeafNode with known values
         let leaf_node = FreeListLeafNode {
-            keys: vec![TSN(10), TSN(20), TSN(30)],
+            keys: vec![Tsn(10), Tsn(20), Tsn(30)],
             values: vec![
                 FreeListLeafValue {
                     page_ids: vec![PageID(100), PageID(101)],
@@ -442,9 +446,9 @@ mod tests {
         assert_eq!(3, deserialized.values.len());
 
         // Check keys
-        assert_eq!(TSN(10), deserialized.keys[0]);
-        assert_eq!(TSN(20), deserialized.keys[1]);
-        assert_eq!(TSN(30), deserialized.keys[2]);
+        assert_eq!(Tsn(10), deserialized.keys[0]);
+        assert_eq!(Tsn(20), deserialized.keys[1]);
+        assert_eq!(Tsn(30), deserialized.keys[2]);
 
         // Check first value
         assert_eq!(2, deserialized.values[0].page_ids.len());
@@ -469,7 +473,7 @@ mod tests {
     fn test_freelist_internal_serialize() {
         // Create a FreeListInternalNode with known values
         let internal_node = FreeListInternalNode {
-            keys: vec![TSN(10), TSN(20), TSN(30)],
+            keys: vec![Tsn(10), Tsn(20), Tsn(30)],
             child_ids: vec![PageID(100), PageID(200), PageID(300), PageID(400)],
         };
 
@@ -516,15 +520,14 @@ mod tests {
         assert_eq!(4, deserialized.child_ids.len());
 
         // Check keys
-        assert_eq!(TSN(10), deserialized.keys[0]);
-        assert_eq!(TSN(20), deserialized.keys[1]);
-        assert_eq!(TSN(30), deserialized.keys[2]);
+        assert_eq!(Tsn(10), deserialized.keys[0]);
+        assert_eq!(Tsn(20), deserialized.keys[1]);
+        assert_eq!(Tsn(30), deserialized.keys[2]);
 
         // Check child_ids
         assert_eq!(PageID(100), deserialized.child_ids[0]);
         assert_eq!(PageID(200), deserialized.child_ids[1]);
         assert_eq!(PageID(300), deserialized.child_ids[2]);
         assert_eq!(PageID(400), deserialized.child_ids[3]);
-
     }
 }

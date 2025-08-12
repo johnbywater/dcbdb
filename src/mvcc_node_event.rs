@@ -1,7 +1,6 @@
-use crate::mvcc_common::LmdbError;
 use crate::mvcc_common;
+use crate::mvcc_common::LmdbError;
 use crate::mvcc_common::PageID;
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Position(pub u64);
@@ -295,13 +294,12 @@ impl EventLeafNode {
             next_leaf_id,
         })
     }
-
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EventInternalNode {
-        pub keys: Vec<Position>,
-        pub child_ids: Vec<PageID>,
+    pub keys: Vec<Position>,
+    pub child_ids: Vec<PageID>,
 }
 
 impl EventInternalNode {
@@ -407,17 +405,13 @@ impl EventInternalNode {
             child_ids.push(PageID(page_id));
         }
 
-        Ok(EventInternalNode {
-            keys,
-            child_ids,
-        })
+        Ok(EventInternalNode { keys, child_ids })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn test_event_internal_serialize() {
@@ -471,7 +465,12 @@ mod tests {
                 EventRecord {
                     event_type: "event_type_2".to_string(),
                     data: vec![2, 0, 0, 0], // 200 as little-endian bytes
-                    tags: vec!["tag4".to_string(), "tag5".to_string(), "tag6".to_string(), "tag7".to_string()],
+                    tags: vec![
+                        "tag4".to_string(),
+                        "tag5".to_string(),
+                        "tag6".to_string(),
+                        "tag7".to_string(),
+                    ],
                     position: Position(2000),
                 },
                 EventRecord {
@@ -491,8 +490,8 @@ mod tests {
         assert!(!serialized.is_empty());
 
         // Deserialize back to an EventLeafNode
-        let deserialized = EventLeafNode::from_slice(&serialized)
-            .expect("Failed to deserialize EventLeafNode");
+        let deserialized =
+            EventLeafNode::from_slice(&serialized).expect("Failed to deserialize EventLeafNode");
 
         // Verify that the deserialized node matches the original
         assert_eq!(leaf_node, deserialized);
@@ -509,19 +508,33 @@ mod tests {
         // Check first value
         assert_eq!("event_type_1", deserialized.values[0].event_type);
         assert_eq!(vec![1, 0, 0, 0], deserialized.values[0].data);
-        assert_eq!(vec!["tag1".to_string(), "tag2".to_string(), "tag3".to_string()], deserialized.values[0].tags);
+        assert_eq!(
+            vec!["tag1".to_string(), "tag2".to_string(), "tag3".to_string()],
+            deserialized.values[0].tags
+        );
         assert_eq!(Position(1000), deserialized.values[0].position);
 
         // Check second value
         assert_eq!("event_type_2", deserialized.values[1].event_type);
         assert_eq!(vec![2, 0, 0, 0], deserialized.values[1].data);
-        assert_eq!(vec!["tag4".to_string(), "tag5".to_string(), "tag6".to_string(), "tag7".to_string()], deserialized.values[1].tags);
+        assert_eq!(
+            vec![
+                "tag4".to_string(),
+                "tag5".to_string(),
+                "tag6".to_string(),
+                "tag7".to_string()
+            ],
+            deserialized.values[1].tags
+        );
         assert_eq!(Position(2000), deserialized.values[1].position);
 
         // Check third value
         assert_eq!("event_type_3", deserialized.values[2].event_type);
         assert_eq!(vec![3, 0, 0, 0], deserialized.values[2].data);
-        assert_eq!(vec!["tag8".to_string(), "tag9".to_string()], deserialized.values[2].tags);
+        assert_eq!(
+            vec!["tag8".to_string(), "tag9".to_string()],
+            deserialized.values[2].tags
+        );
         assert_eq!(Position(3000), deserialized.values[2].position);
 
         // Check next_leaf_id

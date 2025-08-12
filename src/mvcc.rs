@@ -4,8 +4,9 @@ use std::path::Path;
 use std::sync::Mutex;
 use crate::mvcc_common::{LmdbError, PageID, TSN};
 use crate::mvcc_node_event::EventLeafNode;
+use crate::mvcc_node_free_list::{FreeListInternalNode, FreeListLeafNode};
 use crate::mvcc_node_header::HeaderNode;
-use crate::mvcc_nodes::{FreeListInternalNode, FreeListLeafNode, Node};
+use crate::mvcc_nodes::Node;
 use crate::mvcc_page::Page;
 use crate::mvcc_pager::Pager;
 
@@ -1223,7 +1224,7 @@ impl LmdbWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mvcc_nodes::FreeListLeafValue;
+    use crate::mvcc_node_free_list::FreeListLeafValue;
     use serial_test::serial;
     use tempfile::tempdir;
 

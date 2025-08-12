@@ -853,9 +853,6 @@ impl EventInternalNode {
         // 8 bytes for each Position in keys
         total_size += self.keys.len() * 8;
         
-        // 2 bytes for child_ids_len
-        total_size += 2;
-        
         // 4 bytes for each PageID in child_ids
         total_size += self.child_ids.len() * 4;
         
@@ -874,10 +871,8 @@ impl EventInternalNode {
             result.extend_from_slice(&key.0.to_le_bytes());
         }
         
-        // Serialize the length of the child_ids (2 bytes)
-        result.extend_from_slice(&(self.child_ids.len() as u16).to_le_bytes());
-        
         // Serialize each child_id (4 bytes each)
+        // Note: We don't need to serialize child_ids_len as it's always keys_len + 1
         for child_id in &self.child_ids {
             result.extend_from_slice(&child_id.0.to_le_bytes());
         }
@@ -927,18 +922,11 @@ impl EventInternalNode {
         // Calculate the offset after reading keys
         let offset = 2 + (keys_len * 8);
         
-        // Check if there's enough data for child_ids_len (2 bytes)
-        if offset + 2 > slice.len() {
-            return Err(LmdbError::DeserializationError(
-                "Unexpected end of data while reading child_ids length".to_string(),
-            ));
-        }
-        
-        // Extract the length of the child_ids (2 bytes)
-        let child_ids_len = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
+        // Derive child_ids_len from keys_len (always keys_len + 1)
+        let child_ids_len = keys_len + 1;
         
         // Calculate the minimum expected size for the child_ids
-        let min_expected_size = offset + 2 + (child_ids_len * 4);
+        let min_expected_size = offset + (child_ids_len * 4);
         if slice.len() < min_expected_size {
             return Err(LmdbError::DeserializationError(format!(
                 "Expected at least {} bytes for child_ids, got {}",
@@ -950,7 +938,7 @@ impl EventInternalNode {
         // Extract the child_ids (4 bytes each)
         let mut child_ids = Vec::with_capacity(child_ids_len);
         for i in 0..child_ids_len {
-            let start = offset + 2 + (i * 4);
+            let start = offset + (i * 4);
             let page_id = u32::from_le_bytes([
                 slice[start],
                 slice[start + 1],

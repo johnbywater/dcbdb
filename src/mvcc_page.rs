@@ -1,6 +1,7 @@
 use crate::crc::calc_crc;
 use crate::mvcc;
-use crate::mvcc_nodes::{LmdbError, Node, PageID};
+use crate::mvcc_common::{LmdbError, PageID};
+use crate::mvcc_nodes::Node;
 
 // Page structure
 #[derive(Debug, Clone)]
@@ -78,8 +79,9 @@ impl Page {
 
 #[cfg(test)]
 mod tests {
+    use crate::mvcc_common::{PageID, TSN};
     use super::*;
-    use crate::mvcc_nodes::{HeaderNode, PageID, TSN};
+    use crate::mvcc_nodes::HeaderNode;
 
     #[test]
     fn test_page_serialization_and_size() {

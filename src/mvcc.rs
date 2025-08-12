@@ -2,8 +2,9 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::Mutex;
-
-use crate::mvcc_nodes::{EventLeafNode, FreeListInternalNode, FreeListLeafNode, HeaderNode, LmdbError, Node, PageID, TSN};
+use crate::mvcc_common::{LmdbError, PageID, TSN};
+use crate::mvcc_node_event::EventLeafNode;
+use crate::mvcc_nodes::{FreeListInternalNode, FreeListLeafNode, HeaderNode, Node};
 use crate::mvcc_page::Page;
 use crate::mvcc_pager::Pager;
 

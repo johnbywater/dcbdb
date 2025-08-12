@@ -527,7 +527,7 @@ impl FreeListInternalNode {
 pub struct EventRecord {
     pub event_type: u32,
     pub data: u32,
-    pub tags: Vec<u8>,
+    pub tags: Vec<String>,
     pub position: Position,
 }
 
@@ -554,8 +554,13 @@ impl EventLeafNode {
             // 4 bytes for data
             total_size += 4;
             
-            // 2 bytes for tags length + bytes for tags
-            total_size += 2 + value.tags.len();
+            // 2 bytes for number of tags
+            total_size += 2;
+            
+            // For each tag: 2 bytes for length + bytes for the string
+            for tag in &value.tags {
+                total_size += 2 + tag.len();
+            }
             
             // 8 bytes for position
             total_size += 8;
@@ -590,9 +595,17 @@ impl EventLeafNode {
             // Serialize data (4 bytes)
             result.extend_from_slice(&value.data.to_le_bytes());
             
-            // Serialize tags length (2 bytes) and tags
+            // Serialize number of tags (2 bytes)
             result.extend_from_slice(&(value.tags.len() as u16).to_le_bytes());
-            result.extend_from_slice(&value.tags);
+            
+            // Serialize each tag (2 bytes for length + string bytes)
+            for tag in &value.tags {
+                // Serialize tag length (2 bytes)
+                result.extend_from_slice(&(tag.len() as u16).to_le_bytes());
+                
+                // Serialize tag bytes
+                result.extend_from_slice(tag.as_bytes());
+            }
             
             // Serialize position (8 bytes)
             result.extend_from_slice(&value.position.0.to_le_bytes());
@@ -685,27 +698,51 @@ impl EventLeafNode {
             ]);
             offset += 4;
             
-            // Check if there's enough data for tags length (2 bytes)
+            // Check if there's enough data for number of tags (2 bytes)
             if offset + 2 > slice.len() {
                 return Err(LmdbError::DeserializationError(
-                    "Unexpected end of data while reading tags length".to_string(),
+                    "Unexpected end of data while reading number of tags".to_string(),
                 ));
             }
             
-            // Extract tags length (2 bytes)
-            let tags_len = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
+            // Extract number of tags (2 bytes)
+            let num_tags = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
             offset += 2;
             
-            // Check if there's enough data for tags
-            if offset + tags_len > slice.len() {
-                return Err(LmdbError::DeserializationError(
-                    "Unexpected end of data while reading tags".to_string(),
-                ));
+            // Extract each tag
+            let mut tags = Vec::with_capacity(num_tags);
+            for _ in 0..num_tags {
+                // Check if there's enough data for tag length (2 bytes)
+                if offset + 2 > slice.len() {
+                    return Err(LmdbError::DeserializationError(
+                        "Unexpected end of data while reading tag length".to_string(),
+                    ));
+                }
+                
+                // Extract tag length (2 bytes)
+                let tag_len = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
+                offset += 2;
+                
+                // Check if there's enough data for tag
+                if offset + tag_len > slice.len() {
+                    return Err(LmdbError::DeserializationError(
+                        "Unexpected end of data while reading tag".to_string(),
+                    ));
+                }
+                
+                // Extract tag as a string
+                let tag = match std::str::from_utf8(&slice[offset..offset + tag_len]) {
+                    Ok(s) => s.to_string(),
+                    Err(_) => {
+                        return Err(LmdbError::DeserializationError(
+                            "Invalid UTF-8 sequence in tag".to_string(),
+                        ));
+                    }
+                };
+                offset += tag_len;
+                
+                tags.push(tag);
             }
-            
-            // Extract tags
-            let tags = slice[offset..offset + tags_len].to_vec();
-            offset += tags_len;
             
             // Check if there's enough data for position (8 bytes)
             if offset + 8 > slice.len() {
@@ -1495,19 +1532,19 @@ mod tests {
                 EventRecord {
                     event_type: 1,
                     data: 100,
-                    tags: vec![1, 2, 3],
+                    tags: vec!["tag1".to_string(), "tag2".to_string(), "tag3".to_string()],
                     position: Position(1000),
                 },
                 EventRecord {
                     event_type: 2,
                     data: 200,
-                    tags: vec![4, 5, 6, 7],
+                    tags: vec!["tag4".to_string(), "tag5".to_string(), "tag6".to_string(), "tag7".to_string()],
                     position: Position(2000),
                 },
                 EventRecord {
                     event_type: 3,
                     data: 300,
-                    tags: vec![8, 9],
+                    tags: vec!["tag8".to_string(), "tag9".to_string()],
                     position: Position(3000),
                 },
             ],
@@ -1539,19 +1576,19 @@ mod tests {
         // Check first value
         assert_eq!(1, deserialized.values[0].event_type);
         assert_eq!(100, deserialized.values[0].data);
-        assert_eq!(vec![1, 2, 3], deserialized.values[0].tags);
+        assert_eq!(vec!["tag1".to_string(), "tag2".to_string(), "tag3".to_string()], deserialized.values[0].tags);
         assert_eq!(Position(1000), deserialized.values[0].position);
         
         // Check second value
         assert_eq!(2, deserialized.values[1].event_type);
         assert_eq!(200, deserialized.values[1].data);
-        assert_eq!(vec![4, 5, 6, 7], deserialized.values[1].tags);
+        assert_eq!(vec!["tag4".to_string(), "tag5".to_string(), "tag6".to_string(), "tag7".to_string()], deserialized.values[1].tags);
         assert_eq!(Position(2000), deserialized.values[1].position);
         
         // Check third value
         assert_eq!(3, deserialized.values[2].event_type);
         assert_eq!(300, deserialized.values[2].data);
-        assert_eq!(vec![8, 9], deserialized.values[2].tags);
+        assert_eq!(vec!["tag8".to_string(), "tag9".to_string()], deserialized.values[2].tags);
         assert_eq!(Position(3000), deserialized.values[2].position);
         
         // Check next_leaf_id

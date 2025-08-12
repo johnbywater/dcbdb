@@ -81,7 +81,7 @@ impl Page {
 mod tests {
     use crate::mvcc_common::{PageID, TSN};
     use super::*;
-    use crate::mvcc_nodes::HeaderNode;
+    use crate::mvcc_node_header::HeaderNode;
 
     #[test]
     fn test_page_serialization_and_size() {

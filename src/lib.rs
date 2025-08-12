@@ -46,6 +46,7 @@ mod mvcc_page;
 mod mvcc_pager;
 mod mvcc_node_event;
 mod mvcc_common;
+mod mvcc_node_header;
 
 #[cfg(test)]
 mod tests {

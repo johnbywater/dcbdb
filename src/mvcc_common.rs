@@ -6,12 +6,12 @@ pub enum LmdbError {
     Io(io::Error),
     PageNotFound(PageID),
     DirtyPageNotFound(PageID),
-    RootIDMismatchError(PageID, PageID),
+    RootIDMismatch(PageID, PageID),
     DatabaseCorrupted(String),
     SerializationError(String),
     DeserializationError(String),
-    PageAlreadyFreedError(PageID),
-    PageAlreadyDirtyError(PageID),
+    PageAlreadyFreed(PageID),
+    PageAlreadyDirty(PageID),
 }
 
 impl From<io::Error> for LmdbError {
@@ -28,16 +28,16 @@ impl fmt::Display for LmdbError {
             LmdbError::DirtyPageNotFound(page_id) => {
                 write!(f, "Dirty page not found: {page_id:?}")
             }
-            LmdbError::RootIDMismatchError(old_id, new_id) => {
+            LmdbError::RootIDMismatch(old_id, new_id) => {
                 write!(f, "Root ID mismatched: old {old_id:?} new {new_id:?}")
             }
             LmdbError::DatabaseCorrupted(msg) => write!(f, "Database corrupted: {msg}"),
             LmdbError::SerializationError(msg) => write!(f, "Serialization error: {msg}"),
             LmdbError::DeserializationError(msg) => write!(f, "Deserialization error: {msg}"),
-            LmdbError::PageAlreadyFreedError(page_id) => {
+            LmdbError::PageAlreadyFreed(page_id) => {
                 write!(f, "Page already freed: {page_id:?}")
             }
-            LmdbError::PageAlreadyDirtyError(page_id) => {
+            LmdbError::PageAlreadyDirty(page_id) => {
                 write!(f, "Page already dirty: {page_id:?}")
             }
         }

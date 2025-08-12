@@ -344,10 +344,10 @@ impl LmdbWriter {
 
     pub fn insert_dirty(&mut self, page: Page) -> Result<()> {
         if self.freed_page_ids.contains(&page.page_id) {
-            return Err(LmdbError::PageAlreadyFreedError(page.page_id));
+            return Err(LmdbError::PageAlreadyFreed(page.page_id));
         }
         if self.dirty.contains_key(&page.page_id) {
-            return Err(LmdbError::PageAlreadyDirtyError(page.page_id));
+            return Err(LmdbError::PageAlreadyDirty(page.page_id));
         }
         self.dirty.insert(page.page_id, page);
         Ok(())
@@ -390,7 +390,7 @@ impl LmdbWriter {
                 println!("{page_id:?} is already dirty");
             }
         } else {
-            return Err(LmdbError::PageAlreadyFreedError(page_id));
+            return Err(LmdbError::PageAlreadyFreed(page_id));
         }
         Ok(dirty_page_id)
     }
@@ -744,7 +744,7 @@ impl LmdbWriter {
                     println!("Replaced root {old_id:?} with {new_id:?}");
                 }
             } else {
-                return Err(LmdbError::RootIDMismatchError(old_id, new_id));
+                return Err(LmdbError::RootIDMismatch(old_id, new_id));
             }
         }
 
@@ -966,7 +966,7 @@ impl LmdbWriter {
                     println!("Replaced root {old_id:?} with {new_id:?}");
                 }
             } else {
-                return Err(LmdbError::RootIDMismatchError(old_id, new_id));
+                return Err(LmdbError::RootIDMismatch(old_id, new_id));
             }
         }
 

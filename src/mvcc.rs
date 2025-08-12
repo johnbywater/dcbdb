@@ -1144,7 +1144,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_write_transaction_recycles_pages() {
+    fn test_copy_on_write_page_reuse() {
         let temp_dir = tempdir().unwrap();
         let db_path = temp_dir.path().join("lmdb-test.db");
         let mut db = Lmdb::new(&db_path, 4096, VERBOSE).unwrap();
@@ -1170,70 +1170,81 @@ mod tests {
 
             // Check the dirty page IDs
             assert_eq!(1, writer.dirty.len());
-            assert!(writer.dirty.contains_key(&PageID(5)));
+            assert_eq!(PageID(5), *writer.dirty.keys().collect::<Vec<_>>()[0]);
 
             // Check the freed page IDs
             assert_eq!(1, writer.freed_page_ids.len());
-            assert!(writer.freed_page_ids.contains(&PageID(2)));
+            assert_eq!(PageID(2), writer.freed_page_ids[0]);
 
             db.commit(&mut writer).unwrap();
         }
-        //
-        //     // Read the position
-        //     {
-        //         let reader = db.reader().unwrap();
-        //
-        //         // Read the position root
-        //         let page = db.read_page(reader.position_root_id).unwrap();
-        //
-        //         // Check it's a position leaf node
-        //         if let Node::PositionLeaf(leaf_node) = &page.node {
-        //             // Check the keys and values
-        //             assert_eq!(vec![key1], leaf_node.keys);
-        //             assert_eq!(vec![value1.clone()], leaf_node.values);
-        //         } else {
-        //             panic!("Expected PositionLeaf node");
-        //         }
-        //     }
-        //
-        //     // Second transaction
-        //     let key2 = Position(2);
-        //     let value2 = PositionIndexRecord {
-        //         segment: 0,
-        //         offset: 100,
-        //         type_hash: Vec::new(),
-        //     };
-        //
-        //     {
-        //         let mut writer = db.writer().unwrap();
-        //
-        //         // Check there are two free pages (the old position root and the old free list root)
-        //         assert_eq!(2, writer.reusable_page_ids.len());
-        //         assert!(writer.reusable_page_ids.iter().any(|(id, _)| *id == PageID(3)));
-        //         assert!(writer.reusable_page_ids.iter().any(|(id, _)| *id == PageID(2)));
-        //
-        //         // Insert position
-        //         insert_position(&mut db, &mut writer, key2, value2.clone()).unwrap();
-        //
-        //         db.commit(&mut writer).unwrap();
-        //     }
-        //
-        //     // Read the positions
-        //     {
-        //         let reader = db.reader().unwrap();
-        //
-        //         // Read the position root
-        //         let page = db.read_page(reader.position_root_id).unwrap();
-        //
-        //         // Check it's a position leaf node
-        //         if let Node::PositionLeaf(leaf_node) = &page.node {
-        //             // Check the keys and values
-        //             assert_eq!(vec![key1, key2], leaf_node.keys);
-        //             assert_eq!(vec![value1.clone(), value2.clone()], leaf_node.values);
-        //         } else {
-        //             panic!("Expected PositionLeaf node");
-        //         }
-        //     }
+
+        // Second transaction
+        {
+            let mut writer = db.writer().unwrap();
+
+            // Check there are two free pages
+            assert_eq!(2, writer.reusable_page_ids.len());
+            assert_eq!((PageID(4), Tsn(1)), writer.reusable_page_ids[0]);
+            assert_eq!((PageID(2), Tsn(1)), writer.reusable_page_ids[1]);
+
+            // Check the free list root is page 2
+            assert_eq!(PageID(5), writer.freetree_root_id);
+
+            // Check the position root is page 3
+            assert_eq!(PageID(3), writer.position_root_id);
+
+            // Allocate and insert free page ID.
+            let free_page_id = writer.alloc_page_id();
+            assert_eq!(PageID(4), free_page_id);
+            writer
+                .insert_freed_page_id(&db, writer.tsn, free_page_id)
+                .unwrap();
+
+            // Check the dirty page IDs
+            assert_eq!(1, writer.dirty.len());
+            assert_eq!(PageID(2), *writer.dirty.keys().collect::<Vec<_>>()[0]);
+
+            // Check the freed page IDs
+            assert_eq!(1, writer.freed_page_ids.len());
+            assert_eq!(PageID(5), writer.freed_page_ids[0]);
+
+            db.commit(&mut writer).unwrap();
+        }
+
+        // Third transaction
+        {
+            let mut writer = db.writer().unwrap();
+
+            // Check there are two free pages
+            assert_eq!(2, writer.reusable_page_ids.len());
+            assert_eq!((PageID(4), Tsn(2)), writer.reusable_page_ids[0]);
+            assert_eq!((PageID(5), Tsn(2)), writer.reusable_page_ids[1]);
+
+            // Check the free list root is page 2
+            assert_eq!(PageID(2), writer.freetree_root_id);
+
+            // Check the position root is page 3
+            assert_eq!(PageID(3), writer.position_root_id);
+
+            // Allocate and insert free page ID.
+            let free_page_id = writer.alloc_page_id();
+            assert_eq!(PageID(4), free_page_id);
+            writer
+                .insert_freed_page_id(&db, writer.tsn, free_page_id)
+                .unwrap();
+
+            // Check the dirty page IDs
+            assert_eq!(1, writer.dirty.len());
+            assert_eq!(PageID(5), *writer.dirty.keys().collect::<Vec<_>>()[0]);
+
+            // Check the freed page IDs
+            assert_eq!(1, writer.freed_page_ids.len());
+            assert_eq!(PageID(2), writer.freed_page_ids[0]);
+
+            db.commit(&mut writer).unwrap();
+        }
+
     }
 
     // FreeListTree tests

@@ -4,10 +4,10 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use crate::mvcc_nodes::{
-    FreeListInternalNode, FreeListLeafNode, HeaderNode, LmdbError, Node, PageID, Position,
-    PositionIndexRecord, PositionInternalNode, PositionLeafNode, TSN,
+    FreeListInternalNode, FreeListLeafNode, HeaderNode, LmdbError, Node, PageID, PositionLeafNode,
+    TSN,
 };
-use crate::mvcc_page::{PAGE_HEADER_SIZE, Page};
+use crate::mvcc_page::Page;
 use crate::mvcc_pager::Pager;
 
 // Result type alias
@@ -284,25 +284,6 @@ impl Lmdb {
 
         Ok(())
     }
-
-    pub fn get_page(&self, writer: &mut LmdbWriter, page_id: PageID) -> Result<Page> {
-        // Check if the page is in the dirty pages
-        if let Some(page) = writer.dirty.get(&page_id) {
-            return Ok(page.clone());
-        }
-
-        // Check if the page is already deserialized
-        if let Some(page) = writer.deserialized.get(&page_id) {
-            return Ok(page.clone());
-        }
-
-        // Deserialize page
-        let deserialized_page = self.read_page(page_id)?;
-        writer.insert_deserialized(deserialized_page);
-
-        // Return page
-        Ok(writer.deserialized.get(&page_id).unwrap().clone())
-    }
 }
 
 // Implementation for LmdbWriter
@@ -381,32 +362,6 @@ impl LmdbWriter {
         let next_page_id = self.next_page_id;
         self.next_page_id = PageID(next_page_id.0 + 1);
         next_page_id
-    }
-
-    pub fn make_dirty(&mut self, page: Page) -> (Page, Option<(PageID, PageID)>) {
-        let mut replacement_info = None;
-
-        if !self.freed_page_ids.iter().any(|&id| id == page.page_id)
-            && !self.dirty.contains_key(&page.page_id)
-        {
-            let old_page_id = page.page_id;
-            self.freed_page_ids.push_back(old_page_id);
-
-            let new_page_id = self.alloc_page_id();
-            let new_page = Page {
-                page_id: new_page_id,
-                node: page.node.clone(),
-            };
-
-            self.dirty.insert(new_page_id, new_page.clone());
-            replacement_info = Some((old_page_id, new_page_id));
-            if self.verbose {
-                println!("Copied {old_page_id:?} to {new_page_id:?}: {page:?}");
-            }
-            return (new_page, replacement_info);
-        }
-
-        (page, replacement_info)
     }
 
     pub fn get_dirty_page_id(&mut self, page_id: PageID) -> Result<PageID> {
@@ -1019,252 +974,252 @@ impl LmdbWriter {
     }
 }
 
-// Position index functionality
-pub fn insert_position(
-    db: &mut Lmdb,
-    writer: &mut LmdbWriter,
-    key: Position,
-    value: PositionIndexRecord,
-) -> Result<()> {
-    // Get the root page
-    let current_page = db.get_page(writer, writer.position_root_id)?;
-
-    // Traverse the tree to find a leaf node
-    let mut stack: Vec<(PageID, usize)> = Vec::new();
-    let mut current_node = current_page.node.clone();
-
-    while !matches!(current_node, Node::PositionLeaf(_)) {
-        if let Node::PositionInternal(internal_node) = &current_node {
-            // Find the child node to traverse
-            let mut child_index = 0;
-            for (i, &k) in internal_node.keys.iter().enumerate() {
-                if key < k {
-                    break;
-                }
-                child_index = i + 1;
-            }
-
-            stack.push((current_page.page_id, child_index));
-            let child_page_id = internal_node.child_ids[child_index];
-            let child_page = db.get_page(writer, child_page_id)?;
-            current_node = child_page.node.clone();
-        } else {
-            return Err(LmdbError::DatabaseCorrupted(
-                "Expected PositionInternal node".to_string(),
-            ));
-        }
-    }
-
-    // Make the leaf page dirty
-    let (mut leaf_page, replacement_info) = writer.make_dirty(current_page);
-
-    // Extract the leaf node
-    let mut modified_leaf_node = if let Node::PositionLeaf(ref node) = leaf_page.node {
-        node.clone()
-    } else {
-        return Err(LmdbError::DatabaseCorrupted(
-            "Expected PositionLeaf node".to_string(),
-        ));
-    };
-
-    // Find the insertion point
-    let mut insert_index = 0;
-    for (i, &k) in modified_leaf_node.keys.iter().enumerate() {
-        if key < k {
-            break;
-        } else if key == k {
-            // Replace existing value
-            modified_leaf_node.values[i] = value.clone();
-
-            // Update the page with the modified node
-            leaf_page.node = Node::PositionLeaf(modified_leaf_node);
-            writer.insert_dirty(leaf_page)?;
-
-            // Update the root if needed
-            if let Some((old_id, new_id)) = replacement_info {
-                if writer.position_root_id == old_id {
-                    writer.position_root_id = new_id;
-                }
-            }
-
-            return Ok(());
-        }
-        insert_index = i + 1;
-    }
-
-    // Insert the new key and value
-    modified_leaf_node.keys.insert(insert_index, key);
-    modified_leaf_node
-        .values
-        .insert(insert_index, value.clone());
-
-    // Update the page with the modified node
-    leaf_page.node = Node::PositionLeaf(modified_leaf_node.clone());
-
-    // Check if the page needs splitting
-    let data = leaf_page.node.serialize()?;
-    let estimated_size = PAGE_HEADER_SIZE + data.len();
-    let needs_splitting = estimated_size > db.page_size;
-
-    if needs_splitting {
-        // Split the leaf node - we need to extract the node again since we updated it
-        let mut modified_leaf_node = if let Node::PositionLeaf(ref node) = leaf_page.node {
-            node.clone()
-        } else {
-            return Err(LmdbError::DatabaseCorrupted(
-                "Expected PositionLeaf node".to_string(),
-            ));
-        };
-
-        // Split the leaf node
-        let split_point = modified_leaf_node.keys.len() / 2;
-        let promoted_key = modified_leaf_node.keys[split_point];
-
-        // Create a new leaf node with the right half of the keys and values
-        let new_leaf_node = PositionLeafNode {
-            keys: modified_leaf_node.keys.split_off(split_point),
-            values: modified_leaf_node.values.split_off(split_point),
-            next_leaf_id: modified_leaf_node.next_leaf_id,
-        };
-
-        // Update the next_leaf_id of the original leaf
-        modified_leaf_node.next_leaf_id = Some(writer.alloc_page_id());
-
-        // Update the leaf page with the modified node
-        leaf_page.node = Node::PositionLeaf(modified_leaf_node);
-
-        // Create a new page for the new leaf node
-        let next_leaf_id = if let Node::PositionLeaf(ref node) = leaf_page.node {
-            node.next_leaf_id.unwrap()
-        } else {
-            return Err(LmdbError::DatabaseCorrupted(
-                "Expected PositionLeaf node".to_string(),
-            ));
-        };
-        let new_leaf_page = Page::new(next_leaf_id, Node::PositionLeaf(new_leaf_node));
-        writer.insert_dirty(new_leaf_page.clone())?;
-
-        // Propagate the split up the tree
-        let mut split_info = Some((promoted_key, new_leaf_page.page_id));
-        let mut current_replacement_info = replacement_info;
-
-        // Propagate splits and replacements up the stack
-        while let Some((parent_page_id, child_index)) = stack.pop() {
-            let parent_page = db.get_page(writer, parent_page_id)?;
-            let (mut parent_page, parent_replacement_info) = writer.make_dirty(parent_page);
-
-            if let Some((old_id, new_id)) = current_replacement_info {
-                if let Node::PositionInternal(ref mut internal_node) = parent_page.node {
-                    // Replace the child ID
-                    if internal_node.child_ids[child_index] == old_id {
-                        internal_node.child_ids[child_index] = new_id;
-                    } else {
-                        return Err(LmdbError::DatabaseCorrupted(
-                            "Child ID mismatch".to_string(),
-                        ));
-                    }
-                } else {
-                    return Err(LmdbError::DatabaseCorrupted(
-                        "Expected PositionInternal node".to_string(),
-                    ));
-                }
-            }
-
-            if let Some((promoted_key, promoted_page_id)) = split_info {
-                if let Node::PositionInternal(ref mut internal_node) = parent_page.node {
-                    // Insert the promoted key and page ID
-                    internal_node.keys.insert(child_index, promoted_key);
-                    internal_node
-                        .child_ids
-                        .insert(child_index + 1, promoted_page_id);
-                } else {
-                    return Err(LmdbError::DatabaseCorrupted(
-                        "Expected PositionInternal node".to_string(),
-                    ));
-                }
-            }
-
-            // Check if the parent page needs splitting
-            let parent_data = parent_page.node.serialize()?;
-            let parent_estimated_size = PAGE_HEADER_SIZE + parent_data.len();
-            let parent_needs_splitting = parent_estimated_size > db.page_size;
-
-            if parent_needs_splitting {
-                if let Node::PositionInternal(ref mut internal_node) = parent_page.node {
-                    // Split the internal node
-                    let split_point = internal_node.keys.len() / 2;
-                    let promoted_key = internal_node.keys[split_point];
-
-                    // Create a new internal node with the right half of the keys and child IDs
-                    let right_keys = internal_node.keys.split_off(split_point + 1);
-                    let right_child_ids = internal_node.child_ids.split_off(split_point + 1);
-
-                    let new_internal_node = PositionInternalNode {
-                        keys: right_keys,
-                        child_ids: right_child_ids,
-                    };
-
-                    // Remove the promoted key from the left node
-                    internal_node.keys.pop();
-
-                    // Create a new page for the new internal node
-                    let new_internal_page_id = writer.alloc_page_id();
-                    let new_internal_page = Page::new(
-                        new_internal_page_id,
-                        Node::PositionInternal(new_internal_node),
-                    );
-                    writer.insert_dirty(new_internal_page)?;
-
-                    split_info = Some((promoted_key, new_internal_page_id));
-                } else {
-                    return Err(LmdbError::DatabaseCorrupted(
-                        "Expected PositionInternal node".to_string(),
-                    ));
-                }
-            } else {
-                split_info = None;
-            }
-
-            current_replacement_info = parent_replacement_info;
-        }
-
-        // Update the root if needed
-        if let Some((old_id, new_id)) = current_replacement_info {
-            if writer.position_root_id == old_id {
-                writer.position_root_id = new_id;
-            } else {
-                return Err(LmdbError::DatabaseCorrupted("Root ID mismatch".to_string()));
-            }
-        }
-
-        if let Some((promoted_key, promoted_page_id)) = split_info {
-            // Create a new root
-            let new_internal_node = PositionInternalNode {
-                keys: vec![promoted_key],
-                child_ids: vec![writer.position_root_id, promoted_page_id],
-            };
-
-            let new_root_page_id = writer.alloc_page_id();
-            let new_root_page =
-                Page::new(new_root_page_id, Node::PositionInternal(new_internal_node));
-            writer.insert_dirty(new_root_page)?;
-
-            writer.position_root_id = new_root_page_id;
-        }
-    } else {
-        // No splitting needed, just update the page
-        writer.insert_dirty(leaf_page)?;
-
-        // Update the root if needed
-        if let Some((old_id, new_id)) = replacement_info {
-            if writer.position_root_id == old_id {
-                writer.position_root_id = new_id;
-            }
-        }
-    }
-
-    Ok(())
-}
+// // Position index functionality
+// pub fn insert_position(
+//     db: &mut Lmdb,
+//     writer: &mut LmdbWriter,
+//     key: Position,
+//     value: PositionIndexRecord,
+// ) -> Result<()> {
+//     // Get the root page
+//     let current_page = db.get_page(writer, writer.position_root_id)?;
+//
+//     // Traverse the tree to find a leaf node
+//     let mut stack: Vec<(PageID, usize)> = Vec::new();
+//     let mut current_node = current_page.node.clone();
+//
+//     while !matches!(current_node, Node::PositionLeaf(_)) {
+//         if let Node::PositionInternal(internal_node) = &current_node {
+//             // Find the child node to traverse
+//             let mut child_index = 0;
+//             for (i, &k) in internal_node.keys.iter().enumerate() {
+//                 if key < k {
+//                     break;
+//                 }
+//                 child_index = i + 1;
+//             }
+//
+//             stack.push((current_page.page_id, child_index));
+//             let child_page_id = internal_node.child_ids[child_index];
+//             let child_page = db.get_page(writer, child_page_id)?;
+//             current_node = child_page.node.clone();
+//         } else {
+//             return Err(LmdbError::DatabaseCorrupted(
+//                 "Expected PositionInternal node".to_string(),
+//             ));
+//         }
+//     }
+//
+//     // Make the leaf page dirty
+//     let (mut leaf_page, replacement_info) = writer.make_dirty(current_page);
+//
+//     // Extract the leaf node
+//     let mut modified_leaf_node = if let Node::PositionLeaf(ref node) = leaf_page.node {
+//         node.clone()
+//     } else {
+//         return Err(LmdbError::DatabaseCorrupted(
+//             "Expected PositionLeaf node".to_string(),
+//         ));
+//     };
+//
+//     // Find the insertion point
+//     let mut insert_index = 0;
+//     for (i, &k) in modified_leaf_node.keys.iter().enumerate() {
+//         if key < k {
+//             break;
+//         } else if key == k {
+//             // Replace existing value
+//             modified_leaf_node.values[i] = value.clone();
+//
+//             // Update the page with the modified node
+//             leaf_page.node = Node::PositionLeaf(modified_leaf_node);
+//             writer.insert_dirty(leaf_page)?;
+//
+//             // Update the root if needed
+//             if let Some((old_id, new_id)) = replacement_info {
+//                 if writer.position_root_id == old_id {
+//                     writer.position_root_id = new_id;
+//                 }
+//             }
+//
+//             return Ok(());
+//         }
+//         insert_index = i + 1;
+//     }
+//
+//     // Insert the new key and value
+//     modified_leaf_node.keys.insert(insert_index, key);
+//     modified_leaf_node
+//         .values
+//         .insert(insert_index, value.clone());
+//
+//     // Update the page with the modified node
+//     leaf_page.node = Node::PositionLeaf(modified_leaf_node.clone());
+//
+//     // Check if the page needs splitting
+//     let data = leaf_page.node.serialize()?;
+//     let estimated_size = PAGE_HEADER_SIZE + data.len();
+//     let needs_splitting = estimated_size > db.page_size;
+//
+//     if needs_splitting {
+//         // Split the leaf node - we need to extract the node again since we updated it
+//         let mut modified_leaf_node = if let Node::PositionLeaf(ref node) = leaf_page.node {
+//             node.clone()
+//         } else {
+//             return Err(LmdbError::DatabaseCorrupted(
+//                 "Expected PositionLeaf node".to_string(),
+//             ));
+//         };
+//
+//         // Split the leaf node
+//         let split_point = modified_leaf_node.keys.len() / 2;
+//         let promoted_key = modified_leaf_node.keys[split_point];
+//
+//         // Create a new leaf node with the right half of the keys and values
+//         let new_leaf_node = PositionLeafNode {
+//             keys: modified_leaf_node.keys.split_off(split_point),
+//             values: modified_leaf_node.values.split_off(split_point),
+//             next_leaf_id: modified_leaf_node.next_leaf_id,
+//         };
+//
+//         // Update the next_leaf_id of the original leaf
+//         modified_leaf_node.next_leaf_id = Some(writer.alloc_page_id());
+//
+//         // Update the leaf page with the modified node
+//         leaf_page.node = Node::PositionLeaf(modified_leaf_node);
+//
+//         // Create a new page for the new leaf node
+//         let next_leaf_id = if let Node::PositionLeaf(ref node) = leaf_page.node {
+//             node.next_leaf_id.unwrap()
+//         } else {
+//             return Err(LmdbError::DatabaseCorrupted(
+//                 "Expected PositionLeaf node".to_string(),
+//             ));
+//         };
+//         let new_leaf_page = Page::new(next_leaf_id, Node::PositionLeaf(new_leaf_node));
+//         writer.insert_dirty(new_leaf_page.clone())?;
+//
+//         // Propagate the split up the tree
+//         let mut split_info = Some((promoted_key, new_leaf_page.page_id));
+//         let mut current_replacement_info = replacement_info;
+//
+//         // Propagate splits and replacements up the stack
+//         while let Some((parent_page_id, child_index)) = stack.pop() {
+//             let parent_page = db.get_page(writer, parent_page_id)?;
+//             let (mut parent_page, parent_replacement_info) = writer.make_dirty(parent_page);
+//
+//             if let Some((old_id, new_id)) = current_replacement_info {
+//                 if let Node::PositionInternal(ref mut internal_node) = parent_page.node {
+//                     // Replace the child ID
+//                     if internal_node.child_ids[child_index] == old_id {
+//                         internal_node.child_ids[child_index] = new_id;
+//                     } else {
+//                         return Err(LmdbError::DatabaseCorrupted(
+//                             "Child ID mismatch".to_string(),
+//                         ));
+//                     }
+//                 } else {
+//                     return Err(LmdbError::DatabaseCorrupted(
+//                         "Expected PositionInternal node".to_string(),
+//                     ));
+//                 }
+//             }
+//
+//             if let Some((promoted_key, promoted_page_id)) = split_info {
+//                 if let Node::PositionInternal(ref mut internal_node) = parent_page.node {
+//                     // Insert the promoted key and page ID
+//                     internal_node.keys.insert(child_index, promoted_key);
+//                     internal_node
+//                         .child_ids
+//                         .insert(child_index + 1, promoted_page_id);
+//                 } else {
+//                     return Err(LmdbError::DatabaseCorrupted(
+//                         "Expected PositionInternal node".to_string(),
+//                     ));
+//                 }
+//             }
+//
+//             // Check if the parent page needs splitting
+//             let parent_data = parent_page.node.serialize()?;
+//             let parent_estimated_size = PAGE_HEADER_SIZE + parent_data.len();
+//             let parent_needs_splitting = parent_estimated_size > db.page_size;
+//
+//             if parent_needs_splitting {
+//                 if let Node::PositionInternal(ref mut internal_node) = parent_page.node {
+//                     // Split the internal node
+//                     let split_point = internal_node.keys.len() / 2;
+//                     let promoted_key = internal_node.keys[split_point];
+//
+//                     // Create a new internal node with the right half of the keys and child IDs
+//                     let right_keys = internal_node.keys.split_off(split_point + 1);
+//                     let right_child_ids = internal_node.child_ids.split_off(split_point + 1);
+//
+//                     let new_internal_node = PositionInternalNode {
+//                         keys: right_keys,
+//                         child_ids: right_child_ids,
+//                     };
+//
+//                     // Remove the promoted key from the left node
+//                     internal_node.keys.pop();
+//
+//                     // Create a new page for the new internal node
+//                     let new_internal_page_id = writer.alloc_page_id();
+//                     let new_internal_page = Page::new(
+//                         new_internal_page_id,
+//                         Node::PositionInternal(new_internal_node),
+//                     );
+//                     writer.insert_dirty(new_internal_page)?;
+//
+//                     split_info = Some((promoted_key, new_internal_page_id));
+//                 } else {
+//                     return Err(LmdbError::DatabaseCorrupted(
+//                         "Expected PositionInternal node".to_string(),
+//                     ));
+//                 }
+//             } else {
+//                 split_info = None;
+//             }
+//
+//             current_replacement_info = parent_replacement_info;
+//         }
+//
+//         // Update the root if needed
+//         if let Some((old_id, new_id)) = current_replacement_info {
+//             if writer.position_root_id == old_id {
+//                 writer.position_root_id = new_id;
+//             } else {
+//                 return Err(LmdbError::DatabaseCorrupted("Root ID mismatch".to_string()));
+//             }
+//         }
+//
+//         if let Some((promoted_key, promoted_page_id)) = split_info {
+//             // Create a new root
+//             let new_internal_node = PositionInternalNode {
+//                 keys: vec![promoted_key],
+//                 child_ids: vec![writer.position_root_id, promoted_page_id],
+//             };
+//
+//             let new_root_page_id = writer.alloc_page_id();
+//             let new_root_page =
+//                 Page::new(new_root_page_id, Node::PositionInternal(new_internal_node));
+//             writer.insert_dirty(new_root_page)?;
+//
+//             writer.position_root_id = new_root_page_id;
+//         }
+//     } else {
+//         // No splitting needed, just update the page
+//         writer.insert_dirty(leaf_page)?;
+//
+//         // Update the root if needed
+//         if let Some((old_id, new_id)) = replacement_info {
+//             if writer.position_root_id == old_id {
+//                 writer.position_root_id = new_id;
+//             }
+//         }
+//     }
+//
+//     Ok(())
+// }
 
 #[cfg(test)]
 mod tests {
@@ -1434,103 +1389,99 @@ mod tests {
         }
     }
 
-    // #[test]
-    // #[serial]
-    // fn test_write_transaction_recycles_pages() {
-    //     let temp_dir = tempdir().unwrap();
-    //     let db_path = temp_dir.path().join("lmdb-test.db");
-    //     let mut db = Lmdb::new(&db_path, 4096).unwrap();
-    //
-    //     let key1 = Position(1);
-    //     let value1 = PositionIndexRecord {
-    //         segment: 0,
-    //         offset: 0,
-    //         type_hash: Vec::new(),
-    //     };
-    //
-    //     // First transaction
-    //     {
-    //         let mut writer = db.writer().unwrap();
-    //
-    //         // Check there are no free pages
-    //         assert_eq!(0, writer.reusable_page_ids.len());
-    //
-    //         // Check the free list root is page 2
-    //         assert_eq!(PageID(2), writer.freetree_root_id);
-    //
-    //         // Check the position root is page 3
-    //         assert_eq!(PageID(3), writer.position_root_id);
-    //
-    //         // Insert position
-    //         insert_position(&mut db, &mut writer, key1, value1.clone()).unwrap();
-    //
-    //         // Check the dirty page IDs
-    //         assert_eq!(1, writer.dirty.len());
-    //         assert!(writer.dirty.contains_key(&PageID(4)));
-    //
-    //         // Check the freed page IDs
-    //         assert_eq!(1, writer.freed_page_ids.len());
-    //         assert!(writer.freed_page_ids.contains(&PageID(3)));
-    //
-    //         db.commit(&mut writer).unwrap();
-    //     }
-    //
-    //     // Read the position
-    //     {
-    //         let reader = db.reader().unwrap();
-    //
-    //         // Read the position root
-    //         let page = db.read_page(reader.position_root_id).unwrap();
-    //
-    //         // Check it's a position leaf node
-    //         if let Node::PositionLeaf(leaf_node) = &page.node {
-    //             // Check the keys and values
-    //             assert_eq!(vec![key1], leaf_node.keys);
-    //             assert_eq!(vec![value1.clone()], leaf_node.values);
-    //         } else {
-    //             panic!("Expected PositionLeaf node");
-    //         }
-    //     }
-    //
-    //     // Second transaction
-    //     let key2 = Position(2);
-    //     let value2 = PositionIndexRecord {
-    //         segment: 0,
-    //         offset: 100,
-    //         type_hash: Vec::new(),
-    //     };
-    //
-    //     {
-    //         let mut writer = db.writer().unwrap();
-    //
-    //         // Check there are two free pages (the old position root and the old free list root)
-    //         assert_eq!(2, writer.reusable_page_ids.len());
-    //         assert!(writer.reusable_page_ids.iter().any(|(id, _)| *id == PageID(3)));
-    //         assert!(writer.reusable_page_ids.iter().any(|(id, _)| *id == PageID(2)));
-    //
-    //         // Insert position
-    //         insert_position(&mut db, &mut writer, key2, value2.clone()).unwrap();
-    //
-    //         db.commit(&mut writer).unwrap();
-    //     }
-    //
-    //     // Read the positions
-    //     {
-    //         let reader = db.reader().unwrap();
-    //
-    //         // Read the position root
-    //         let page = db.read_page(reader.position_root_id).unwrap();
-    //
-    //         // Check it's a position leaf node
-    //         if let Node::PositionLeaf(leaf_node) = &page.node {
-    //             // Check the keys and values
-    //             assert_eq!(vec![key1, key2], leaf_node.keys);
-    //             assert_eq!(vec![value1.clone(), value2.clone()], leaf_node.values);
-    //         } else {
-    //             panic!("Expected PositionLeaf node");
-    //         }
-    //     }
-    // }
+    #[test]
+    #[serial]
+    fn test_write_transaction_recycles_pages() {
+        let temp_dir = tempdir().unwrap();
+        let db_path = temp_dir.path().join("lmdb-test.db");
+        let mut db = Lmdb::new(&db_path, 4096, VERBOSE).unwrap();
+        // First transaction
+        {
+            let mut writer = db.writer().unwrap();
+
+            // Check there are no free pages
+            assert_eq!(0, writer.reusable_page_ids.len());
+
+            // Check the free list root is page 2
+            assert_eq!(PageID(2), writer.freetree_root_id);
+
+            // Check the position root is page 3
+            assert_eq!(PageID(3), writer.position_root_id);
+
+            // Allocate and insert free page ID.
+            let free_page_id = writer.alloc_page_id();
+            assert_eq!(PageID(4), free_page_id);
+            writer
+                .insert_freed_page_id(&db, writer.tsn, free_page_id)
+                .unwrap();
+
+            // Check the dirty page IDs
+            assert_eq!(1, writer.dirty.len());
+            assert!(writer.dirty.contains_key(&PageID(5)));
+
+            // Check the freed page IDs
+            assert_eq!(1, writer.freed_page_ids.len());
+            assert!(writer.freed_page_ids.contains(&PageID(2)));
+
+            db.commit(&mut writer).unwrap();
+        }
+        //
+        //     // Read the position
+        //     {
+        //         let reader = db.reader().unwrap();
+        //
+        //         // Read the position root
+        //         let page = db.read_page(reader.position_root_id).unwrap();
+        //
+        //         // Check it's a position leaf node
+        //         if let Node::PositionLeaf(leaf_node) = &page.node {
+        //             // Check the keys and values
+        //             assert_eq!(vec![key1], leaf_node.keys);
+        //             assert_eq!(vec![value1.clone()], leaf_node.values);
+        //         } else {
+        //             panic!("Expected PositionLeaf node");
+        //         }
+        //     }
+        //
+        //     // Second transaction
+        //     let key2 = Position(2);
+        //     let value2 = PositionIndexRecord {
+        //         segment: 0,
+        //         offset: 100,
+        //         type_hash: Vec::new(),
+        //     };
+        //
+        //     {
+        //         let mut writer = db.writer().unwrap();
+        //
+        //         // Check there are two free pages (the old position root and the old free list root)
+        //         assert_eq!(2, writer.reusable_page_ids.len());
+        //         assert!(writer.reusable_page_ids.iter().any(|(id, _)| *id == PageID(3)));
+        //         assert!(writer.reusable_page_ids.iter().any(|(id, _)| *id == PageID(2)));
+        //
+        //         // Insert position
+        //         insert_position(&mut db, &mut writer, key2, value2.clone()).unwrap();
+        //
+        //         db.commit(&mut writer).unwrap();
+        //     }
+        //
+        //     // Read the positions
+        //     {
+        //         let reader = db.reader().unwrap();
+        //
+        //         // Read the position root
+        //         let page = db.read_page(reader.position_root_id).unwrap();
+        //
+        //         // Check it's a position leaf node
+        //         if let Node::PositionLeaf(leaf_node) = &page.node {
+        //             // Check the keys and values
+        //             assert_eq!(vec![key1, key2], leaf_node.keys);
+        //             assert_eq!(vec![value1.clone(), value2.clone()], leaf_node.values);
+        //         } else {
+        //             panic!("Expected PositionLeaf node");
+        //         }
+        //     }
+    }
 
     // FreeListTree tests
     mod free_list_tree_tests {

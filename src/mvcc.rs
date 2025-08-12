@@ -3,10 +3,7 @@ use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::Mutex;
 
-use crate::mvcc_nodes::{
-    FreeListInternalNode, FreeListLeafNode, HeaderNode, LmdbError, Node, PageID, PositionLeafNode,
-    TSN,
-};
+use crate::mvcc_nodes::{EventLeafNode, FreeListInternalNode, FreeListLeafNode, HeaderNode, LmdbError, Node, PageID, TSN};
 use crate::mvcc_page::Page;
 use crate::mvcc_pager::Pager;
 
@@ -109,12 +106,12 @@ impl Lmdb {
             lmdb.write_page(&free_list_page)?;
 
             // Create and write an empty position index root page
-            let position_leaf = PositionLeafNode {
+            let event_leaf = EventLeafNode {
                 keys: Vec::new(),
                 values: Vec::new(),
                 next_leaf_id: None,
             };
-            let position_page = Page::new(position_root_id, Node::PositionLeaf(position_leaf));
+            let position_page = Page::new(position_root_id, Node::EventLeaf(event_leaf));
             lmdb.write_page(&position_page)?;
 
             lmdb.flush()?;

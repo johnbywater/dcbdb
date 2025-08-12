@@ -254,7 +254,7 @@ pub struct LeafNode {
 }
 
 impl LeafNode {
-    fn calc_serialized_node_size(&self) -> usize {
+    fn calc_serialized_size(&self) -> usize {
         // 2 bytes for keys_len + keys * (8 bytes per key) + values size
         let keys_len = self.keys.len();
         let mut total_size = 2 + (keys_len * TAG_HASH_LEN);
@@ -271,7 +271,7 @@ impl LeafNode {
 
     pub fn serialize(&self) -> Vec<u8> {
         // This is a simplified implementation for now
-        let total_size = self.calc_serialized_node_size();
+        let total_size = self.calc_serialized_size();
         let mut result = Vec::with_capacity(total_size);
 
         // Serialize the length of the keys (2 bytes)
@@ -393,8 +393,8 @@ impl Node for LeafNode {
         self.serialize()
     }
 
-    fn calc_serialized_node_size(&self) -> usize {
-        self.calc_serialized_node_size()
+    fn calc_serialized_size(&self) -> usize {
+        self.calc_serialized_size()
     }
 }
 
@@ -406,13 +406,13 @@ pub struct InternalNode {
 }
 
 impl InternalNode {
-    fn calc_serialized_node_size(&self) -> usize {
+    fn calc_serialized_size(&self) -> usize {
         // 2 bytes for keys_len + keys * (8 bytes per key) + child_ids * (4 bytes per child_id)
         2 + (self.keys.len() * TAG_HASH_LEN) + (self.child_ids.len() * PAGE_ID_SIZE)
     }
 
     pub fn serialize(&self) -> Vec<u8> {
-        let total_size = self.calc_serialized_node_size();
+        let total_size = self.calc_serialized_size();
         let mut result = Vec::with_capacity(total_size);
 
         // Serialize the length of the keys (2 bytes)
@@ -496,8 +496,8 @@ impl Node for InternalNode {
         self.serialize()
     }
 
-    fn calc_serialized_node_size(&self) -> usize {
-        self.calc_serialized_node_size()
+    fn calc_serialized_size(&self) -> usize {
+        self.calc_serialized_size()
     }
 }
 
@@ -509,14 +509,14 @@ pub struct TagLeafNode {
 }
 
 impl TagLeafNode {
-    fn calc_serialized_node_size(&self) -> usize {
+    fn calc_serialized_size(&self) -> usize {
         // 4 bytes for next_leaf_id + 2 bytes for positions_len + positions * (8 bytes per position)
         let positions_len = self.positions.len();
         4 + 2 + (positions_len * POSITION_SIZE)
     }
 
     pub fn serialize(&self) -> Vec<u8> {
-        let total_size = self.calc_serialized_node_size();
+        let total_size = self.calc_serialized_size();
         let mut result = Vec::with_capacity(total_size);
 
         // Serialize the next_leaf_id (4 bytes)
@@ -607,8 +607,8 @@ impl Node for TagLeafNode {
         self.serialize()
     }
 
-    fn calc_serialized_node_size(&self) -> usize {
-        self.calc_serialized_node_size()
+    fn calc_serialized_size(&self) -> usize {
+        self.calc_serialized_size()
     }
 }
 
@@ -620,13 +620,13 @@ pub struct TagInternalNode {
 }
 
 impl TagInternalNode {
-    fn calc_serialized_node_size(&self) -> usize {
+    fn calc_serialized_size(&self) -> usize {
         // 2 bytes for keys_len + keys * (8 bytes per key) + child_ids * (4 bytes per child_id)
         2 + (self.keys.len() * POSITION_SIZE) + (self.child_ids.len() * PAGE_ID_SIZE)
     }
 
     pub fn serialize(&self) -> Vec<u8> {
-        let total_size = self.calc_serialized_node_size();
+        let total_size = self.calc_serialized_size();
         let mut result = Vec::with_capacity(total_size);
 
         // Serialize the length of the keys (2 bytes)
@@ -718,8 +718,8 @@ impl Node for TagInternalNode {
         self.serialize()
     }
 
-    fn calc_serialized_node_size(&self) -> usize {
-        self.calc_serialized_node_size()
+    fn calc_serialized_size(&self) -> usize {
+        self.calc_serialized_size()
     }
 }
 
@@ -1765,7 +1765,7 @@ mod tests {
 
         // Serialize the node
         let serialized_node = leaf_node.serialize();
-        assert_eq!(serialized_node.len(), leaf_node.calc_serialized_node_size());
+        assert_eq!(serialized_node.len(), leaf_node.calc_serialized_size());
 
         // Deserialize the node
         let deserialized: LeafNode = LeafNode::from_slice(&serialized_node).unwrap();

@@ -29,8 +29,6 @@ impl Node {
             Node::FreeListInternal(_) => PAGE_TYPE_FREELIST_INTERNAL,
             Node::EventLeaf(_) => PAGE_TYPE_EVENT_LEAF,
             Node::EventInternal(_) => PAGE_TYPE_EVENT_INTERNAL,
-            // Node::PositionLeaf(_) => PAGE_TYPE_POSITION_LEAF,
-            // Node::PositionInternal(_) => PAGE_TYPE_POSITION_INTERNAL,
         }
     }
 

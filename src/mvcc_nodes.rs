@@ -540,22 +540,239 @@ pub struct EventLeafNode {
 
 impl EventLeafNode {
     fn calc_serialized_size(&self) -> usize {
-        0
+        // 2 bytes for keys_len
+        let mut total_size = 2;
+        
+        // 8 bytes for each Position in keys
+        total_size += self.keys.len() * 8;
+        
+        // For each EventRecord in values:
+        for value in &self.values {
+            // 4 bytes for event_type
+            total_size += 4;
+            
+            // 4 bytes for data
+            total_size += 4;
+            
+            // 2 bytes for tags length + bytes for tags
+            total_size += 2 + value.tags.len();
+            
+            // 8 bytes for position
+            total_size += 8;
+        }
+        
+        // 1 byte for next_leaf_id presence flag + 4 bytes if present
+        total_size += 1;
+        if self.next_leaf_id.is_some() {
+            total_size += 4;
+        }
+        
+        total_size
     }
 
     pub fn serialize(&self) -> Result<Vec<u8>> {
         let total_size = self.calc_serialized_size();
         let mut result = Vec::with_capacity(total_size);
+        
+        // Serialize the length of the keys (2 bytes)
+        result.extend_from_slice(&(self.keys.len() as u16).to_le_bytes());
+        
+        // Serialize each key (8 bytes each)
+        for key in &self.keys {
+            result.extend_from_slice(&key.0.to_le_bytes());
+        }
+        
+        // Serialize each value (EventRecord)
+        for value in &self.values {
+            // Serialize event_type (4 bytes)
+            result.extend_from_slice(&value.event_type.to_le_bytes());
+            
+            // Serialize data (4 bytes)
+            result.extend_from_slice(&value.data.to_le_bytes());
+            
+            // Serialize tags length (2 bytes) and tags
+            result.extend_from_slice(&(value.tags.len() as u16).to_le_bytes());
+            result.extend_from_slice(&value.tags);
+            
+            // Serialize position (8 bytes)
+            result.extend_from_slice(&value.position.0.to_le_bytes());
+        }
+        
+        // Serialize the next_leaf_id (1 byte flag + 4 bytes if present)
+        if let Some(next_leaf_id) = self.next_leaf_id {
+            result.push(1); // Flag indicating next_leaf_id is present
+            result.extend_from_slice(&next_leaf_id.0.to_le_bytes());
+        } else {
+            result.push(0); // Flag indicating next_leaf_id is not present
+        }
+        
         Ok(result)
     }
+    
     pub fn from_slice(slice: &[u8]) -> Result<Self> {
-        let total_size = 0;
-        let mut result = EventLeafNode {
-            keys: Vec::with_capacity(total_size),
-            values: Vec::with_capacity(total_size),
-            next_leaf_id: None,
+        // Check if the slice has at least 2 bytes for keys_len
+        if slice.len() < 2 {
+            return Err(LmdbError::DeserializationError(format!(
+                "Expected at least 2 bytes, got {}",
+                slice.len()
+            )));
+        }
+        
+        // Extract the length of the keys (first 2 bytes)
+        let keys_len = u16::from_le_bytes([slice[0], slice[1]]) as usize;
+        
+        // Calculate the minimum expected size for the keys
+        let min_expected_size = 2 + (keys_len * 8);
+        if slice.len() < min_expected_size {
+            return Err(LmdbError::DeserializationError(format!(
+                "Expected at least {} bytes for keys, got {}",
+                min_expected_size,
+                slice.len()
+            )));
+        }
+        
+        // Extract the keys (8 bytes each)
+        let mut keys = Vec::with_capacity(keys_len);
+        for i in 0..keys_len {
+            let start = 2 + (i * 8);
+            let position = u64::from_le_bytes([
+                slice[start],
+                slice[start + 1],
+                slice[start + 2],
+                slice[start + 3],
+                slice[start + 4],
+                slice[start + 5],
+                slice[start + 6],
+                slice[start + 7],
+            ]);
+            keys.push(Position(position));
+        }
+        
+        // Extract the values (EventRecord)
+        let mut values = Vec::with_capacity(keys_len);
+        let mut offset = 2 + (keys_len * 8);
+        
+        for _ in 0..keys_len {
+            // Check if there's enough data for event_type (4 bytes)
+            if offset + 4 > slice.len() {
+                return Err(LmdbError::DeserializationError(
+                    "Unexpected end of data while reading event_type".to_string(),
+                ));
+            }
+            
+            // Extract event_type (4 bytes)
+            let event_type = u32::from_le_bytes([
+                slice[offset],
+                slice[offset + 1],
+                slice[offset + 2],
+                slice[offset + 3],
+            ]);
+            offset += 4;
+            
+            // Check if there's enough data for data (4 bytes)
+            if offset + 4 > slice.len() {
+                return Err(LmdbError::DeserializationError(
+                    "Unexpected end of data while reading data".to_string(),
+                ));
+            }
+            
+            // Extract data (4 bytes)
+            let data = u32::from_le_bytes([
+                slice[offset],
+                slice[offset + 1],
+                slice[offset + 2],
+                slice[offset + 3],
+            ]);
+            offset += 4;
+            
+            // Check if there's enough data for tags length (2 bytes)
+            if offset + 2 > slice.len() {
+                return Err(LmdbError::DeserializationError(
+                    "Unexpected end of data while reading tags length".to_string(),
+                ));
+            }
+            
+            // Extract tags length (2 bytes)
+            let tags_len = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
+            offset += 2;
+            
+            // Check if there's enough data for tags
+            if offset + tags_len > slice.len() {
+                return Err(LmdbError::DeserializationError(
+                    "Unexpected end of data while reading tags".to_string(),
+                ));
+            }
+            
+            // Extract tags
+            let tags = slice[offset..offset + tags_len].to_vec();
+            offset += tags_len;
+            
+            // Check if there's enough data for position (8 bytes)
+            if offset + 8 > slice.len() {
+                return Err(LmdbError::DeserializationError(
+                    "Unexpected end of data while reading position".to_string(),
+                ));
+            }
+            
+            // Extract position (8 bytes)
+            let position = u64::from_le_bytes([
+                slice[offset],
+                slice[offset + 1],
+                slice[offset + 2],
+                slice[offset + 3],
+                slice[offset + 4],
+                slice[offset + 5],
+                slice[offset + 6],
+                slice[offset + 7],
+            ]);
+            offset += 8;
+            
+            values.push(EventRecord {
+                event_type,
+                data,
+                tags,
+                position: Position(position),
+            });
+        }
+        
+        // Check if there's enough data for next_leaf_id flag (1 byte)
+        if offset >= slice.len() {
+            return Err(LmdbError::DeserializationError(
+                "Unexpected end of data while reading next_leaf_id flag".to_string(),
+            ));
+        }
+        
+        // Extract next_leaf_id flag (1 byte)
+        let next_leaf_id_flag = slice[offset];
+        offset += 1;
+        
+        // Extract next_leaf_id if present
+        let next_leaf_id = if next_leaf_id_flag == 1 {
+            // Check if there's enough data for next_leaf_id (4 bytes)
+            if offset + 4 > slice.len() {
+                return Err(LmdbError::DeserializationError(
+                    "Unexpected end of data while reading next_leaf_id".to_string(),
+                ));
+            }
+            
+            // Extract next_leaf_id (4 bytes)
+            let next_leaf_id = u32::from_le_bytes([
+                slice[offset],
+                slice[offset + 1],
+                slice[offset + 2],
+                slice[offset + 3],
+            ]);
+            
+            Some(PageID(next_leaf_id))
+        } else {
+            None
         };
-        Ok(result)
+        
+        Ok(EventLeafNode {
+            keys,
+            values,
+            next_leaf_id,
+        })
     }
 
 }
@@ -568,20 +785,123 @@ pub struct EventInternalNode {
 
 impl EventInternalNode {
     fn calc_serialized_size(&self) -> usize {
-        0
+        // 2 bytes for keys_len
+        let mut total_size = 2;
+        
+        // 8 bytes for each Position in keys
+        total_size += self.keys.len() * 8;
+        
+        // 2 bytes for child_ids_len
+        total_size += 2;
+        
+        // 4 bytes for each PageID in child_ids
+        total_size += self.child_ids.len() * 4;
+        
+        total_size
     }
+    
     pub fn serialize(&self) -> Result<Vec<u8>> {
         let total_size = self.calc_serialized_size();
         let mut result = Vec::with_capacity(total_size);
+        
+        // Serialize the length of the keys (2 bytes)
+        result.extend_from_slice(&(self.keys.len() as u16).to_le_bytes());
+        
+        // Serialize each key (8 bytes each)
+        for key in &self.keys {
+            result.extend_from_slice(&key.0.to_le_bytes());
+        }
+        
+        // Serialize the length of the child_ids (2 bytes)
+        result.extend_from_slice(&(self.child_ids.len() as u16).to_le_bytes());
+        
+        // Serialize each child_id (4 bytes each)
+        for child_id in &self.child_ids {
+            result.extend_from_slice(&child_id.0.to_le_bytes());
+        }
+        
         Ok(result)
     }
+    
     pub fn from_slice(slice: &[u8]) -> Result<Self> {
-        let total_size = 0;
-        let mut result = EventInternalNode {
-            keys: Vec::with_capacity(total_size),
-            child_ids: Vec::with_capacity(total_size),
-        };
-        Ok(result)
+        // Check if the slice has at least 2 bytes for keys_len
+        if slice.len() < 2 {
+            return Err(LmdbError::DeserializationError(format!(
+                "Expected at least 2 bytes, got {}",
+                slice.len()
+            )));
+        }
+        
+        // Extract the length of the keys (first 2 bytes)
+        let keys_len = u16::from_le_bytes([slice[0], slice[1]]) as usize;
+        
+        // Calculate the minimum expected size for the keys
+        let min_expected_size = 2 + (keys_len * 8);
+        if slice.len() < min_expected_size {
+            return Err(LmdbError::DeserializationError(format!(
+                "Expected at least {} bytes for keys, got {}",
+                min_expected_size,
+                slice.len()
+            )));
+        }
+        
+        // Extract the keys (8 bytes each)
+        let mut keys = Vec::with_capacity(keys_len);
+        for i in 0..keys_len {
+            let start = 2 + (i * 8);
+            let position = u64::from_le_bytes([
+                slice[start],
+                slice[start + 1],
+                slice[start + 2],
+                slice[start + 3],
+                slice[start + 4],
+                slice[start + 5],
+                slice[start + 6],
+                slice[start + 7],
+            ]);
+            keys.push(Position(position));
+        }
+        
+        // Calculate the offset after reading keys
+        let offset = 2 + (keys_len * 8);
+        
+        // Check if there's enough data for child_ids_len (2 bytes)
+        if offset + 2 > slice.len() {
+            return Err(LmdbError::DeserializationError(
+                "Unexpected end of data while reading child_ids length".to_string(),
+            ));
+        }
+        
+        // Extract the length of the child_ids (2 bytes)
+        let child_ids_len = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
+        
+        // Calculate the minimum expected size for the child_ids
+        let min_expected_size = offset + 2 + (child_ids_len * 4);
+        if slice.len() < min_expected_size {
+            return Err(LmdbError::DeserializationError(format!(
+                "Expected at least {} bytes for child_ids, got {}",
+                min_expected_size,
+                slice.len()
+            )));
+        }
+        
+        // Extract the child_ids (4 bytes each)
+        let mut child_ids = Vec::with_capacity(child_ids_len);
+        for i in 0..child_ids_len {
+            let start = offset + 2 + (i * 4);
+            let page_id = u32::from_le_bytes([
+                slice[start],
+                slice[start + 1],
+                slice[start + 2],
+                slice[start + 3],
+            ]);
+            child_ids.push(PageID(page_id));
+        }
+        
+        Ok(EventInternalNode {
+            keys,
+            child_ids,
+        })
     }
 }
 
@@ -1129,6 +1449,115 @@ mod tests {
         assert_eq!(Some(PageID(300)), deserialized.values[2].root_id);
     }
 
+    #[test]
+    fn test_event_internal_serialize() {
+        // Create an EventInternalNode with known values
+        let internal_node = EventInternalNode {
+            keys: vec![Position(1000), Position(2000), Position(3000)],
+            child_ids: vec![PageID(100), PageID(200), PageID(300), PageID(400)],
+        };
+        
+        // Serialize the EventInternalNode
+        let serialized = internal_node.serialize().unwrap();
+        
+        // Verify the serialized output is not empty
+        assert!(!serialized.is_empty());
+        
+        // Deserialize back to an EventInternalNode
+        let deserialized = EventInternalNode::from_slice(&serialized)
+            .expect("Failed to deserialize EventInternalNode");
+        
+        // Verify that the deserialized node matches the original
+        assert_eq!(internal_node, deserialized);
+        
+        // Verify specific properties
+        assert_eq!(3, deserialized.keys.len());
+        assert_eq!(4, deserialized.child_ids.len());
+        
+        // Check keys
+        assert_eq!(Position(1000), deserialized.keys[0]);
+        assert_eq!(Position(2000), deserialized.keys[1]);
+        assert_eq!(Position(3000), deserialized.keys[2]);
+        
+        // Check child_ids
+        assert_eq!(PageID(100), deserialized.child_ids[0]);
+        assert_eq!(PageID(200), deserialized.child_ids[1]);
+        assert_eq!(PageID(300), deserialized.child_ids[2]);
+        assert_eq!(PageID(400), deserialized.child_ids[3]);
+    }
+    
+    #[test]
+    fn test_event_leaf_serialize() {
+        // Create an EventLeafNode with known values
+        let leaf_node = EventLeafNode {
+            keys: vec![Position(1000), Position(2000), Position(3000)],
+            values: vec![
+                EventRecord {
+                    event_type: 1,
+                    data: 100,
+                    tags: vec![1, 2, 3],
+                    position: Position(1000),
+                },
+                EventRecord {
+                    event_type: 2,
+                    data: 200,
+                    tags: vec![4, 5, 6, 7],
+                    position: Position(2000),
+                },
+                EventRecord {
+                    event_type: 3,
+                    data: 300,
+                    tags: vec![8, 9],
+                    position: Position(3000),
+                },
+            ],
+            next_leaf_id: Some(PageID(500)),
+        };
+        
+        // Serialize the EventLeafNode
+        let serialized = leaf_node.serialize().unwrap();
+        
+        // Verify the serialized output is not empty
+        assert!(!serialized.is_empty());
+        
+        // Deserialize back to an EventLeafNode
+        let deserialized = EventLeafNode::from_slice(&serialized)
+            .expect("Failed to deserialize EventLeafNode");
+        
+        // Verify that the deserialized node matches the original
+        assert_eq!(leaf_node, deserialized);
+        
+        // Verify specific properties
+        assert_eq!(3, deserialized.keys.len());
+        assert_eq!(3, deserialized.values.len());
+        
+        // Check keys
+        assert_eq!(Position(1000), deserialized.keys[0]);
+        assert_eq!(Position(2000), deserialized.keys[1]);
+        assert_eq!(Position(3000), deserialized.keys[2]);
+        
+        // Check first value
+        assert_eq!(1, deserialized.values[0].event_type);
+        assert_eq!(100, deserialized.values[0].data);
+        assert_eq!(vec![1, 2, 3], deserialized.values[0].tags);
+        assert_eq!(Position(1000), deserialized.values[0].position);
+        
+        // Check second value
+        assert_eq!(2, deserialized.values[1].event_type);
+        assert_eq!(200, deserialized.values[1].data);
+        assert_eq!(vec![4, 5, 6, 7], deserialized.values[1].tags);
+        assert_eq!(Position(2000), deserialized.values[1].position);
+        
+        // Check third value
+        assert_eq!(3, deserialized.values[2].event_type);
+        assert_eq!(300, deserialized.values[2].data);
+        assert_eq!(vec![8, 9], deserialized.values[2].tags);
+        assert_eq!(Position(3000), deserialized.values[2].position);
+        
+        // Check next_leaf_id
+        assert_eq!(Some(PageID(500)), deserialized.next_leaf_id);
+    }
+    
     #[test]
     fn test_freelist_internal_serialize() {
         // Create a FreeListInternalNode with known values

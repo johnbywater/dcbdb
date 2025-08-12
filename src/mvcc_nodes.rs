@@ -525,7 +525,7 @@ impl FreeListInternalNode {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EventRecord {
-    pub event_type: u32,
+    pub event_type: String,
     pub data: Vec<u8>,
     pub tags: Vec<String>,
     pub position: Position,
@@ -548,8 +548,8 @@ impl EventLeafNode {
         
         // For each EventRecord in values:
         for value in &self.values {
-            // 4 bytes for event_type
-            total_size += 4;
+            // 2 bytes for event_type length + bytes for the string
+            total_size += 2 + value.event_type.len();
             
             // 2 bytes for data length + bytes for the data
             total_size += 2 + value.data.len();
@@ -589,8 +589,11 @@ impl EventLeafNode {
         
         // Serialize each value (EventRecord)
         for value in &self.values {
-            // Serialize event_type (4 bytes)
-            result.extend_from_slice(&value.event_type.to_le_bytes());
+            // Serialize event_type length (2 bytes)
+            result.extend_from_slice(&(value.event_type.len() as u16).to_le_bytes());
+            
+            // Serialize event_type bytes
+            result.extend_from_slice(value.event_type.as_bytes());
             
             // Serialize data length (2 bytes)
             result.extend_from_slice(&(value.data.len() as u16).to_le_bytes());
@@ -669,21 +672,34 @@ impl EventLeafNode {
         let mut offset = 2 + (keys_len * 8);
         
         for _ in 0..keys_len {
-            // Check if there's enough data for event_type (4 bytes)
-            if offset + 4 > slice.len() {
+            // Check if there's enough data for event_type length (2 bytes)
+            if offset + 2 > slice.len() {
+                return Err(LmdbError::DeserializationError(
+                    "Unexpected end of data while reading event_type length".to_string(),
+                ));
+            }
+            
+            // Extract event_type length (2 bytes)
+            let event_type_len = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
+            offset += 2;
+            
+            // Check if there's enough data for event_type
+            if offset + event_type_len > slice.len() {
                 return Err(LmdbError::DeserializationError(
                     "Unexpected end of data while reading event_type".to_string(),
                 ));
             }
             
-            // Extract event_type (4 bytes)
-            let event_type = u32::from_le_bytes([
-                slice[offset],
-                slice[offset + 1],
-                slice[offset + 2],
-                slice[offset + 3],
-            ]);
-            offset += 4;
+            // Extract event_type as a string
+            let event_type = match std::str::from_utf8(&slice[offset..offset + event_type_len]) {
+                Ok(s) => s.to_string(),
+                Err(_) => {
+                    return Err(LmdbError::DeserializationError(
+                        "Invalid UTF-8 sequence in event_type".to_string(),
+                    ));
+                }
+            };
+            offset += event_type_len;
             
             // Check if there's enough data for data length (2 bytes)
             if offset + 2 > slice.len() {
@@ -1539,19 +1555,19 @@ mod tests {
             keys: vec![Position(1000), Position(2000), Position(3000)],
             values: vec![
                 EventRecord {
-                    event_type: 1,
+                    event_type: "event_type_1".to_string(),
                     data: vec![1, 0, 0, 0], // 100 as little-endian bytes
                     tags: vec!["tag1".to_string(), "tag2".to_string(), "tag3".to_string()],
                     position: Position(1000),
                 },
                 EventRecord {
-                    event_type: 2,
+                    event_type: "event_type_2".to_string(),
                     data: vec![2, 0, 0, 0], // 200 as little-endian bytes
                     tags: vec!["tag4".to_string(), "tag5".to_string(), "tag6".to_string(), "tag7".to_string()],
                     position: Position(2000),
                 },
                 EventRecord {
-                    event_type: 3,
+                    event_type: "event_type_3".to_string(),
                     data: vec![3, 0, 0, 0], // 300 as little-endian bytes
                     tags: vec!["tag8".to_string(), "tag9".to_string()],
                     position: Position(3000),
@@ -1583,19 +1599,19 @@ mod tests {
         assert_eq!(Position(3000), deserialized.keys[2]);
         
         // Check first value
-        assert_eq!(1, deserialized.values[0].event_type);
+        assert_eq!("event_type_1", deserialized.values[0].event_type);
         assert_eq!(vec![1, 0, 0, 0], deserialized.values[0].data);
         assert_eq!(vec!["tag1".to_string(), "tag2".to_string(), "tag3".to_string()], deserialized.values[0].tags);
         assert_eq!(Position(1000), deserialized.values[0].position);
         
         // Check second value
-        assert_eq!(2, deserialized.values[1].event_type);
+        assert_eq!("event_type_2", deserialized.values[1].event_type);
         assert_eq!(vec![2, 0, 0, 0], deserialized.values[1].data);
         assert_eq!(vec!["tag4".to_string(), "tag5".to_string(), "tag6".to_string(), "tag7".to_string()], deserialized.values[1].tags);
         assert_eq!(Position(2000), deserialized.values[1].position);
         
         // Check third value
-        assert_eq!(3, deserialized.values[2].event_type);
+        assert_eq!("event_type_3", deserialized.values[2].event_type);
         assert_eq!(vec![3, 0, 0, 0], deserialized.values[2].data);
         assert_eq!(vec!["tag8".to_string(), "tag9".to_string()], deserialized.values[2].tags);
         assert_eq!(Position(3000), deserialized.values[2].position);

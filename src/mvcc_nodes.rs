@@ -535,7 +535,7 @@ pub struct EventRecord {
 pub struct EventLeafNode {
     pub keys: Vec<Position>,
     pub values: Vec<EventRecord>,
-    pub next_leaf_id: Option<PageID>,
+    pub next_leaf_id: PageID,
 }
 
 impl EventLeafNode {
@@ -566,11 +566,8 @@ impl EventLeafNode {
             total_size += 8;
         }
         
-        // 1 byte for next_leaf_id presence flag + 4 bytes if present
-        total_size += 1;
-        if self.next_leaf_id.is_some() {
-            total_size += 4;
-        }
+        // 4 bytes for next_leaf_id
+        total_size += 4;
         
         total_size
     }
@@ -617,13 +614,8 @@ impl EventLeafNode {
             result.extend_from_slice(&value.position.0.to_le_bytes());
         }
         
-        // Serialize the next_leaf_id (1 byte flag + 4 bytes if present)
-        if let Some(next_leaf_id) = self.next_leaf_id {
-            result.push(1); // Flag indicating next_leaf_id is present
-            result.extend_from_slice(&next_leaf_id.0.to_le_bytes());
-        } else {
-            result.push(0); // Flag indicating next_leaf_id is not present
-        }
+        // Serialize the next_leaf_id (4 bytes)
+        result.extend_from_slice(&self.next_leaf_id.0.to_le_bytes());
         
         Ok(result)
     }
@@ -797,38 +789,22 @@ impl EventLeafNode {
             });
         }
         
-        // Check if there's enough data for next_leaf_id flag (1 byte)
-        if offset >= slice.len() {
+        // Check if there's enough data for next_leaf_id (4 bytes)
+        if offset + 4 > slice.len() {
             return Err(LmdbError::DeserializationError(
-                "Unexpected end of data while reading next_leaf_id flag".to_string(),
+                "Unexpected end of data while reading next_leaf_id".to_string(),
             ));
         }
         
-        // Extract next_leaf_id flag (1 byte)
-        let next_leaf_id_flag = slice[offset];
-        offset += 1;
+        // Extract next_leaf_id (4 bytes)
+        let next_leaf_id = u32::from_le_bytes([
+            slice[offset],
+            slice[offset + 1],
+            slice[offset + 2],
+            slice[offset + 3],
+        ]);
         
-        // Extract next_leaf_id if present
-        let next_leaf_id = if next_leaf_id_flag == 1 {
-            // Check if there's enough data for next_leaf_id (4 bytes)
-            if offset + 4 > slice.len() {
-                return Err(LmdbError::DeserializationError(
-                    "Unexpected end of data while reading next_leaf_id".to_string(),
-                ));
-            }
-            
-            // Extract next_leaf_id (4 bytes)
-            let next_leaf_id = u32::from_le_bytes([
-                slice[offset],
-                slice[offset + 1],
-                slice[offset + 2],
-                slice[offset + 3],
-            ]);
-            
-            Some(PageID(next_leaf_id))
-        } else {
-            None
-        };
+        let next_leaf_id = PageID(next_leaf_id);
         
         Ok(EventLeafNode {
             keys,
@@ -1561,7 +1537,7 @@ mod tests {
                     position: Position(3000),
                 },
             ],
-            next_leaf_id: Some(PageID(500)),
+            next_leaf_id: PageID(500),
         };
         
         // Serialize the EventLeafNode
@@ -1605,7 +1581,7 @@ mod tests {
         assert_eq!(Position(3000), deserialized.values[2].position);
         
         // Check next_leaf_id
-        assert_eq!(Some(PageID(500)), deserialized.next_leaf_id);
+        assert_eq!(PageID(500), deserialized.next_leaf_id);
     }
     
     #[test]

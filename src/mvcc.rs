@@ -109,7 +109,7 @@ impl Lmdb {
             let event_leaf = EventLeafNode {
                 keys: Vec::new(),
                 values: Vec::new(),
-                next_leaf_id: None,
+                next_leaf_id: PageID(0),
             };
             let position_page = Page::new(position_root_id, Node::EventLeaf(event_leaf));
             lmdb.write_page(&position_page)?;

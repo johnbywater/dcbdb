@@ -400,7 +400,7 @@ impl LmdbWriter {
 
             self.dirty.insert(new_page_id, new_page.clone());
             replacement_info = Some((old_page_id, new_page_id));
-            if self.verbose{
+            if self.verbose {
                 println!("Copied {old_page_id:?} to {new_page_id:?}: {page:?}");
             }
             return (new_page, replacement_info);
@@ -431,10 +431,8 @@ impl LmdbWriter {
                     );
                 }
                 dirty_page_id = new_page_id;
-            } else {
-                if self.verbose {
-                    println!("{page_id:?} is already dirty");
-                }
+            } else if self.verbose {
+                println!("{page_id:?} is already dirty");
             }
         } else {
             return Err(LmdbError::PageAlreadyFreedError(page_id));
@@ -455,10 +453,8 @@ impl LmdbWriter {
                 }
                 self.dirty.remove(&page_id);
             }
-            if self.dirty.contains_key(&page_id) {
-                if verbose {
-                    println!("Page ID {page_id:?} is still in dirty!!!!!");
-                }
+            if verbose && self.dirty.contains_key(&page_id) {
+                println!("Page ID {page_id:?} is still in dirty!!!!!");
             }
         }
     }
@@ -677,10 +673,8 @@ impl LmdbWriter {
                             "Replaced {old_id:?} with {new_id:?} in {dirty_page_id:?}: {dirty_internal_node:?}"
                         );
                     }
-                } else {
-                    if verbose {
-                        println!("Nothing to replace in {dirty_page_id:?}")
-                    }
+                } else if verbose {
+                    println!("Nothing to replace in {dirty_page_id:?}")
                 }
             } else {
                 return Err(LmdbError::DatabaseCorrupted(
@@ -902,15 +896,11 @@ impl LmdbWriter {
                             println!("Empty leaf page {dirty_page_id:?}: {dirty_leaf_node:?}");
                         }
                         removal_info = Some(dirty_page_id);
-                    } else {
-                        if verbose {
-                            println!("Leaf page not empty {dirty_page_id:?}: {dirty_leaf_node:?}");
-                        }
+                    } else if verbose {
+                        println!("Leaf page not empty {dirty_page_id:?}: {dirty_leaf_node:?}");
                     }
-                } else {
-                    if verbose {
-                        println!("Leaf value not empty {tsn:?}: {leaf_value:?}");
-                    }
+                } else if verbose {
+                    println!("Leaf value not empty {tsn:?}: {leaf_value:?}");
                 }
             }
         } else {
@@ -984,7 +974,9 @@ impl LmdbWriter {
                     // If the internal node is empty or has only one child, mark it for removal
                     if dirty_internal_node.keys.is_empty() {
                         if verbose {
-                            println!("Empty internal page {dirty_page_id:?}: {dirty_internal_node:?}");
+                            println!(
+                                "Empty internal page {dirty_page_id:?}: {dirty_internal_node:?}"
+                            );
                         }
                         assert_eq!(dirty_internal_node.child_ids.len(), 1);
                         let orphaned_child_id = dirty_internal_node.child_ids[0];
@@ -1575,7 +1567,7 @@ mod tests {
                 header_node.next_page_id,
                 header_node.freetree_root_id,
                 header_node.position_root_id,
-                VERBOSE
+                VERBOSE,
             );
 
             // Check the free list tree root ID

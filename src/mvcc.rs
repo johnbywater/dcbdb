@@ -1970,7 +1970,7 @@ mod tests {
             assert!(inserted.is_empty());
 
             // We should have 13 active pages
-            assert_eq!(13, active_page_ids.len());
+            assert_eq!(11, active_page_ids.len());
 
             // Audit page IDs
             let mut all_page_ids = active_page_ids.clone();
@@ -2083,9 +2083,9 @@ mod tests {
                 let freed_page_ids: Vec<PageID> = writer.freed_page_ids.iter().cloned().collect();
                 assert!(freed_page_ids.contains(&old_root_id));
 
-                // There were 20 pages, and now we have 1. We have
-                // freed page IDs for 10 old pages and 9 CoW pages.
-                assert_eq!(19, writer.freed_page_ids.len());
+                // There were 16 pages, and now we have 1. We have
+                // freed page IDs for 8 old pages and 7 CoW pages.
+                assert_eq!(15, writer.freed_page_ids.len());
 
                 // Check keys and values of the new root page
                 match &new_root_page.node {

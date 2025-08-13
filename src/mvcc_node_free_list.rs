@@ -22,8 +22,8 @@ impl FreeListLeafNode {
         // 2 bytes for keys_len
         let mut total_size = 2;
 
-        // 4 bytes for each TSN in keys
-        total_size += self.keys.len() * 4;
+        // 8 bytes for each TSN in keys
+        total_size += self.keys.len() * 8;
 
         // For each value:
         for value in &self.values {
@@ -101,7 +101,7 @@ impl FreeListLeafNode {
         let keys_len = u16::from_le_bytes([slice[0], slice[1]]) as usize;
 
         // Calculate the minimum expected size for the keys
-        let min_expected_size = 2 + (keys_len * 4);
+        let min_expected_size = 2 + (keys_len * 8);
         if slice.len() < min_expected_size {
             return Err(LmdbError::DeserializationError(format!(
                 "Expected at least {} bytes for keys, got {}",
@@ -110,22 +110,26 @@ impl FreeListLeafNode {
             )));
         }
 
-        // Extract the keys (4 bytes each)
+        // Extract the keys (8 bytes each)
         let mut keys = Vec::with_capacity(keys_len);
         for i in 0..keys_len {
-            let start = 2 + (i * 4);
-            let tsn = u32::from_le_bytes([
+            let start = 2 + (i * 8);
+            let tsn = u64::from_le_bytes([
                 slice[start],
                 slice[start + 1],
                 slice[start + 2],
                 slice[start + 3],
+                slice[start + 4],
+                slice[start + 5],
+                slice[start + 6],
+                slice[start + 7],
             ]);
             keys.push(Tsn(tsn));
         }
 
         // Extract the values
         let mut values = Vec::with_capacity(keys_len);
-        let mut offset = 2 + (keys_len * 4);
+        let mut offset = 2 + (keys_len * 8);
 
         for _ in 0..keys_len {
             if offset + 2 > slice.len() {
@@ -249,8 +253,8 @@ impl FreeListInternalNode {
         // 2 bytes for keys_len
         let mut total_size = 2;
 
-        // 4 bytes for each TSN in keys
-        total_size += self.keys.len() * 4;
+        // 8 bytes for each TSN in keys
+        total_size += self.keys.len() * 8;
 
         // 2 bytes for child_ids length
         total_size += 2;
@@ -308,7 +312,7 @@ impl FreeListInternalNode {
         let keys_len = u16::from_le_bytes([slice[0], slice[1]]) as usize;
 
         // Calculate the minimum expected size for the keys
-        let min_expected_size = 2 + (keys_len * 4);
+        let min_expected_size = 2 + (keys_len * 8);
         if slice.len() < min_expected_size {
             return Err(LmdbError::DeserializationError(format!(
                 "Expected at least {} bytes for keys, got {}",
@@ -317,21 +321,25 @@ impl FreeListInternalNode {
             )));
         }
 
-        // Extract the keys (4 bytes each)
+        // Extract the keys (8 bytes each)
         let mut keys = Vec::with_capacity(keys_len);
         for i in 0..keys_len {
-            let start = 2 + (i * 4);
-            let tsn = u32::from_le_bytes([
+            let start = 2 + (i * 8);
+            let tsn = u64::from_le_bytes([
                 slice[start],
                 slice[start + 1],
                 slice[start + 2],
                 slice[start + 3],
+                slice[start + 4],
+                slice[start + 5],
+                slice[start + 6],
+                slice[start + 7],
             ]);
             keys.push(Tsn(tsn));
         }
 
         // Extract the length of child_ids (2 bytes)
-        let offset = 2 + (keys_len * 4);
+        let offset = 2 + (keys_len * 8);
         if offset + 2 > slice.len() {
             return Err(LmdbError::DeserializationError(
                 "Unexpected end of data while reading child_ids length".to_string(),
@@ -487,26 +495,23 @@ mod tests {
         // First 2 bytes: keys_len (3) = [3, 0] in little-endian
         assert_eq!(&[3, 0], &serialized[0..2]);
 
-        // Next 12 bytes: 3 TSNs (4 bytes each)
-        // TSN(10) = [10, 0, 0, 0] in little-endian
-        assert_eq!(&[10, 0, 0, 0], &serialized[2..6]);
-        // TSN(20) = [20, 0, 0, 0] in little-endian
-        assert_eq!(&[20, 0, 0, 0], &serialized[6..10]);
-        // TSN(30) = [30, 0, 0, 0] in little-endian
-        assert_eq!(&[30, 0, 0, 0], &serialized[10..14]);
+        // Next 24 bytes: 3 TSNs (8 bytes each)
+        assert_eq!(&10u64.to_le_bytes(), &serialized[2..10]);
+        assert_eq!(&20u64.to_le_bytes(), &serialized[10..18]);
+        assert_eq!(&30u64.to_le_bytes(), &serialized[18..26]);
 
         // Next 2 bytes: child_ids_len (4) = [4, 0] in little-endian
-        assert_eq!(&[4, 0], &serialized[14..16]);
+        assert_eq!(&[4, 0], &serialized[26..28]);
 
         // Next 16 bytes: 4 PageIDs (4 bytes each)
         // PageID(100) = [100, 0, 0, 0] in little-endian
-        assert_eq!(&[100, 0, 0, 0], &serialized[16..20]);
+        assert_eq!(&[100, 0, 0, 0], &serialized[28..32]);
         // PageID(200) = [200, 0, 0, 0] in little-endian
-        assert_eq!(&[200, 0, 0, 0], &serialized[20..24]);
+        assert_eq!(&[200, 0, 0, 0], &serialized[32..36]);
         // PageID(300) = [44, 1, 0, 0] in little-endian (300 = 44 + 1*256)
-        assert_eq!(&[44, 1, 0, 0], &serialized[24..28]);
+        assert_eq!(&[44, 1, 0, 0], &serialized[36..40]);
         // PageID(400) = [144, 1, 0, 0] in little-endian (400 = 144 + 1*256)
-        assert_eq!(&[144, 1, 0, 0], &serialized[28..32]);
+        assert_eq!(&[144, 1, 0, 0], &serialized[40..44]);
 
         // Deserialize back to a FreeListInternalNode using from_slice
         let deserialized = FreeListInternalNode::from_slice(&serialized)

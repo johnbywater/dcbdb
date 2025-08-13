@@ -54,4 +54,4 @@ pub type Result<T> = std::result::Result<T, LmdbError>;
 pub struct PageID(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Tsn(pub u32);
+pub struct Tsn(pub u64);

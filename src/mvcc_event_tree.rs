@@ -274,7 +274,7 @@ mod tests {
     use serial_test::serial;
     use tempfile::tempdir;
 
-    static VERBOSE: bool = true;
+    static VERBOSE: bool = false;
 
     // Helper function to create a test database with a specified page size
     fn construct_db(page_size: usize) -> (tempfile::TempDir, Lmdb) {

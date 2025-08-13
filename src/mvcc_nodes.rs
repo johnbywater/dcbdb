@@ -34,7 +34,7 @@ impl Node {
 
     pub fn calc_serialized_size(&self) -> usize {
         match self {
-            Node::Header(_) => 28, // HeaderNode has a fixed size of 28 bytes (includes next_position)
+            Node::Header(_) => 40, // HeaderNode has a fixed size of 40 bytes (includes next_position)
             Node::FreeListLeaf(node) => node.calc_serialized_size(),
             Node::FreeListInternal(node) => node.calc_serialized_size(),
             Node::EventLeaf(node) => node.calc_serialized_size(),

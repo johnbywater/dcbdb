@@ -591,7 +591,8 @@ impl LmdbWriter {
 
                 // Check if the new leaf page needs splitting
 
-                if new_leaf_page.calc_serialized_size() > db.page_size {
+                let serialized_size = new_leaf_page.calc_serialized_size();
+                if serialized_size > db.page_size {
                     return Err(LmdbError::DatabaseCorrupted(
                         "Overflow freed page IDs for TSN to subtree not implemented".to_string(),
                     ));
@@ -1546,7 +1547,7 @@ mod tests {
         #[test]
         #[serial]
         fn test_insert_freed_page_ids_until_replace_internal_node_child_id() {
-            let (_temp_dir, mut db) = construct_db(64);
+            let (_temp_dir, mut db) = construct_db(128);
 
             // Block inserted page IDs from being reused
             {
@@ -1647,8 +1648,8 @@ mod tests {
                 }
             }
 
-            // We have split two leaf nodes, so now we have 7 active pages
-            assert_eq!(7, active_page_ids.len());
+            // We have split a leaf node, so now we have 6 active pages
+            assert_eq!(6, active_page_ids.len());
 
             // Audit page IDs
             let mut all_page_ids = active_page_ids.clone();
@@ -1969,8 +1970,8 @@ mod tests {
             // We should have processed all inserted items
             assert!(inserted.is_empty());
 
-            // We should have 13 active pages
-            assert_eq!(11, active_page_ids.len());
+            // We should have 10 active pages
+            assert_eq!(10, active_page_ids.len());
 
             // Audit page IDs
             let mut all_page_ids = active_page_ids.clone();
@@ -2083,9 +2084,9 @@ mod tests {
                 let freed_page_ids: Vec<PageID> = writer.freed_page_ids.iter().cloned().collect();
                 assert!(freed_page_ids.contains(&old_root_id));
 
-                // There were 16 pages, and now we have 1. We have
-                // freed page IDs for 8 old pages and 7 CoW pages.
-                assert_eq!(15, writer.freed_page_ids.len());
+                // There were 14 pages, and now we have 1. We have
+                // freed page IDs for 7 old pages and 6 CoW pages.
+                assert_eq!(13, writer.freed_page_ids.len());
 
                 // Check keys and values of the new root page
                 match &new_root_page.node {
@@ -2153,7 +2154,7 @@ mod tests {
             // so that its parent internal node (which is the root internal node here)
             // will not have already has the old child page ID replaced with a dirty
             // child page ID.
-            let (_temp_dir, mut db) = construct_db(64);
+            let (_temp_dir, mut db) = construct_db(128);
 
             // First, insert page IDs until we split an internal node
             let mut inserted: Vec<(Tsn, PageID)> = Vec::new();

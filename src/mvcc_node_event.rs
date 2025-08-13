@@ -260,8 +260,8 @@ impl EventInternalNode {
         // 8 bytes for each Position in keys
         total_size += self.keys.len() * 8;
 
-        // 4 bytes for each PageID in child_ids
-        total_size += self.child_ids.len() * 4;
+        // 8 bytes for each PageID in child_ids
+        total_size += self.child_ids.len() * 8;
 
         total_size
     }
@@ -333,7 +333,7 @@ impl EventInternalNode {
         let child_ids_len = keys_len + 1;
 
         // Calculate the minimum expected size for the child_ids
-        let min_expected_size = offset + (child_ids_len * 4);
+        let min_expected_size = offset + (child_ids_len * 8);
         if slice.len() < min_expected_size {
             return Err(LmdbError::DeserializationError(format!(
                 "Expected at least {} bytes for child_ids, got {}",
@@ -342,15 +342,19 @@ impl EventInternalNode {
             )));
         }
 
-        // Extract the child_ids (4 bytes each)
+        // Extract the child_ids (8 bytes each)
         let mut child_ids = Vec::with_capacity(child_ids_len);
         for i in 0..child_ids_len {
-            let start = offset + (i * 4);
-            let page_id = u32::from_le_bytes([
+            let start = offset + (i * 8);
+            let page_id = u64::from_le_bytes([
                 slice[start],
                 slice[start + 1],
                 slice[start + 2],
                 slice[start + 3],
+                slice[start + 4],
+                slice[start + 5],
+                slice[start + 6],
+                slice[start + 7],
             ]);
             child_ids.push(PageID(page_id));
         }

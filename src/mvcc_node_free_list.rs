@@ -30,13 +30,13 @@ impl FreeListLeafNode {
             // 2 bytes for page_ids length
             total_size += 2;
 
-            // 4 bytes for each PageID in page_ids
-            total_size += value.page_ids.len() * 4;
+            // 8 bytes for each PageID in page_ids
+            total_size += value.page_ids.len() * 8;
 
-            // 1 byte for root_id presence flag + 4 bytes if present
+            // 1 byte for root_id presence flag + 8 bytes if present
             total_size += 1;
             if value.root_id.is_some() {
-                total_size += 4;
+                total_size += 8;
             }
         }
 
@@ -142,25 +142,29 @@ impl FreeListLeafNode {
             let page_ids_len = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
             offset += 2;
 
-            if offset + (page_ids_len * 4) > slice.len() {
+            if offset + (page_ids_len * 8) > slice.len() {
                 return Err(LmdbError::DeserializationError(
                     "Unexpected end of data while reading page_ids".to_string(),
                 ));
             }
 
-            // Extract the page_ids (4 bytes each)
+            // Extract the page_ids (8 bytes each)
             let mut page_ids = Vec::with_capacity(page_ids_len);
             for j in 0..page_ids_len {
-                let start = offset + (j * 4);
-                let page_id = u32::from_le_bytes([
+                let start = offset + (j * 8);
+                let page_id = u64::from_le_bytes([
                     slice[start],
                     slice[start + 1],
                     slice[start + 2],
                     slice[start + 3],
+                    slice[start + 4],
+                    slice[start + 5],
+                    slice[start + 6],
+                    slice[start + 7],
                 ]);
                 page_ids.push(PageID(page_id));
             }
-            offset += page_ids_len * 4;
+            offset += page_ids_len * 8;
 
             if offset >= slice.len() {
                 return Err(LmdbError::DeserializationError(
@@ -172,21 +176,25 @@ impl FreeListLeafNode {
             let has_root_id = slice[offset] != 0;
             offset += 1;
 
-            // Extract the root_id if present (4 bytes)
+            // Extract the root_id if present (8 bytes)
             let root_id = if has_root_id {
-                if offset + 4 > slice.len() {
+                if offset + 8 > slice.len() {
                     return Err(LmdbError::DeserializationError(
                         "Unexpected end of data while reading root_id".to_string(),
                     ));
                 }
 
-                let page_id = u32::from_le_bytes([
+                let page_id = u64::from_le_bytes([
                     slice[offset],
                     slice[offset + 1],
                     slice[offset + 2],
                     slice[offset + 3],
+                    slice[offset + 4],
+                    slice[offset + 5],
+                    slice[offset + 6],
+                    slice[offset + 7],
                 ]);
-                offset += 4;
+                offset += 8;
                 Some(PageID(page_id))
             } else {
                 None
@@ -259,8 +267,8 @@ impl FreeListInternalNode {
         // 2 bytes for child_ids length
         total_size += 2;
 
-        // 4 bytes for each PageID in child_ids
-        total_size += self.child_ids.len() * 4;
+        // 8 bytes for each PageID in child_ids
+        total_size += self.child_ids.len() * 8;
 
         total_size
     }
@@ -349,7 +357,7 @@ impl FreeListInternalNode {
         let child_ids_len = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
 
         // Calculate the minimum expected size for the child_ids
-        let min_expected_size = offset + 2 + (child_ids_len * 4);
+        let min_expected_size = offset + 2 + (child_ids_len * 8);
         if slice.len() < min_expected_size {
             return Err(LmdbError::DeserializationError(format!(
                 "Expected at least {} bytes for child_ids, got {}",
@@ -358,15 +366,19 @@ impl FreeListInternalNode {
             )));
         }
 
-        // Extract the child_ids (4 bytes each)
+        // Extract the child_ids (8 bytes each)
         let mut child_ids = Vec::with_capacity(child_ids_len);
         for i in 0..child_ids_len {
-            let start = offset + 2 + (i * 4);
-            let page_id = u32::from_le_bytes([
+            let start = offset + 2 + (i * 8);
+            let page_id = u64::from_le_bytes([
                 slice[start],
                 slice[start + 1],
                 slice[start + 2],
                 slice[start + 3],
+                slice[start + 4],
+                slice[start + 5],
+                slice[start + 6],
+                slice[start + 7],
             ]);
             child_ids.push(PageID(page_id));
         }
@@ -503,15 +515,11 @@ mod tests {
         // Next 2 bytes: child_ids_len (4) = [4, 0] in little-endian
         assert_eq!(&[4, 0], &serialized[26..28]);
 
-        // Next 16 bytes: 4 PageIDs (4 bytes each)
-        // PageID(100) = [100, 0, 0, 0] in little-endian
-        assert_eq!(&[100, 0, 0, 0], &serialized[28..32]);
-        // PageID(200) = [200, 0, 0, 0] in little-endian
-        assert_eq!(&[200, 0, 0, 0], &serialized[32..36]);
-        // PageID(300) = [44, 1, 0, 0] in little-endian (300 = 44 + 1*256)
-        assert_eq!(&[44, 1, 0, 0], &serialized[36..40]);
-        // PageID(400) = [144, 1, 0, 0] in little-endian (400 = 144 + 1*256)
-        assert_eq!(&[144, 1, 0, 0], &serialized[40..44]);
+        // Next 32 bytes: 4 PageIDs (8 bytes each)
+        assert_eq!(&100u64.to_le_bytes(), &serialized[28..36]);
+        assert_eq!(&200u64.to_le_bytes(), &serialized[36..44]);
+        assert_eq!(&300u64.to_le_bytes(), &serialized[44..52]);
+        assert_eq!(&400u64.to_le_bytes(), &serialized[52..60]);
 
         // Deserialize back to a FreeListInternalNode using from_slice
         let deserialized = FreeListInternalNode::from_slice(&serialized)

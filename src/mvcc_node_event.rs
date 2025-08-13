@@ -10,7 +10,6 @@ pub struct EventRecord {
     pub event_type: String,
     pub data: Vec<u8>,
     pub tags: Vec<String>,
-    pub position: Position,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,8 +43,6 @@ impl EventLeafNode {
                 total_size += 2 + tag.len();
             }
 
-            // 8 bytes for position
-            total_size += 8;
         }
 
         // 4 bytes for next_leaf_id
@@ -92,8 +89,6 @@ impl EventLeafNode {
                 result.extend_from_slice(tag.as_bytes());
             }
 
-            // Serialize position (8 bytes)
-            result.extend_from_slice(&value.position.0.to_le_bytes());
         }
 
         // Serialize the next_leaf_id (4 bytes)
@@ -243,31 +238,10 @@ impl EventLeafNode {
                 tags.push(tag);
             }
 
-            // Check if there's enough data for position (8 bytes)
-            if offset + 8 > slice.len() {
-                return Err(LmdbError::DeserializationError(
-                    "Unexpected end of data while reading position".to_string(),
-                ));
-            }
-
-            // Extract position (8 bytes)
-            let position = u64::from_le_bytes([
-                slice[offset],
-                slice[offset + 1],
-                slice[offset + 2],
-                slice[offset + 3],
-                slice[offset + 4],
-                slice[offset + 5],
-                slice[offset + 6],
-                slice[offset + 7],
-            ]);
-            offset += 8;
-
             values.push(EventRecord {
                 event_type,
                 data,
                 tags,
-                position: Position(position),
             });
         }
 
@@ -500,7 +474,6 @@ mod tests {
                     event_type: "event_type_1".to_string(),
                     data: vec![1, 0, 0, 0], // 100 as little-endian bytes
                     tags: vec!["tag1".to_string(), "tag2".to_string(), "tag3".to_string()],
-                    position: Position(1000),
                 },
                 EventRecord {
                     event_type: "event_type_2".to_string(),
@@ -511,13 +484,11 @@ mod tests {
                         "tag6".to_string(),
                         "tag7".to_string(),
                     ],
-                    position: Position(2000),
                 },
                 EventRecord {
                     event_type: "event_type_3".to_string(),
                     data: vec![3, 0, 0, 0], // 300 as little-endian bytes
                     tags: vec!["tag8".to_string(), "tag9".to_string()],
-                    position: Position(3000),
                 },
             ],
             next_leaf_id: PageID(500),
@@ -552,7 +523,6 @@ mod tests {
             vec!["tag1".to_string(), "tag2".to_string(), "tag3".to_string()],
             deserialized.values[0].tags
         );
-        assert_eq!(Position(1000), deserialized.values[0].position);
 
         // Check second value
         assert_eq!("event_type_2", deserialized.values[1].event_type);
@@ -566,7 +536,6 @@ mod tests {
             ],
             deserialized.values[1].tags
         );
-        assert_eq!(Position(2000), deserialized.values[1].position);
 
         // Check third value
         assert_eq!("event_type_3", deserialized.values[2].event_type);
@@ -575,7 +544,6 @@ mod tests {
             vec!["tag8".to_string(), "tag9".to_string()],
             deserialized.values[2].tags
         );
-        assert_eq!(Position(3000), deserialized.values[2].position);
 
         // Check next_leaf_id
         assert_eq!(PageID(500), deserialized.next_leaf_id);

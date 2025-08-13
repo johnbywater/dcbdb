@@ -301,7 +301,6 @@ mod tests {
             event_type: "UserCreated".to_string(),
             data: vec![1, 2, 3, 4],
             tags: vec!["users".to_string(), "creation".to_string()],
-            position,
         };
 
         // Call append_event
@@ -354,7 +353,6 @@ mod tests {
                 event_type: "UserCreated".to_string(),
                 data: (0..8).map(|_| random::<u8>()).collect(),
                 tags: vec!["users".to_string(), "creation".to_string()],
-                position,
             };
             appended.push((position, record.clone()));
 

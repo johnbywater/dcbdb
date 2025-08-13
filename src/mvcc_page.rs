@@ -81,6 +81,7 @@ impl Page {
 mod tests {
     use super::*;
     use crate::mvcc_common::{PageID, Tsn};
+    use crate::mvcc_node_event::Position;
     use crate::mvcc_node_header::HeaderNode;
 
     #[test]
@@ -91,6 +92,7 @@ mod tests {
             next_page_id: PageID(123),
             freetree_root_id: PageID(456),
             position_root_id: PageID(789),
+            next_position: Position(1234),
         });
 
         // Create a Page with the node

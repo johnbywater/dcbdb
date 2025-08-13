@@ -1,5 +1,5 @@
 use crate::mvcc_common::{LmdbError, PageID, Tsn};
-use crate::mvcc_node_event::EventLeafNode;
+use crate::mvcc_node_event::{EventLeafNode, Position};
 use crate::mvcc_node_free_list::{FreeListInternalNode, FreeListLeafNode};
 use crate::mvcc_node_header::HeaderNode;
 use crate::mvcc_nodes::Node;
@@ -43,6 +43,7 @@ pub struct LmdbWriter {
     pub next_page_id: PageID,
     pub freetree_root_id: PageID,
     pub position_root_id: PageID,
+    pub next_position: Position,
     pub reusable_page_ids: VecDeque<(PageID, Tsn)>,
     pub freed_page_ids: VecDeque<PageID>,
     pub deserialized: HashMap<PageID, Page>,
@@ -92,6 +93,7 @@ impl Lmdb {
                 next_page_id,
                 freetree_root_id,
                 position_root_id,
+                next_position: Position(0),
             };
 
             let header_page0 = Page::new(header_page_id0, Node::Header(header_node0.clone()));
@@ -213,6 +215,7 @@ impl Lmdb {
             header_node.next_page_id,
             header_node.freetree_root_id,
             header_node.position_root_id,
+            header_node.next_position,
             self.verbose,
         );
 
@@ -270,6 +273,7 @@ impl Lmdb {
             next_page_id: writer.next_page_id,
             freetree_root_id: writer.freetree_root_id,
             position_root_id: writer.position_root_id,
+            next_position: writer.next_position,
         };
 
         let header_page = Page::new(header_page_id, Node::Header(header_node));
@@ -294,6 +298,7 @@ impl LmdbWriter {
         next_page_id: PageID,
         freetree_root_id: PageID,
         position_root_id: PageID,
+        next_position: Position,
         verbose: bool,
     ) -> Self {
         Self {
@@ -302,6 +307,7 @@ impl LmdbWriter {
             next_page_id,
             freetree_root_id,
             position_root_id,
+            next_position,
             reusable_page_ids: VecDeque::new(),
             freed_page_ids: VecDeque::new(),
             deserialized: HashMap::new(),
@@ -309,6 +315,12 @@ impl LmdbWriter {
             reused_page_ids: VecDeque::new(),
             verbose,
         }
+    }
+
+    pub fn issue_position(&mut self) -> Position {
+        let pos = self.next_position;
+        self.next_position = Position(self.next_position.0 + 1);
+        pos
     }
 
     pub fn get_page_ref(&mut self, db: &Lmdb, page_id: PageID) -> Result<&Page> {
@@ -1282,6 +1294,7 @@ mod tests {
                 header_node.next_page_id,
                 header_node.freetree_root_id,
                 header_node.position_root_id,
+                header_node.next_position,
                 VERBOSE,
             );
 
@@ -1426,6 +1439,7 @@ mod tests {
                 header_node.next_page_id,
                 header_node.freetree_root_id,
                 header_node.position_root_id,
+                header_node.next_position,
                 VERBOSE,
             );
 
@@ -1728,6 +1742,7 @@ mod tests {
                     header_node.next_page_id,
                     header_node.freetree_root_id,
                     header_node.position_root_id,
+                    header_node.next_position,
                     VERBOSE,
                 );
 
@@ -1827,6 +1842,7 @@ mod tests {
                 header_node.next_page_id,
                 header_node.freetree_root_id,
                 header_node.position_root_id,
+                header_node.next_position,
                 VERBOSE,
             );
 
@@ -2043,6 +2059,7 @@ mod tests {
                     header_node.next_page_id,
                     header_node.freetree_root_id,
                     header_node.position_root_id,
+                    header_node.next_position,
                     VERBOSE,
                 );
 

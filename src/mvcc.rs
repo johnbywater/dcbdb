@@ -729,6 +729,17 @@ impl LmdbWriter {
             current_replacement_info = parent_replacement_info;
         }
 
+        if let Some((old_id, new_id)) = current_replacement_info {
+            if self.free_page_tree_root_id == old_id {
+                self.free_page_tree_root_id = new_id;
+                if verbose {
+                    println!("Replaced root {old_id:?} with {new_id:?}");
+                }
+            } else {
+                return Err(LmdbError::RootIDMismatch(old_id, new_id));
+            }
+        }
+
         if let Some((promoted_key, promoted_page_id)) = split_info {
             // Create a new root
             let new_internal_node = FreeListInternalNode {
@@ -748,15 +759,6 @@ impl LmdbWriter {
             self.insert_dirty(new_root_page)?;
 
             self.free_page_tree_root_id = new_root_page_id;
-        } else if let Some((old_id, new_id)) = current_replacement_info {
-            if self.free_page_tree_root_id == old_id {
-                self.free_page_tree_root_id = new_id;
-                if verbose {
-                    println!("Replaced root {old_id:?} with {new_id:?}");
-                }
-            } else {
-                return Err(LmdbError::RootIDMismatch(old_id, new_id));
-            }
         }
 
         Ok(())

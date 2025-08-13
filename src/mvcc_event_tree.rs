@@ -17,7 +17,7 @@ pub fn append_event(
 ) -> Result<()> {
     let verbose = db.verbose;
     if verbose {
-        println!("Appending {position:?} for {event:?}");
+        println!("Appending event: {position:?} {event:?}");
         println!("Root is {:?}", writer.event_tree_root_id);
     }
     // Get the current root page id for the event tree
@@ -74,7 +74,8 @@ pub fn append_event(
     // Check if the leaf needs splitting by estimating the serialized size
     let mut split_info: Option<(Position, PageID)> = None;
 
-    if dirty_leaf_page.calc_serialized_size() > db.page_size {
+    let serialized_size = dirty_leaf_page.calc_serialized_size();
+    if serialized_size > db.page_size {
         // Split the leaf node
         if let Node::EventLeaf(dirty_leaf_node) = &mut dirty_leaf_page.node {
             let (last_key, last_value) = dirty_leaf_node.pop_last_key_and_value()?;
@@ -95,14 +96,12 @@ pub fn append_event(
             let new_leaf_page = Page::new(new_leaf_page_id, Node::EventLeaf(new_leaf_node));
 
             // Check if the new leaf page needs splitting
-
             let serialized_size = new_leaf_page.calc_serialized_size();
             if serialized_size > db.page_size {
                 return Err(LmdbError::DatabaseCorrupted(
-                    "Overflow event data not implemented".to_string(),
+                    format!("Overflow event data not implemented (size: {serialized_size}, max: {})", db.page_size)
                 ));
             }
-
             if verbose {
                 println!(
                     "Created new leaf {:?}: {:?}",
@@ -110,8 +109,6 @@ pub fn append_event(
                 );
             }
             writer.insert_dirty(new_leaf_page)?;
-
-            // dirty_leaf_node.next_leaf_id = new_leaf_page_id;
 
             // Propagate the split up the tree
             if verbose {
@@ -235,6 +232,17 @@ pub fn append_event(
         current_replacement_info = parent_replacement_info;
     }
 
+    if let Some((old_id, new_id)) = current_replacement_info {
+        if writer.event_tree_root_id == old_id {
+            writer.event_tree_root_id = new_id;
+            if verbose {
+                println!("Replaced root {old_id:?} with {new_id:?}");
+            }
+        } else {
+            return Err(LmdbError::RootIDMismatch(old_id, new_id));
+        }
+    }
+
     if let Some((promoted_key, promoted_page_id)) = split_info {
         // Create a new root
         let new_internal_node = EventInternalNode {
@@ -253,15 +261,6 @@ pub fn append_event(
         writer.insert_dirty(new_root_page)?;
 
         writer.event_tree_root_id = new_root_page_id;
-    } else if let Some((old_id, new_id)) = current_replacement_info {
-        if writer.event_tree_root_id == old_id {
-            writer.event_tree_root_id = new_id;
-            if verbose {
-                println!("Replaced root {old_id:?} with {new_id:?}");
-            }
-        } else {
-            return Err(LmdbError::RootIDMismatch(old_id, new_id));
-        }
     }
 
     Ok(())
@@ -275,7 +274,7 @@ mod tests {
     use serial_test::serial;
     use tempfile::tempdir;
 
-    static VERBOSE: bool = false;
+    static VERBOSE: bool = true;
 
     // Helper function to create a test database with a specified page size
     fn construct_db(page_size: usize) -> (tempfile::TempDir, Lmdb) {
@@ -289,7 +288,7 @@ mod tests {
     #[serial]
     fn test_append_event_to_empty_leaf_root() {
         // Setup a temporary database
-        let (_temp_dir, mut db) = construct_db(128);
+        let (_temp_dir, mut db) = construct_db(64);
 
         // Start a writer
         let mut writer = db.writer().unwrap();
@@ -336,7 +335,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_insert_events_until_split_leaf() {
+    fn test_insert_events_until_split_leaf_one_writer() {
         // Setup a temporary database
         let (_temp_dir, mut db) = construct_db(256);
 
@@ -403,5 +402,264 @@ mod tests {
                 assert_eq!(appended_record, record.clone());
             }
         }
+    }
+
+    #[test]
+    #[serial]
+    fn test_insert_events_until_split_leaf_many_writers() {
+        // Setup a temporary database
+        let (_temp_dir, mut db) = construct_db(256);
+
+        let mut has_split_leaf = false;
+        let mut appended: Vec<(Position, EventRecord)> = Vec::new();
+
+        // Insert events until we split a leaf
+        while !has_split_leaf {
+
+            // Start a writer
+            let mut writer = db.writer().unwrap();
+
+            // Issue a new position and create a record
+            let position = writer.issue_position();
+            let record = EventRecord {
+                event_type: "UserCreated".to_string(),
+                data: (0..8).map(|_| random::<u8>()).collect(),
+                tags: vec!["users".to_string(), "creation".to_string()],
+            };
+            appended.push((position, record.clone()));
+
+            // Append the event
+            append_event(&db, &mut writer, record, position).unwrap();
+
+            // Check if we've split the leaf
+            let root_page = writer.dirty.get(&writer.event_tree_root_id).unwrap();
+            match &root_page.node {
+                Node::EventInternal(_) => {
+                    has_split_leaf = true;
+                }
+                _ => {}
+            }
+
+            db.commit(&mut writer).unwrap();
+        }
+
+        // Check keys and values of all pages
+        let mut copy_inserted = appended.clone();
+
+        // Start a writer
+        let writer = db.writer().unwrap();
+
+        // Get the root node
+        let root_page = db.read_page(writer.event_tree_root_id).unwrap();
+        let root_node = match &root_page.node {
+            Node::EventInternal(node) => node,
+            _ => panic!("Expected EventInternal node"),
+        };
+
+        // Check each child of the root
+        for (i, &child_id) in root_node.child_ids.iter().enumerate() {
+            let child_page = db.read_page(child_id).unwrap();
+            assert_eq!(child_id, child_page.page_id);
+
+            let child_node = match &child_page.node {
+                Node::EventLeaf(node) => node,
+                _ => panic!("Expected EventLeaf node"),
+            };
+
+            // Check that the keys are properly ordered
+            if i > 0 {
+                assert_eq!(root_node.keys[i - 1], child_node.keys[0]);
+            }
+
+            // Check each key and value in the child
+            for (k, &key) in child_node.keys.iter().enumerate() {
+                let record = &child_node.values[k];
+                let (appended_position, appended_record) = copy_inserted.remove(0);
+                assert_eq!(appended_position, key);
+                assert_eq!(appended_record, record.clone());
+            }
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_insert_events_until_split_internal_one_writer() {
+        // Setup a temporary database
+        let (_temp_dir, mut db) = construct_db(256);
+
+        // Start a writer
+        let mut writer = db.writer().unwrap();
+
+        let mut has_split_internal = false;
+        let mut appended: Vec<(Position, EventRecord)> = Vec::new();
+
+        // Insert events until we split a leaf
+        while !has_split_internal {
+            // Issue a new position and create a record
+            let position = writer.issue_position();
+            let record = EventRecord {
+                event_type: "UserCreated".to_string(),
+                data: (0..8).map(|_| random::<u8>()).collect(),
+                tags: vec!["users".to_string(), "creation".to_string()],
+            };
+            appended.push((position, record.clone()));
+
+            // Append the event
+            append_event(&db, &mut writer, record, position).unwrap();
+
+            // Check if we've split an internal node
+            let root_page = writer.dirty.get(&writer.event_tree_root_id).unwrap();
+            match &root_page.node {
+                Node::EventInternal(root_node) => {
+                    // Check if the first child is an internal node
+                    if !root_node.child_ids.is_empty() {
+                        let child_id = root_node.child_ids[0];
+                        if let Some(child_page) = writer.dirty.get(&child_id) {
+                            match &child_page.node {
+                                Node::EventInternal(_) => {
+                                    has_split_internal = true;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Check keys and values of all pages
+        let mut copy_inserted = appended.clone();
+
+        // Get the root node
+        let root_page = writer.dirty.get(&writer.event_tree_root_id).unwrap();
+        let root_node = match &root_page.node {
+            Node::EventInternal(node) => node,
+            _ => panic!("Expected EventInternal node"),
+        };
+
+        // Check each child of the root
+        for &child_id in root_node.child_ids.iter() {
+            let child_page = writer.dirty.get(&child_id).unwrap();
+            assert_eq!(child_id, child_page.page_id);
+
+            let child_node = match &child_page.node {
+                Node::EventInternal(node) => node,
+                _ => panic!("Expected EventInternal node"),
+            };
+
+            for &grand_child_id in child_node.child_ids.iter() {
+                let grand_child_page = writer.dirty.get(&grand_child_id).unwrap();
+                assert_eq!(grand_child_id, grand_child_page.page_id);
+
+
+                let grand_child_node = match &grand_child_page.node {
+                    Node::EventLeaf(node) => node,
+                    _ => panic!("Expected EventLeaf node"),
+                };
+
+                // Check each key and value in the child
+                for (k, &key) in grand_child_node.keys.iter().enumerate() {
+                    let record = &grand_child_node.values[k];
+                    let (appended_position, appended_record) = copy_inserted.remove(0);
+                    assert_eq!(appended_position, key);
+                    assert_eq!(appended_record, record.clone());
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_insert_events_until_split_internal_many_writers() {
+        // Setup a temporary database
+        let (_temp_dir, mut db) = construct_db(512);
+
+        let mut has_split_internal = false;
+        let mut appended: Vec<(Position, EventRecord)> = Vec::new();
+
+        // Insert events until we split a root internal node
+        while !has_split_internal {
+            // Start a writer
+            let mut writer = db.writer().unwrap();
+
+            // Issue a new position and create a record
+            let position = writer.issue_position();
+            let record = EventRecord {
+                event_type: "UserCreated".to_string(),
+                data: (0..8).map(|_| random::<u8>()).collect(),
+                tags: vec!["users".to_string(), "creation".to_string()],
+            };
+            appended.push((position, record.clone()));
+
+            // Append the event
+            append_event(&db, &mut writer, record, position).unwrap();
+
+            // Check if the root is an internal node
+            let root_page = writer.dirty.get(&writer.event_tree_root_id).unwrap();
+            match &root_page.node {
+                Node::EventInternal(root_node) => {
+                    // Check if the first child is an internal node
+                    if !root_node.child_ids.is_empty() {
+                        let child_id = root_node.child_ids[0];
+                        if let Some(child_page) = writer.dirty.get(&child_id) {
+                            match &child_page.node {
+                                Node::EventInternal(_) => {
+                                    has_split_internal = true;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            db.commit(&mut writer).unwrap();
+        }
+
+        // Check keys and values of all pages
+        let mut copy_inserted = appended.clone();
+
+        // Start a writer
+        let writer = db.writer().unwrap();
+
+        // Get the root node
+        let root_page = db.read_page(writer.event_tree_root_id).unwrap();
+        let root_node = match &root_page.node {
+            Node::EventInternal(node) => node,
+            _ => panic!("Expected EventInternal node"),
+        };
+
+        // Check each child of the root
+        for &child_id in root_node.child_ids.iter() {
+            let child_page = db.read_page(child_id).unwrap();
+            assert_eq!(child_id, child_page.page_id);
+
+            let child_node = match &child_page.node {
+                Node::EventInternal(node) => node,
+                _ => panic!("Expected EventInternal node"),
+            };
+
+            for &grand_child_id in child_node.child_ids.iter() {
+                let grand_child_page = db.read_page(grand_child_id).unwrap();
+                assert_eq!(grand_child_id, grand_child_page.page_id);
+
+
+                let grand_child_node = match &grand_child_page.node {
+                    Node::EventLeaf(node) => node,
+                    _ => panic!("Expected EventLeaf node"),
+                };
+
+                // Check each key and value in the child
+                for (k, &key) in grand_child_node.keys.iter().enumerate() {
+                    let record = &grand_child_node.values[k];
+                    let (appended_position, appended_record) = copy_inserted.remove(0);
+                    println!("Checking appended event: {appended_position:?} {appended_record:?}");
+                    assert_eq!(appended_position, key);
+                    assert_eq!(appended_record, record.clone());
+                }
+            }
+        }
+        assert_eq!(0, copy_inserted.len());
     }
 }

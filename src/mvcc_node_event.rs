@@ -1,5 +1,5 @@
 use crate::mvcc_common;
-use crate::mvcc_common::LmdbError;
+use crate::mvcc_common::{LmdbError};
 use crate::mvcc_common::PageID;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -294,6 +294,12 @@ impl EventLeafNode {
             next_leaf_id,
         })
     }
+
+    pub fn pop_last_key_and_value(&mut self) -> mvcc_common::Result<(Position, EventRecord)> {
+        let last_key = self.keys.pop().unwrap();
+        let last_value = self.values.pop().unwrap();
+        Ok((last_key, last_value))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -407,6 +413,40 @@ impl EventInternalNode {
 
         Ok(EventInternalNode { keys, child_ids })
     }
+    pub fn replace_last_child_id(
+        &mut self,
+        old_id: PageID,
+        new_id: PageID,
+    ) -> mvcc_common::Result<()> {
+        // Replace the last child ID.
+        let last_idx = self.child_ids.len() - 1;
+        if self.child_ids[last_idx] == old_id {
+            self.child_ids[last_idx] = new_id;
+        } else {
+            return Err(LmdbError::DatabaseCorrupted(
+                "Child ID mismatch".to_string(),
+            ));
+        }
+        Ok(())
+    }
+    pub fn append_promoted_key_and_page_id(
+        &mut self,
+        promoted_key: Position,
+        promoted_page_id: PageID,
+    ) -> mvcc_common::Result<()> {
+        self.keys.push(promoted_key);
+        self.child_ids.push(promoted_page_id);
+        Ok(())
+    }
+    pub(crate) fn split_off(&mut self) -> mvcc_common::Result<(Position, Vec<Position>, Vec<PageID>)> {
+        let middle_idx = self.keys.len() - 2;
+        let promoted_key = self.keys.remove(middle_idx);
+        let new_keys = self.keys.split_off(middle_idx);
+        let new_child_ids = self.child_ids.split_off(middle_idx + 1);
+        Ok((promoted_key, new_keys, new_child_ids))
+    }
+
+
 }
 
 #[cfg(test)]

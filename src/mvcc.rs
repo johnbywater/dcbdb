@@ -61,7 +61,7 @@ pub struct Lmdb {
     pub header_page_id0: PageID,
     pub header_page_id1: PageID,
     reader_id_counter: Mutex<usize>,
-    verbose: bool,
+    pub verbose: bool,
 }
 
 impl Lmdb {

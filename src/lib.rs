@@ -42,13 +42,13 @@ pub mod mvcc;
 // Export the MVCC Nodes module
 mod crc;
 mod mvcc_common;
+mod mvcc_event_tree;
 mod mvcc_node_event;
 mod mvcc_node_free_list;
 mod mvcc_node_header;
 pub mod mvcc_nodes;
 mod mvcc_page;
 mod mvcc_pager;
-mod mvcc_event_tree;
 
 #[cfg(test)]
 mod tests {

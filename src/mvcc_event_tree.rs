@@ -9,7 +9,12 @@ use crate::mvcc_page::Page;
 /// This function obtains a mutable reference to a dirty copy of the root event
 /// leaf page (using copy-on-write if necessary) and appends the provided
 /// Position to the keys and the EventRecord to the values.
-pub fn append_event(db: &Lmdb, writer: &mut LmdbWriter, event: EventRecord, position: Position) -> Result<()> {
+pub fn append_event(
+    db: &Lmdb,
+    writer: &mut LmdbWriter,
+    event: EventRecord,
+    position: Position,
+) -> Result<()> {
     let verbose = db.verbose;
     if verbose {
         println!("Appending {position:?} for {event:?}");
@@ -84,7 +89,6 @@ pub fn append_event(db: &Lmdb, writer: &mut LmdbWriter, event: EventRecord, posi
             let new_leaf_node = EventLeafNode {
                 keys: vec![last_key],
                 values: vec![last_value],
-                next_leaf_id: PageID(0),
             };
 
             let new_leaf_page_id = writer.alloc_page_id();
@@ -156,7 +160,8 @@ pub fn append_event(db: &Lmdb, writer: &mut LmdbWriter, event: EventRecord, posi
         if let Some((promoted_key, promoted_page_id)) = split_info {
             if let Node::EventInternal(dirty_internal_node) = &mut dirty_internal_page.node {
                 // Add the promoted key and page ID
-                dirty_internal_node.append_promoted_key_and_page_id(promoted_key, promoted_page_id)?;
+                dirty_internal_node
+                    .append_promoted_key_and_page_id(promoted_key, promoted_page_id)?;
 
                 if verbose {
                     println!(
@@ -179,8 +184,7 @@ pub fn append_event(db: &Lmdb, writer: &mut LmdbWriter, event: EventRecord, posi
                 }
                 // Split the internal node
                 // Ensure we have at least 3 keys and 4 child IDs before splitting
-                if dirty_internal_node.keys.len() < 3 || dirty_internal_node.child_ids.len() < 4
-                {
+                if dirty_internal_node.keys.len() < 3 || dirty_internal_node.child_ids.len() < 4 {
                     return Err(LmdbError::DatabaseCorrupted(
                         "Cannot split internal node with too few keys/children".to_string(),
                     ));
@@ -209,10 +213,8 @@ pub fn append_event(db: &Lmdb, writer: &mut LmdbWriter, event: EventRecord, posi
 
                 // Create a new internal page.
                 let new_internal_page_id = writer.alloc_page_id();
-                let new_internal_page = Page::new(
-                    new_internal_page_id,
-                    Node::EventInternal(new_internal_node),
-                );
+                let new_internal_page =
+                    Page::new(new_internal_page_id, Node::EventInternal(new_internal_node));
                 if verbose {
                     println!(
                         "Created internal {:?}: {:?}",
@@ -241,8 +243,7 @@ pub fn append_event(db: &Lmdb, writer: &mut LmdbWriter, event: EventRecord, posi
         };
 
         let new_root_page_id = writer.alloc_page_id();
-        let new_root_page =
-            Page::new(new_root_page_id, Node::EventInternal(new_internal_node));
+        let new_root_page = Page::new(new_root_page_id, Node::EventInternal(new_internal_node));
         if verbose {
             println!(
                 "Created new internal root {:?}: {:?}",
@@ -270,9 +271,9 @@ pub fn append_event(db: &Lmdb, writer: &mut LmdbWriter, event: EventRecord, posi
 mod tests {
     use super::*;
     use crate::mvcc_nodes::Node;
+    use rand::random;
     use serial_test::serial;
     use tempfile::tempdir;
-    use rand::random;
 
     static VERBOSE: bool = false;
 
@@ -403,6 +404,4 @@ mod tests {
             }
         }
     }
-
-
 }

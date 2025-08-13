@@ -1,5 +1,5 @@
 use crate::mvcc_common;
-use crate::mvcc_common::{LmdbError};
+use crate::mvcc_common::LmdbError;
 use crate::mvcc_common::PageID;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -16,7 +16,6 @@ pub struct EventRecord {
 pub struct EventLeafNode {
     pub keys: Vec<Position>,
     pub values: Vec<EventRecord>,
-    pub next_leaf_id: PageID,
 }
 
 impl EventLeafNode {
@@ -42,11 +41,7 @@ impl EventLeafNode {
             for tag in &value.tags {
                 total_size += 2 + tag.len();
             }
-
         }
-
-        // 4 bytes for next_leaf_id
-        total_size += 4;
 
         total_size
     }
@@ -88,11 +83,7 @@ impl EventLeafNode {
                 // Serialize tag bytes
                 result.extend_from_slice(tag.as_bytes());
             }
-
         }
-
-        // Serialize the next_leaf_id (4 bytes)
-        result.extend_from_slice(&self.next_leaf_id.0.to_le_bytes());
 
         Ok(result)
     }
@@ -245,28 +236,7 @@ impl EventLeafNode {
             });
         }
 
-        // Check if there's enough data for next_leaf_id (4 bytes)
-        if offset + 4 > slice.len() {
-            return Err(LmdbError::DeserializationError(
-                "Unexpected end of data while reading next_leaf_id".to_string(),
-            ));
-        }
-
-        // Extract next_leaf_id (4 bytes)
-        let next_leaf_id = u32::from_le_bytes([
-            slice[offset],
-            slice[offset + 1],
-            slice[offset + 2],
-            slice[offset + 3],
-        ]);
-
-        let next_leaf_id = PageID(next_leaf_id);
-
-        Ok(EventLeafNode {
-            keys,
-            values,
-            next_leaf_id,
-        })
+        Ok(EventLeafNode { keys, values })
     }
 
     pub fn pop_last_key_and_value(&mut self) -> mvcc_common::Result<(Position, EventRecord)> {
@@ -412,15 +382,15 @@ impl EventInternalNode {
         self.child_ids.push(promoted_page_id);
         Ok(())
     }
-    pub(crate) fn split_off(&mut self) -> mvcc_common::Result<(Position, Vec<Position>, Vec<PageID>)> {
+    pub fn split_off(
+        &mut self,
+    ) -> mvcc_common::Result<(Position, Vec<Position>, Vec<PageID>)> {
         let middle_idx = self.keys.len() - 2;
         let promoted_key = self.keys.remove(middle_idx);
         let new_keys = self.keys.split_off(middle_idx);
         let new_child_ids = self.child_ids.split_off(middle_idx + 1);
         Ok((promoted_key, new_keys, new_child_ids))
     }
-
-
 }
 
 #[cfg(test)]
@@ -491,7 +461,6 @@ mod tests {
                     tags: vec!["tag8".to_string(), "tag9".to_string()],
                 },
             ],
-            next_leaf_id: PageID(500),
         };
 
         // Serialize the EventLeafNode
@@ -544,8 +513,5 @@ mod tests {
             vec!["tag8".to_string(), "tag9".to_string()],
             deserialized.values[2].tags
         );
-
-        // Check next_leaf_id
-        assert_eq!(PageID(500), deserialized.next_leaf_id);
     }
 }

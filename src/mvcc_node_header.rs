@@ -110,8 +110,14 @@ mod tests {
         // Verify that the deserialized node matches the original
         assert_eq!(header_node.tsn, deserialized.tsn);
         assert_eq!(header_node.next_page_id, deserialized.next_page_id);
-        assert_eq!(header_node.free_page_tree_root_id, deserialized.free_page_tree_root_id);
-        assert_eq!(header_node.event_tree_root_id, deserialized.event_tree_root_id);
+        assert_eq!(
+            header_node.free_page_tree_root_id,
+            deserialized.free_page_tree_root_id
+        );
+        assert_eq!(
+            header_node.event_tree_root_id,
+            deserialized.event_tree_root_id
+        );
         assert_eq!(header_node.next_position, deserialized.next_position);
     }
 }

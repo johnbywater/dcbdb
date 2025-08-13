@@ -81,9 +81,23 @@ mod tests {
         match &page.node {
             Node::EventLeaf(node) => {
                 assert_eq!(vec![position], node.keys);
-                assert_eq!(vec![record], node.values);
+                assert_eq!(vec![record.clone()], node.values);
             }
             _ => panic!("Expected EventLeaf node"),
+        }
+
+        // Commit the writer and verify persistence
+        db.commit(&mut writer).unwrap();
+
+        // Read back the latest header and the persisted root event leaf page
+        let (_header_page_id, header) = db.get_latest_header().unwrap();
+        let persisted_page = db.read_page(header.event_tree_root_id).unwrap();
+        match &persisted_page.node {
+            Node::EventLeaf(node) => {
+                assert_eq!(vec![position], node.keys);
+                assert_eq!(vec![record], node.values);
+            }
+            _ => panic!("Expected EventLeaf node after commit"),
         }
     }
 }

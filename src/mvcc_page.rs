@@ -90,8 +90,8 @@ mod tests {
         let node = Node::Header(HeaderNode {
             tsn: Tsn(42),
             next_page_id: PageID(123),
-            freetree_root_id: PageID(456),
-            position_root_id: PageID(789),
+            free_page_tree_root_id: PageID(456),
+            event_tree_root_id: PageID(789),
             next_position: Position(1234),
         });
 

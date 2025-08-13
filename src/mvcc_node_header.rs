@@ -7,8 +7,8 @@ use crate::mvcc_node_event::Position;
 pub struct HeaderNode {
     pub tsn: Tsn,
     pub next_page_id: PageID,
-    pub freetree_root_id: PageID,
-    pub position_root_id: PageID,
+    pub free_page_tree_root_id: PageID,
+    pub event_tree_root_id: PageID,
     pub next_position: Position,
 }
 
@@ -22,8 +22,8 @@ impl HeaderNode {
         let mut result = Vec::with_capacity(24);
         result.extend_from_slice(&self.tsn.0.to_le_bytes());
         result.extend_from_slice(&self.next_page_id.0.to_le_bytes());
-        result.extend_from_slice(&self.freetree_root_id.0.to_le_bytes());
-        result.extend_from_slice(&self.position_root_id.0.to_le_bytes());
+        result.extend_from_slice(&self.free_page_tree_root_id.0.to_le_bytes());
+        result.extend_from_slice(&self.event_tree_root_id.0.to_le_bytes());
         result.extend_from_slice(&self.next_position.0.to_le_bytes());
         result
     }
@@ -60,8 +60,8 @@ impl HeaderNode {
         Ok(HeaderNode {
             tsn: Tsn(tsn),
             next_page_id: PageID(next_page_id),
-            freetree_root_id: PageID(freetree_root_id),
-            position_root_id: PageID(position_root_id),
+            free_page_tree_root_id: PageID(freetree_root_id),
+            event_tree_root_id: PageID(position_root_id),
             next_position: Position(next_position),
         })
     }
@@ -76,8 +76,8 @@ mod tests {
         let header_node = HeaderNode {
             tsn: Tsn(42),
             next_page_id: PageID(123),
-            freetree_root_id: PageID(456),
-            position_root_id: PageID(789),
+            free_page_tree_root_id: PageID(456),
+            event_tree_root_id: PageID(789),
             next_position: Position(9876543210),
         };
 
@@ -110,8 +110,8 @@ mod tests {
         // Verify that the deserialized node matches the original
         assert_eq!(header_node.tsn, deserialized.tsn);
         assert_eq!(header_node.next_page_id, deserialized.next_page_id);
-        assert_eq!(header_node.freetree_root_id, deserialized.freetree_root_id);
-        assert_eq!(header_node.position_root_id, deserialized.position_root_id);
+        assert_eq!(header_node.free_page_tree_root_id, deserialized.free_page_tree_root_id);
+        assert_eq!(header_node.event_tree_root_id, deserialized.event_tree_root_id);
         assert_eq!(header_node.next_position, deserialized.next_position);
     }
 }

@@ -1,5 +1,5 @@
-use crate::mvcc_common;
 use crate::mvcc_common::LmdbError;
+use crate::mvcc_common::Result;
 use crate::mvcc_common::PageID;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -46,7 +46,7 @@ impl EventLeafNode {
         total_size
     }
 
-    pub fn serialize(&self) -> mvcc_common::Result<Vec<u8>> {
+    pub fn serialize(&self) -> Result<Vec<u8>> {
         let total_size = self.calc_serialized_size();
         let mut result = Vec::with_capacity(total_size);
 
@@ -88,7 +88,7 @@ impl EventLeafNode {
         Ok(result)
     }
 
-    pub fn from_slice(slice: &[u8]) -> mvcc_common::Result<Self> {
+    pub fn from_slice(slice: &[u8]) -> Result<Self> {
         // Check if the slice has at least 2 bytes for keys_len
         if slice.len() < 2 {
             return Err(LmdbError::DeserializationError(format!(
@@ -239,7 +239,7 @@ impl EventLeafNode {
         Ok(EventLeafNode { keys, values })
     }
 
-    pub fn pop_last_key_and_value(&mut self) -> mvcc_common::Result<(Position, EventRecord)> {
+    pub fn pop_last_key_and_value(&mut self) -> Result<(Position, EventRecord)> {
         let last_key = self.keys.pop().unwrap();
         let last_value = self.values.pop().unwrap();
         Ok((last_key, last_value))
@@ -266,7 +266,7 @@ impl EventInternalNode {
         total_size
     }
 
-    pub fn serialize(&self) -> mvcc_common::Result<Vec<u8>> {
+    pub fn serialize(&self) -> Result<Vec<u8>> {
         let total_size = self.calc_serialized_size();
         let mut result = Vec::with_capacity(total_size);
 
@@ -287,7 +287,7 @@ impl EventInternalNode {
         Ok(result)
     }
 
-    pub fn from_slice(slice: &[u8]) -> mvcc_common::Result<Self> {
+    pub fn from_slice(slice: &[u8]) -> Result<Self> {
         // Check if the slice has at least 2 bytes for keys_len
         if slice.len() < 2 {
             return Err(LmdbError::DeserializationError(format!(
@@ -361,7 +361,7 @@ impl EventInternalNode {
         &mut self,
         old_id: PageID,
         new_id: PageID,
-    ) -> mvcc_common::Result<()> {
+    ) -> Result<()> {
         // Replace the last child ID.
         let last_idx = self.child_ids.len() - 1;
         if self.child_ids[last_idx] == old_id {
@@ -377,14 +377,12 @@ impl EventInternalNode {
         &mut self,
         promoted_key: Position,
         promoted_page_id: PageID,
-    ) -> mvcc_common::Result<()> {
+    ) -> Result<()> {
         self.keys.push(promoted_key);
         self.child_ids.push(promoted_page_id);
         Ok(())
     }
-    pub fn split_off(
-        &mut self,
-    ) -> mvcc_common::Result<(Position, Vec<Position>, Vec<PageID>)> {
+    pub fn split_off(&mut self) -> Result<(Position, Vec<Position>, Vec<PageID>)> {
         let middle_idx = self.keys.len() - 2;
         let promoted_key = self.keys.remove(middle_idx);
         let new_keys = self.keys.split_off(middle_idx);

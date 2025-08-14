@@ -272,12 +272,14 @@ pub struct EventIterator<'a> {
     pub reader: LmdbReader,
     pub stack: Vec<(PageID, usize)>,
     pub page_cache: HashMap<PageID, Page>,
+    pub after: Position,
 }
 
 impl<'a> EventIterator<'a> {
-    pub fn new(db: &'a Lmdb, reader: LmdbReader) -> Self {
+    pub fn new(db: &'a Lmdb, reader: LmdbReader, after: Option<Position>) -> Self {
         let next_position = (reader.event_tree_root_id, 0);
-        Self { db, reader, stack: vec![next_position], page_cache: HashMap::new() }
+        let after = after.unwrap_or(Position(0));
+        Self { db, reader, stack: vec![next_position], page_cache: HashMap::new(), after }
     }
 
     pub fn next_batch(&mut self, batch_size: usize) -> Result<Vec<(Position, EventRecord)>> {
@@ -333,7 +335,11 @@ impl<'a> EventIterator<'a> {
                             }
                             let pos = leaf.keys[idx];
                             let rec = leaf.values[idx].clone();
-                            emit = Some((pos, rec));
+                            if pos > self.after {
+                                emit = Some((pos, rec));
+                            } else {
+                                emit = None;
+                            }
                         } else {
                             // Leaf exhausted
                             remove_page = true;
@@ -816,7 +822,7 @@ mod tests {
         // Start a reader
         let reader = db.reader().unwrap();
 
-        let mut events_iterator = EventIterator::new(&db, reader);
+        let mut events_iterator = EventIterator::new(&db, reader, None);
 
         // Ensure the reader's tsn is registered while the iterator is alive
         let reader_tsn = events_iterator.reader.tsn;
@@ -858,6 +864,100 @@ mod tests {
             let map = db.reader_tsns.lock().unwrap();
             assert!(map.values().all(|&tsn| tsn != reader_tsn), "reader_tsn should be removed after EventIterator is dropped");
             assert_eq!(0, map.len());
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_scan_events_after() {
+        // Setup a temporary database
+        let (_temp_dir, mut db) = construct_db(512);
+
+        let mut has_split_internal = false;
+        let mut appended: Vec<(Position, EventRecord)> = Vec::new();
+
+        // Insert events until we split a root internal node
+        while !has_split_internal {
+            // Start a writer
+            let mut writer = db.writer().unwrap();
+
+            // Issue a new position and create a record
+            let position = writer.issue_position();
+            let record = EventRecord {
+                event_type: "UserCreated".to_string(),
+                data: (0..8).map(|_| random::<u8>()).collect(),
+                tags: vec!["users".to_string(), "creation".to_string()],
+            };
+            appended.push((position, record.clone()));
+
+            // Append the event
+            append_event(&db, &mut writer, record, position).unwrap();
+
+            // Check if the root is an internal node
+            let root_page = writer.dirty.get(&writer.event_tree_root_id).unwrap();
+            match &root_page.node {
+                Node::EventInternal(root_node) => {
+                    // Check if the first child is an internal node
+                    if !root_node.child_ids.is_empty() {
+                        let child_id = root_node.child_ids[0];
+                        if let Some(child_page) = writer.dirty.get(&child_id) {
+                            match &child_page.node {
+                                Node::EventInternal(_) => {
+                                    has_split_internal = true;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            db.commit(&mut writer).unwrap();
+        }
+
+        // Choose an 'after' value halfway through appended events
+        let mid = appended.len() / 2;
+        let after_pos = appended[mid].0;
+
+        // Start a reader
+        let reader = db.reader().unwrap();
+        let mut events_iterator = EventIterator::new(&db, reader, Some(after_pos));
+
+        // Ensure the reader's tsn is registered while the iterator is alive
+        let reader_tsn = events_iterator.reader.tsn;
+        {
+            let map = db.reader_tsns.lock().unwrap();
+            assert!(map.values().any(|&tsn| tsn == reader_tsn), "reader_tsn should be registered while EventIterator is alive");
+        }
+
+        // Progressively iterate over events using batches
+        let mut scanned: Vec<(Position, EventRecord)> = Vec::new();
+        loop {
+            let batch = events_iterator.next_batch(3).unwrap();
+            if batch.is_empty() { break; }
+            scanned.extend(batch);
+
+            // The reader should remain registered throughout iteration
+            let map = db.reader_tsns.lock().unwrap();
+            assert!(map.values().any(|&tsn| tsn == reader_tsn), "reader_tsn should remain registered during iteration");
+        }
+
+        // Expected are strictly after the chosen 'after' position
+        let expected: Vec<(Position, EventRecord)> = appended.into_iter().skip(mid + 1).collect();
+        assert_eq!(expected.len(), scanned.len());
+        for (i, exp) in expected.iter().enumerate() {
+            assert_eq!(exp.0, scanned[i].0);
+            assert_eq!(exp.1, scanned[i].1);
+        }
+
+        // Ensure we did not accumulate pages in the iterator cache
+        assert!(events_iterator.page_cache.is_empty(), "EventIterator page_cache should be empty after filtered scan");
+
+        // Drop the iterator and ensure the reader tsn is removed
+        drop(events_iterator);
+        {
+            let map = db.reader_tsns.lock().unwrap();
+            assert!(map.values().all(|&tsn| tsn != reader_tsn), "reader_tsn should be removed after EventIterator is dropped");
         }
     }
 }

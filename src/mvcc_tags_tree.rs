@@ -580,6 +580,14 @@ mod tests {
             }
         }
         assert_eq!(0, copy_inserted.len());
+
+        // Persist and validate lookup_tag for each inserted tag
+        db.commit(&mut writer).unwrap();
+        let reader = db.reader().unwrap();
+        for (tag, pos) in &appended {
+            let positions = lookup_tag(&db, &reader, *tag).unwrap();
+            assert_eq!(positions, vec![*pos]);
+        }
     }
 
     #[test]
@@ -671,5 +679,12 @@ mod tests {
             }
         }
         assert_eq!(0, copy_inserted.len());
+
+        // Validate lookup_tag for each inserted tag
+        let reader = db.reader().unwrap();
+        for (tag, pos) in &appended {
+            let positions = lookup_tag(&db, &reader, *tag).unwrap();
+            assert_eq!(positions, vec![*pos]);
+        }
     }
 }

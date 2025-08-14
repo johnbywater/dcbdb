@@ -3,6 +3,7 @@ use crate::mvcc_common::{LmdbError, PageID};
 use crate::mvcc_node_event::{EventInternalNode, EventLeafNode, EventRecord, Position};
 use crate::mvcc_nodes::Node;
 use crate::mvcc_page::Page;
+use std::collections::HashMap;
 
 /// Append an event to the root event leaf page.
 ///
@@ -270,12 +271,13 @@ pub struct EventIterator<'a> {
     pub db: &'a Lmdb,
     pub reader: LmdbReader,
     pub stack: Vec<(PageID, usize)>,
+    pub page_cache: HashMap<PageID, Page>,
 }
 
 impl<'a> EventIterator<'a> {
     pub fn new(db: &'a Lmdb, reader: LmdbReader) -> Self {
         let next_position = (reader.event_tree_root_id, 0);
-        Self { db, reader, stack: vec![next_position] }
+        Self { db, reader, stack: vec![next_position], page_cache: HashMap::new() }
     }
 
     pub fn next_batch(&mut self, batch_size: usize) -> Result<Vec<(Position, EventRecord)>> {
@@ -288,9 +290,15 @@ impl<'a> EventIterator<'a> {
                 break; // traversal finished
             };
 
-            // Read the current page
-            let page = self.db.read_page(page_id)?;
-            match &page.node {
+            // Obtain the current page from cache (deserialize at most once)
+            let page_ref: &Page = if let Some(p) = self.page_cache.get(&page_id) {
+                p
+            } else {
+                let page = self.db.read_page(page_id)?;
+                self.page_cache.insert(page_id, page);
+                self.page_cache.get(&page_id).unwrap()
+            };
+            match &page_ref.node {
                 Node::EventInternal(internal) => {
                     // If there are more children to visit, push the next child and re-push this node with advanced index
                     if idx < internal.child_ids.len() {

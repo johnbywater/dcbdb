@@ -113,17 +113,22 @@ pub fn insert_position(db: &Lmdb, writer: &mut LmdbWriter, tag: TagHash, pos: Po
     // Check if leaf overflows
     if dirty_leaf_page.calc_serialized_size() > db.page_size {
         if let Node::TagsLeaf(leaf) = &mut dirty_leaf_page.node {
-            // Move the last (largest) key to a new right sibling
-            let (last_key, last_value) = leaf.pop_last_key_and_value()?;
+            // Move half of the keys and values to a new right sibling
+            let mid = leaf.keys.len() / 2;
+            let right_keys: Vec<TagHash> = leaf.keys.split_off(mid);
+            let right_values: Vec<TagsLeafValue> = leaf.values.split_off(mid);
+            let promoted_key = right_keys[0].clone();
             if verbose {
                 println!(
-                    "Split TagsLeaf {:?}, moving last key {:?}",
-                    dirty_leaf_page_id, last_key
+                    "Split TagsLeaf {:?}, moving {} keys to new right sibling; promoted key {:?}",
+                    dirty_leaf_page_id,
+                    right_keys.len(),
+                    promoted_key
                 );
             }
             let new_leaf_node = TagsLeafNode {
-                keys: vec![last_key],
-                values: vec![last_value],
+                keys: right_keys,
+                values: right_values,
             };
             let new_leaf_page_id = writer.alloc_page_id();
             let new_leaf_page = Page::new(new_leaf_page_id, Node::TagsLeaf(new_leaf_node));
@@ -143,7 +148,7 @@ pub fn insert_position(db: &Lmdb, writer: &mut LmdbWriter, tag: TagHash, pos: Po
             } else {
                 0
             };
-            split_info = Some((last_key, new_leaf_page_id, parent_child_idx));
+            split_info = Some((promoted_key, new_leaf_page_id, parent_child_idx));
         }
     }
 

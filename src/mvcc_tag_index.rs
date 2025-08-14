@@ -4,6 +4,9 @@ use crate::mvcc_common::Position;
 /// Length in bytes of the hashed tag key used in tag index leaf/internal nodes
 pub const TAG_HASH_LEN: usize = 8;
 
+/// Alias for the fixed-size tag hash
+pub type TagHash = [u8; TAG_HASH_LEN];
+
 // ========================= Tag Index (by tag-hash) =========================
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,7 +19,7 @@ pub struct TagsLeafValue {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TagsLeafNode {
-    pub keys: Vec<[u8; TAG_HASH_LEN]>,
+    pub keys: Vec<TagHash>,
     pub values: Vec<TagsLeafValue>,
 }
 
@@ -144,7 +147,7 @@ impl TagsLeafNode {
         Ok(TagsLeafNode { keys, values })
     }
 
-    pub fn pop_last_key_and_value(&mut self) -> Result<([u8; TAG_HASH_LEN], TagsLeafValue)> {
+    pub fn pop_last_key_and_value(&mut self) -> Result<(TagHash, TagsLeafValue)> {
         let last_key = self.keys.pop().ok_or_else(|| {
             LmdbError::DeserializationError("No keys to pop".to_string())
         })?;
@@ -157,7 +160,7 @@ impl TagsLeafNode {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TagsInternalNode {
-    pub keys: Vec<[u8; TAG_HASH_LEN]>,
+    pub keys: Vec<TagHash>,
     pub child_ids: Vec<PageID>,
 }
 
@@ -248,7 +251,7 @@ impl TagsInternalNode {
 
     pub fn append_promoted_key_and_page_id(
         &mut self,
-        promoted_key: [u8; TAG_HASH_LEN],
+        promoted_key: TagHash,
         promoted_page_id: PageID,
     ) -> Result<()> {
         self.keys.push(promoted_key);
@@ -258,7 +261,7 @@ impl TagsInternalNode {
 
     pub(crate) fn split_off(
         &mut self,
-    ) -> Result<([u8; TAG_HASH_LEN], Vec<[u8; TAG_HASH_LEN]>, Vec<PageID>)> {
+    ) -> Result<(TagHash, Vec<TagHash>, Vec<PageID>)> {
         // Follow the same split approach as other MVCC internal nodes
         let middle_idx = self.keys.len() - 2;
         let promoted_key = self.keys.remove(middle_idx);

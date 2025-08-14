@@ -290,40 +290,74 @@ impl<'a> EventIterator<'a> {
                 break; // traversal finished
             };
 
-            // Obtain the current page from cache (deserialize at most once)
-            let page_ref: &Page = if let Some(p) = self.page_cache.get(&page_id) {
-                p
-            } else {
-                let page = self.db.read_page(page_id)?;
-                self.page_cache.insert(page_id, page);
-                self.page_cache.get(&page_id).unwrap()
-            };
-            match &page_ref.node {
-                Node::EventInternal(internal) => {
-                    // If there are more children to visit, push the next child and re-push this node with advanced index
-                    if idx < internal.child_ids.len() {
-                        // Re-push this internal node with the next child index to visit later
-                        self.stack.push((page_id, idx + 1));
-                        // Push the child to visit now
-                        let child_id = internal.child_ids[idx];
-                        self.stack.push((child_id, 0));
+            // Compute actions under a scoped immutable borrow, then mutate cache/stack afterwards.
+            let mut remove_page = false;
+            let mut push_revisit: Option<(PageID, usize)> = None;
+            let mut push_child: Option<PageID> = None;
+            let mut emit: Option<(Position, EventRecord)> = None;
+
+            {
+                // Obtain the current page from cache (deserialize at most once)
+                let page_ref: &Page = if let Some(p) = self.page_cache.get(&page_id) {
+                    p
+                } else {
+                    let page = self.db.read_page(page_id)?;
+                    self.page_cache.insert(page_id, page);
+                    self.page_cache.get(&page_id).unwrap()
+                };
+
+                match &page_ref.node {
+                    Node::EventInternal(internal) => {
+                        if idx < internal.child_ids.len() {
+                            let is_last_child = idx + 1 >= internal.child_ids.len();
+                            if !is_last_child {
+                                push_revisit = Some((page_id, idx + 1));
+                            } else {
+                                // Last child: we won't need this internal again
+                                remove_page = true;
+                            }
+                            push_child = Some(internal.child_ids[idx]);
+                        } else {
+                            // All children visited
+                            remove_page = true;
+                        }
                     }
-                    // else: all children visited, nothing to do (node discarded)
-                }
-                Node::EventLeaf(leaf) => {
-                    if idx < leaf.keys.len() {
-                        // Re-push this leaf with advanced index for next time
-                        self.stack.push((page_id, idx + 1));
-                        // Emit current record
-                        let pos = leaf.keys[idx];
-                        let rec = leaf.values[idx].clone();
-                        result.push((pos, rec));
+                    Node::EventLeaf(leaf) => {
+                        if idx < leaf.keys.len() {
+                            let is_last_item = idx + 1 >= leaf.keys.len();
+                            if !is_last_item {
+                                push_revisit = Some((page_id, idx + 1));
+                            } else {
+                                // Last item from this leaf: we can drop it
+                                remove_page = true;
+                            }
+                            let pos = leaf.keys[idx];
+                            let rec = leaf.values[idx].clone();
+                            emit = Some((pos, rec));
+                        } else {
+                            // Leaf exhausted
+                            remove_page = true;
+                        }
                     }
-                    // else: leaf exhausted, do not re-push
+                    _ => {
+                        return Err(LmdbError::DatabaseCorrupted("Expected EventInternal or EventLeaf node in event tree".to_string()));
+                    }
                 }
-                _ => {
-                    return Err(LmdbError::DatabaseCorrupted("Expected EventInternal or EventLeaf node in event tree".to_string()));
-                }
+            }
+
+            // Mutations after the borrow has ended
+            if let Some(revisit) = push_revisit {
+                // Revisit must be pushed first so that the child is processed next (LIFO)
+                self.stack.push(revisit);
+            }
+            if let Some(child_id) = push_child {
+                self.stack.push((child_id, 0));
+            }
+            if let Some((pos, rec)) = emit {
+                result.push((pos, rec));
+            }
+            if remove_page {
+                self.page_cache.remove(&page_id);
             }
         }
         Ok(result)
@@ -797,6 +831,9 @@ mod tests {
             assert_eq!(expected.0, scanned[i].0);
             assert_eq!(expected.1, scanned[i].1);
         }
+
+        // Ensure we did not accumulate pages in the iterator cache
+        assert!(events_iterator.page_cache.is_empty(), "EventIterator page_cache should be empty after full scan");
 
     }
 }

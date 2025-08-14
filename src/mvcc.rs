@@ -93,7 +93,7 @@ impl Lmdb {
                 next_page_id,
                 free_page_tree_root_id: freetree_root_id,
                 event_tree_root_id: position_root_id,
-                next_position: Position(0),
+                next_position: Position(1),
             };
 
             let header_page0 = Page::new(header_page_id0, Node::Header(header_node0.clone()));

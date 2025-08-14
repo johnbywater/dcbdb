@@ -50,6 +50,7 @@ pub mod mvcc_nodes;
 mod mvcc_page;
 mod mvcc_pager;
 mod mvcc_node_tags;
+mod mvcc_tags_tree;
 
 #[cfg(test)]
 mod tests {

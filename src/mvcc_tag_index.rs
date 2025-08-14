@@ -1,5 +1,4 @@
-use crate::mvcc_common::{LmdbError, PageID, Result};
-use crate::mvcc_common::Position;
+use crate::mvcc_common::{LmdbError, PageID, Result, Position};
 
 /// Length in bytes of the hashed tag key used in tag index leaf/internal nodes
 pub const TAG_HASH_LEN: usize = 8;

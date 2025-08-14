@@ -295,7 +295,7 @@ impl<'a> EventIterator<'a> {
             // Compute actions under a scoped immutable borrow, then mutate cache/stack afterwards.
             let mut remove_page = false;
             let mut push_revisit: Option<(PageID, usize)> = None;
-            let mut push_child: Option<PageID> = None;
+            let mut push_child: Option<(PageID, usize)> = None; // (child_id, starting_idx)
             let mut emit: Option<(Position, EventRecord)> = None;
 
             {
@@ -310,38 +310,63 @@ impl<'a> EventIterator<'a> {
 
                 match &page_ref.node {
                     Node::EventInternal(internal) => {
-                        if idx < internal.child_ids.len() {
-                            let is_last_child = idx + 1 >= internal.child_ids.len();
+                        // Determine the starting child index. If this is the first time we visit this
+                        // internal node in the current traversal path (idx == 0), perform a binary
+                        // search on the separator keys to skip children whose maxima are <= self.after.
+                        let mut start_idx = idx;
+                        if idx == 0 && !internal.keys.is_empty() {
+                            // Upper bound: first index where key > after
+                            start_idx = match internal.keys.binary_search(&self.after) {
+                                Ok(i) => i + 1,
+                                Err(i) => i,
+                            };
+                        }
+
+                        if start_idx < internal.child_ids.len() {
+                            let is_last_child = start_idx + 1 >= internal.child_ids.len();
                             if !is_last_child {
-                                push_revisit = Some((page_id, idx + 1));
+                                push_revisit = Some((page_id, start_idx + 1));
                             } else {
                                 // Last child: we won't need this internal again
                                 remove_page = true;
                             }
-                            push_child = Some(internal.child_ids[idx]);
+                            // Push the chosen child; for internal children we always start at 0
+                            push_child = Some((internal.child_ids[start_idx], 0));
                         } else {
-                            // All children visited
+                            // All relevant children visited (or none relevant)
                             remove_page = true;
                         }
                     }
                     Node::EventLeaf(leaf) => {
-                        if idx < leaf.keys.len() {
-                            let is_last_item = idx + 1 >= leaf.keys.len();
+                        // Determine the starting item index. If first visit to this leaf (idx == 0),
+                        // perform an upper-bound binary search to find the first key strictly greater
+                        // than self.after.
+                        let mut item_idx = idx;
+                        if idx == 0 {
+                            item_idx = match leaf.keys.binary_search(&self.after) {
+                                Ok(i) => i + 1, // skip equal keys; we need strictly greater
+                                Err(i) => i,
+                            };
+                        }
+
+                        if item_idx < leaf.keys.len() {
+                            let is_last_item = item_idx + 1 >= leaf.keys.len();
                             if !is_last_item {
-                                push_revisit = Some((page_id, idx + 1));
+                                push_revisit = Some((page_id, item_idx + 1));
                             } else {
                                 // Last item from this leaf: we can drop it
                                 remove_page = true;
                             }
-                            let pos = leaf.keys[idx];
-                            let rec = leaf.values[idx].clone();
+                            let pos = leaf.keys[item_idx];
+                            let rec = leaf.values[item_idx].clone();
                             if pos > self.after {
                                 emit = Some((pos, rec));
                             } else {
+                                // pos <= after (can happen when revisiting or empty upper bound), skip emit
                                 emit = None;
                             }
                         } else {
-                            // Leaf exhausted
+                            // Leaf exhausted or no key greater than 'after' in this leaf
                             remove_page = true;
                         }
                     }
@@ -356,8 +381,8 @@ impl<'a> EventIterator<'a> {
                 // Revisit must be pushed first so that the child is processed next (LIFO)
                 self.stack.push(revisit);
             }
-            if let Some(child_id) = push_child {
-                self.stack.push((child_id, 0));
+            if let Some((child_id, child_start_idx)) = push_child {
+                self.stack.push((child_id, child_start_idx));
             }
             if let Some((pos, rec)) = emit {
                 result.push((pos, rec));
@@ -377,7 +402,6 @@ mod tests {
     use rand::random;
     use serial_test::serial;
     use tempfile::tempdir;
-    use crate::mvcc::LmdbReader;
 
     static VERBOSE: bool = false;
 
@@ -817,7 +841,7 @@ mod tests {
         }
 
         // Check keys and values of all pages
-        let mut copy_inserted = appended.clone();
+        let copy_inserted = appended.clone();
 
         // Start a reader
         let reader = db.reader().unwrap();

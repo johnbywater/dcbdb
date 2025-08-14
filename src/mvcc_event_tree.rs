@@ -818,12 +818,23 @@ mod tests {
 
         let mut events_iterator = EventIterator::new(&db, reader);
 
+        // Ensure the reader's tsn is registered while the iterator is alive
+        let reader_tsn = events_iterator.reader.tsn;
+        {
+            let map = db.reader_tsns.lock().unwrap();
+            assert!(map.values().any(|&tsn| tsn == reader_tsn), "reader_tsn should be registered while EventIterator is alive");
+        }
+
         // Progressively iterate over events using batches
         let mut scanned: Vec<(Position, EventRecord)> = Vec::new();
         loop {
             let batch = events_iterator.next_batch(3).unwrap();
             if batch.is_empty() { break; }
             scanned.extend(batch);
+
+            // The reader should remain registered throughout iteration
+            let map = db.reader_tsns.lock().unwrap();
+            assert!(map.values().any(|&tsn| tsn == reader_tsn), "reader_tsn should remain registered during iteration");
         }
 
         assert_eq!(copy_inserted.len(), scanned.len());
@@ -835,5 +846,18 @@ mod tests {
         // Ensure we did not accumulate pages in the iterator cache
         assert!(events_iterator.page_cache.is_empty(), "EventIterator page_cache should be empty after full scan");
 
+        // While iterator is still alive, the reader should still be registered
+        {
+            let map = db.reader_tsns.lock().unwrap();
+            assert!(map.values().any(|&tsn| tsn == reader_tsn), "reader_tsn should remain registered until iterator is dropped");
+        }
+
+        // Drop the iterator and ensure the reader tsn is removed
+        drop(events_iterator);
+        {
+            let map = db.reader_tsns.lock().unwrap();
+            assert!(map.values().all(|&tsn| tsn != reader_tsn), "reader_tsn should be removed after EventIterator is dropped");
+            assert_eq!(0, map.len());
+        }
     }
 }

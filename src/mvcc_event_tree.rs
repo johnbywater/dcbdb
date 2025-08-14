@@ -277,6 +277,49 @@ impl<'a> EventIterator<'a> {
         let next_position = (reader.event_tree_root_id, 0);
         Self { db, reader, stack: vec![next_position] }
     }
+
+    pub fn next_batch(&mut self, batch_size: usize) -> Result<Vec<(Position, EventRecord)>> {
+        let mut result: Vec<(Position, EventRecord)> = Vec::with_capacity(batch_size);
+        if batch_size == 0 {
+            return Ok(result);
+        }
+        while result.len() < batch_size {
+            let Some((page_id, idx)) = self.stack.pop() else {
+                break; // traversal finished
+            };
+
+            // Read the current page
+            let page = self.db.read_page(page_id)?;
+            match &page.node {
+                Node::EventInternal(internal) => {
+                    // If there are more children to visit, push the next child and re-push this node with advanced index
+                    if idx < internal.child_ids.len() {
+                        // Re-push this internal node with the next child index to visit later
+                        self.stack.push((page_id, idx + 1));
+                        // Push the child to visit now
+                        let child_id = internal.child_ids[idx];
+                        self.stack.push((child_id, 0));
+                    }
+                    // else: all children visited, nothing to do (node discarded)
+                }
+                Node::EventLeaf(leaf) => {
+                    if idx < leaf.keys.len() {
+                        // Re-push this leaf with advanced index for next time
+                        self.stack.push((page_id, idx + 1));
+                        // Emit current record
+                        let pos = leaf.keys[idx];
+                        let rec = leaf.values[idx].clone();
+                        result.push((pos, rec));
+                    }
+                    // else: leaf exhausted, do not re-push
+                }
+                _ => {
+                    return Err(LmdbError::DatabaseCorrupted("Expected EventInternal or EventLeaf node in event tree".to_string()));
+                }
+            }
+        }
+        Ok(result)
+    }
 }
 
 #[cfg(test)]
@@ -733,7 +776,19 @@ mod tests {
 
         let mut events_iterator = EventIterator::new(&db, reader);
 
+        // Progressively iterate over events using batches
+        let mut scanned: Vec<(Position, EventRecord)> = Vec::new();
+        loop {
+            let batch = events_iterator.next_batch(3).unwrap();
+            if batch.is_empty() { break; }
+            scanned.extend(batch);
+        }
 
+        assert_eq!(copy_inserted.len(), scanned.len());
+        for (i, expected) in copy_inserted.iter().enumerate() {
+            assert_eq!(expected.0, scanned[i].0);
+            assert_eq!(expected.1, scanned[i].1);
+        }
 
     }
 }

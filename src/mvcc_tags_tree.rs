@@ -581,4 +581,95 @@ mod tests {
         }
         assert_eq!(0, copy_inserted.len());
     }
+
+    #[test]
+    fn test_insert_tags_and_positions_until_split_internal_many_writers() {
+        // Setup a temporary database
+        let (_temp_dir, mut db) = construct_db(512);
+
+        let mut has_split_internal = false;
+        let mut appended: Vec<(TagHash, Position)> = Vec::new();
+
+        // Insert tag-position pairs until we split a root internal node
+        let mut n: u64 = 0;
+        while !has_split_internal {
+            // Start a writer
+            let mut writer = db.writer().unwrap();
+
+            // Issue a new position and create a deterministic increasing tag
+            let position = writer.issue_position();
+            let tag = th(n);
+            n += 1;
+            appended.push((tag, position));
+
+            // Insert the pair into the tags tree
+            insert_position(&db, &mut writer, tag, position).unwrap();
+
+            // Check if the root is an internal node and its first child is also internal
+            let root_page = writer.dirty.get(&writer.tags_tree_root_id).unwrap();
+            match &root_page.node {
+                Node::TagsInternal(root_node) => {
+                    if !root_node.child_ids.is_empty() {
+                        let child_id = root_node.child_ids[0];
+                        if let Some(child_page) = writer.dirty.get(&child_id) {
+                            match &child_page.node {
+                                Node::TagsInternal(_) => {
+                                    has_split_internal = true;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            db.commit(&mut writer).unwrap();
+        }
+
+        // Check keys and values of all pages
+        let mut copy_inserted = appended.clone();
+        // Sort expected values by TagHash lexicographic order (array cmp)
+        copy_inserted.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // Start a writer to access the latest root id
+        let writer = db.writer().unwrap();
+
+        // Get the root node (persisted)
+        let root_page = db.read_page(writer.tags_tree_root_id).unwrap();
+        let root_node = match &root_page.node {
+            Node::TagsInternal(node) => node,
+            _ => panic!("Expected TagsInternal node"),
+        };
+
+        // Check each child of the root
+        for &child_id in root_node.child_ids.iter() {
+            let child_page = db.read_page(child_id).unwrap();
+            assert_eq!(child_id, child_page.page_id);
+
+            let child_node = match &child_page.node {
+                Node::TagsInternal(node) => node,
+                _ => panic!("Expected TagsInternal node"),
+            };
+
+            for &grand_child_id in child_node.child_ids.iter() {
+                let grand_child_page = db.read_page(grand_child_id).unwrap();
+                assert_eq!(grand_child_id, grand_child_page.page_id);
+
+                let grand_child_node = match &grand_child_page.node {
+                    Node::TagsLeaf(node) => node,
+                    _ => panic!("Expected TagsLeaf node"),
+                };
+
+                // Check each key and value in the leaf
+                for (k, &key) in grand_child_node.keys.iter().enumerate() {
+                    let val = &grand_child_node.values[k];
+                    let (appended_tag, appended_pos) = copy_inserted.remove(0);
+                    assert_eq!(appended_tag, key);
+                    assert_eq!(val.positions.len(), 1);
+                    assert_eq!(val.positions[0], appended_pos);
+                }
+            }
+        }
+        assert_eq!(0, copy_inserted.len());
+    }
 }

@@ -103,7 +103,7 @@ pub fn insert_position(db: &Lmdb, writer: &mut LmdbWriter, tag: TagHash, pos: Po
     }
 
     // Track split information as (promoted_key, new_page_id, parent_child_idx_to_insert_after)
-    let mut split_info: Option<(TagHash, PageID, usize)> = None;
+    let mut split_info: Option<(TagHash, PageID)> = None;
 
     // Check if leaf overflows
     if dirty_leaf_page.calc_serialized_size() > db.page_size {
@@ -137,13 +137,7 @@ pub fn insert_position(db: &Lmdb, writer: &mut LmdbWriter, tag: TagHash, pos: Po
             }
             writer.insert_dirty(new_leaf_page)?;
 
-            // Determine where to insert in parent: to the right of the leaf we came from
-            let parent_child_idx = if let Some((_, child_idx)) = stack.last().cloned() {
-                child_idx
-            } else {
-                0
-            };
-            split_info = Some((promoted_key, new_leaf_page_id, parent_child_idx));
+            split_info = Some((promoted_key, new_leaf_page_id));
         }
     }
 
@@ -172,14 +166,6 @@ pub fn insert_position(db: &Lmdb, writer: &mut LmdbWriter, tag: TagHash, pos: Po
                             target_idx, old_id, new_id, dirty_parent_page_id
                         );
                     }
-                } else if let Some(found) = internal.child_ids.iter().position(|&cid| cid == old_id) {
-                    internal.child_ids[found] = new_id;
-                    if verbose {
-                        println!(
-                            "Replaced child by search at idx {}: {:?} -> {:?} in {:?}",
-                            found, old_id, new_id, dirty_parent_page_id
-                        );
-                    }
                 } else {
                     return Err(LmdbError::DatabaseCorrupted(
                         "Parent did not contain expected child id".to_string(),
@@ -195,13 +181,10 @@ pub fn insert_position(db: &Lmdb, writer: &mut LmdbWriter, tag: TagHash, pos: Po
         }
 
         // Then, apply promoted split from below, if any
-        if let Some((promoted_key, new_child_id, child_idx_from_below)) = split_info.take() {
+        if let Some((promoted_key, new_child_id)) = split_info.take() {
             if let Node::TagsInternal(internal) = &mut parent_page.node {
-                let insert_key_idx = child_idx_from_below;
-                if child_idx_from_below != parent_child_idx {
-                    println!("child_idx_from_below != parent_child_idx, this should not happen ");
-                }
-                let insert_child_idx = child_idx_from_below + 1;
+                let insert_key_idx = parent_child_idx;
+                let insert_child_idx = parent_child_idx + 1;
                 internal.keys.insert(insert_key_idx, promoted_key);
                 internal.child_ids.insert(insert_child_idx, new_child_id);
                 if verbose {
@@ -239,7 +222,7 @@ pub fn insert_position(db: &Lmdb, writer: &mut LmdbWriter, tag: TagHash, pos: Po
                     println!("Created new TagsInternal {:?}", new_internal_id);
                 }
                 writer.insert_dirty(new_internal_page)?;
-                split_info = Some((promote_up, new_internal_id, parent_child_idx));
+                split_info = Some((promote_up, new_internal_id));
             } else {
                 return Err(LmdbError::DatabaseCorrupted(
                     "Expected TagsInternal node".to_string(),
@@ -266,7 +249,7 @@ pub fn insert_position(db: &Lmdb, writer: &mut LmdbWriter, tag: TagHash, pos: Po
     }
 
     // If we still have a split to propagate, create a new internal root
-    if let Some((promoted_key, promoted_page_id, _)) = split_info.take() {
+    if let Some((promoted_key, promoted_page_id)) = split_info.take() {
         let new_root_id = writer.alloc_page_id();
         let new_root = TagsInternalNode {
             keys: vec![promoted_key],
@@ -352,9 +335,9 @@ mod tests {
         let tag = th(10);
         let pos = writer.issue_position();
         insert_position(&db, &mut writer, tag, pos).unwrap();
-        db.commit(&mut writer);
+        db.commit(&mut writer).unwrap();
 
-        let mut writer = db.writer().unwrap();
+        let writer = db.writer().unwrap();
         // Verify by reading root page
         let page = db.read_page(writer.tags_tree_root_id).unwrap();
         match &page.node {
@@ -626,7 +609,7 @@ mod tests {
             }
             db.commit(&mut writer).unwrap();
         }
-
+        
         // Check keys and values of all pages
         let mut copy_inserted = appended.clone();
         // Sort expected values by TagHash lexicographic order (array cmp)

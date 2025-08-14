@@ -427,4 +427,73 @@ mod tests {
         let vals_none = lookup_tag(&db, &reader, th(1000)).unwrap();
         assert!(vals_none.is_empty());
     }
+
+    #[test]
+    fn test_insert_tags_and_positions_until_split_leaf_one_writer() {
+        // Setup a temporary database
+        let (_temp_dir, mut db) = construct_db(256);
+
+        // Start a writer
+        let mut writer = db.writer().unwrap();
+
+        let mut has_split_leaf = false;
+        let mut appended: Vec<(TagHash, Position)> = Vec::new();
+
+        // Insert tag-position pairs until we split a leaf
+        let mut n: u64 = 0;
+        while !has_split_leaf {
+            // Issue a new position and create a deterministic increasing tag
+            let position = writer.issue_position();
+            let tag = th(n);
+            n += 1;
+            appended.push((tag, position));
+
+            // Insert the pair into the tags tree
+            insert_position(&db, &mut writer, tag, position).unwrap();
+
+            // Check if we've split the leaf
+            let root_page = writer.dirty.get(&writer.tags_tree_root_id).unwrap();
+            match &root_page.node {
+                Node::TagsInternal(_) => {
+                    has_split_leaf = true;
+                }
+                _ => {}
+            }
+        }
+
+        // Check keys and values of all pages
+        let mut copy_inserted = appended.clone();
+
+        // Get the root node
+        let root_page = writer.dirty.get(&writer.tags_tree_root_id).unwrap();
+        let root_node = match &root_page.node {
+            Node::TagsInternal(node) => node,
+            _ => panic!("Expected TagsInternal node"),
+        };
+
+        // Check each child of the root
+        for (i, &child_id) in root_node.child_ids.iter().enumerate() {
+            let child_page = writer.dirty.get(&child_id).unwrap();
+            assert_eq!(child_id, child_page.page_id);
+
+            let child_node = match &child_page.node {
+                Node::TagsLeaf(node) => node,
+                _ => panic!("Expected TagsLeaf node"),
+            };
+
+            // Check that the keys are properly ordered
+            if i > 0 {
+                assert_eq!(root_node.keys[i - 1], child_node.keys[0]);
+            }
+
+            // Check each key and value in the child
+            for (k, &key) in child_node.keys.iter().enumerate() {
+                let val = &child_node.values[k];
+                let (appended_tag, appended_pos) = copy_inserted.remove(0);
+                assert_eq!(appended_tag, key);
+                assert_eq!(val.positions.len(), 1);
+                assert_eq!(val.positions[0], appended_pos);
+            }
+        }
+    }
 }

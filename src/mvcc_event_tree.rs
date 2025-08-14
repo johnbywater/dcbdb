@@ -269,6 +269,44 @@ pub fn append_event(
     Ok(())
 }
 
+pub fn lookup_event(db: &Lmdb, reader: &LmdbReader, position: Position) -> Result<EventRecord> {
+    let mut current_page_id: PageID = reader.event_tree_root_id;
+    loop {
+        let page = db.read_page(current_page_id)?;
+        match &page.node {
+            Node::EventInternal(internal) => {
+                // Choose child based on upper bound of position in separator keys
+                let idx = match internal.keys.binary_search(&position) {
+                    Ok(i) => i + 1,
+                    Err(i) => i,
+                };
+                if idx >= internal.child_ids.len() {
+                    return Err(LmdbError::DatabaseCorrupted(
+                        "Child index out of bounds in event tree".to_string(),
+                    ));
+                }
+                current_page_id = internal.child_ids[idx];
+            }
+            Node::EventLeaf(leaf) => {
+                match leaf.keys.binary_search(&position) {
+                    Ok(i) => return Ok(leaf.values[i].clone()),
+                    Err(_) => {
+                        return Err(LmdbError::DatabaseCorrupted(format!(
+                            "Event at position {:?} not found",
+                            position
+                        )));
+                    }
+                }
+            }
+            _ => {
+                return Err(LmdbError::DatabaseCorrupted(
+                    "Expected EventInternal or EventLeaf node in event tree".to_string(),
+                ));
+            }
+        }
+    }
+}
+
 pub struct EventIterator<'a> {
     pub db: &'a Lmdb,
     pub reader: LmdbReader,
@@ -886,6 +924,12 @@ mod tests {
         for (i, expected) in copy_inserted.iter().enumerate() {
             assert_eq!(expected.0, scanned[i].0);
             assert_eq!(expected.1, scanned[i].1);
+        }
+
+        // Additionally, validate lookup_event for each appended position using the existing reader in the iterator
+        for (pos, expected_rec) in copy_inserted.iter() {
+            let found = lookup_event(&db, &events_iterator.reader, *pos).unwrap();
+            assert_eq!(expected_rec, &found);
         }
 
         // Ensure we did not accumulate pages in the iterator cache

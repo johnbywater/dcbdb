@@ -20,6 +20,7 @@ pub struct LmdbReader {
     pub header_page_id: PageID,
     pub tsn: Tsn,
     pub event_tree_root_id: PageID,
+    pub tags_tree_root_id: PageID,
     reader_id: usize,
     reader_tsns: *const Mutex<HashMap<usize, Tsn>>,
 }
@@ -198,6 +199,7 @@ impl Lmdb {
             header_page_id,
             tsn: header_node.tsn,
             event_tree_root_id: header_node.event_tree_root_id,
+            tags_tree_root_id: header_node.tags_tree_root_id,
             reader_id,
             reader_tsns: &self.reader_tsns,
         };

@@ -1,4 +1,4 @@
-use crate::mvcc::{Lmdb, LmdbWriter, Result};
+use crate::mvcc::{Lmdb, LmdbReader, LmdbWriter, Result};
 use crate::mvcc_common::{LmdbError, PageID, Position};
 use crate::mvcc_node_tags::{TagHash, TagsInternalNode, TagsLeafNode, TagsLeafValue};
 use crate::mvcc_nodes::Node;
@@ -288,6 +288,45 @@ pub fn insert_position(db: &Lmdb, writer: &mut LmdbWriter, tag: TagHash, pos: Po
     Ok(())
 }
 
+pub fn lookup_tag(db: &Lmdb, reader: &LmdbReader, tag: TagHash) -> Result<Vec<Position>> {
+    let mut current_page_id: PageID = reader.tags_tree_root_id;
+    loop {
+        let page = db.read_page(current_page_id)?;
+        match &page.node {
+            Node::TagsInternal(internal) => {
+                let idx = match internal.keys.binary_search(&tag) {
+                    Ok(i) => i + 1,
+                    Err(i) => i,
+                };
+                if idx >= internal.child_ids.len() {
+                    return Err(LmdbError::DatabaseCorrupted(
+                        "Child index out of bounds in tags tree".to_string(),
+                    ));
+                }
+                current_page_id = internal.child_ids[idx];
+            }
+            Node::TagsLeaf(leaf) => match leaf.keys.binary_search(&tag) {
+                Ok(i) => {
+                    let val = &leaf.values[i];
+                    if val.root_id == PageID(0) {
+                        return Ok(val.positions.clone());
+                    } else {
+                        return Err(LmdbError::DatabaseCorrupted(
+                            "Per-tag subtree not implemented".to_string(),
+                        ));
+                    }
+                }
+                Err(_) => return Ok(Vec::new()),
+            },
+            _ => {
+                return Err(LmdbError::DatabaseCorrupted(
+                    "Expected TagsInternal or TagsLeaf node in tags tree".to_string(),
+                ));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -352,5 +391,35 @@ mod tests {
             }
             _ => panic!("Expected TagsLeaf at root"),
         }
+
+        // Commit and verify lookup_tag on some keys
+        db.commit(&mut writer).unwrap();
+        let reader = db.reader().unwrap();
+        let res_10 = lookup_tag(&db, &reader, th(10)).unwrap();
+        assert!(!res_10.is_empty());
+        let res_missing = lookup_tag(&db, &reader, th(999)).unwrap();
+        assert!(res_missing.is_empty());
+    }
+
+    #[test]
+    fn test_lookup_tag_returns_positions() {
+        let (_tmp, mut db) = construct_db(1024);
+        let mut writer = db.writer().unwrap();
+        let t1 = th(42);
+        let p1 = writer.issue_position();
+        insert_position(&db, &mut writer, t1, p1).unwrap();
+        let p2 = writer.issue_position();
+        insert_position(&db, &mut writer, t1, p2).unwrap();
+        let t2 = th(7);
+        let p3 = writer.issue_position();
+        insert_position(&db, &mut writer, t2, p3).unwrap();
+        db.commit(&mut writer).unwrap();
+
+        let reader = db.reader().unwrap();
+        let vals = lookup_tag(&db, &reader, t1).unwrap();
+        assert_eq!(vals, vec![p1, p2]);
+        // non-existent
+        let vals_none = lookup_tag(&db, &reader, th(1000)).unwrap();
+        assert!(vals_none.is_empty());
     }
 }

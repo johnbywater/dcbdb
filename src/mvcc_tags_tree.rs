@@ -57,14 +57,9 @@ pub fn insert_position(db: &Lmdb, writer: &mut LmdbWriter, tag: TagHash, pos: Po
     // Make the leaf page dirty (copy-on-write if needed)
     let dirty_leaf_page_id = writer.get_dirty_page_id(current_page_id)?;
     // If copy-on-write happened, we need to replace the child id in the parent at the recorded index
-    let mut replacement_info: Option<(PageID, PageID, usize)> = None;
+    let mut replacement_info: Option<(PageID, PageID)> = None;
     if dirty_leaf_page_id != current_page_id {
-        if let Some((_, child_idx)) = stack.last().cloned() {
-            replacement_info = Some((current_page_id, dirty_leaf_page_id, child_idx));
-        } else {
-            // Replacing the root leaf
-            replacement_info = Some((current_page_id, dirty_leaf_page_id, 0));
-        }
+        replacement_info = Some((current_page_id, dirty_leaf_page_id));
     }
 
     // Get a mutable reference to the dirty leaf page
@@ -159,8 +154,7 @@ pub fn insert_position(db: &Lmdb, writer: &mut LmdbWriter, tag: TagHash, pos: Po
         let dirty_parent_page_id = writer.get_dirty_page_id(parent_page_id)?;
         let parent_replacement_info = if dirty_parent_page_id != parent_page_id {
             // Need to replace this parent in its own parent later
-            // The index to use for that will be fetched from the next stack entry in the next loop iteration
-            Some((parent_page_id, dirty_parent_page_id, 0usize))
+            Some((parent_page_id, dirty_parent_page_id))
         } else {
             None
         };
@@ -168,7 +162,7 @@ pub fn insert_position(db: &Lmdb, writer: &mut LmdbWriter, tag: TagHash, pos: Po
         let parent_page = writer.get_mut_dirty(dirty_parent_page_id)?;
         // First, apply child replacement if needed
         if let Node::TagsInternal(internal) = &mut parent_page.node {
-            if let Some((old_id, new_id, _)) = current_replacement_info.take() {
+            if let Some((old_id, new_id)) = current_replacement_info.take() {
                 let target_idx = parent_child_idx;
                 if internal.child_ids[target_idx] == old_id {
                     internal.child_ids[target_idx] = new_id;
@@ -204,6 +198,9 @@ pub fn insert_position(db: &Lmdb, writer: &mut LmdbWriter, tag: TagHash, pos: Po
         if let Some((promoted_key, new_child_id, child_idx_from_below)) = split_info.take() {
             if let Node::TagsInternal(internal) = &mut parent_page.node {
                 let insert_key_idx = child_idx_from_below;
+                if child_idx_from_below != parent_child_idx {
+                    println!("child_idx_from_below != parent_child_idx, this should not happen ");
+                }
                 let insert_child_idx = child_idx_from_below + 1;
                 internal.keys.insert(insert_key_idx, promoted_key);
                 internal.child_ids.insert(insert_child_idx, new_child_id);
@@ -253,15 +250,11 @@ pub fn insert_position(db: &Lmdb, writer: &mut LmdbWriter, tag: TagHash, pos: Po
         }
 
         // Prepare replacement info for the next level up if this parent was copied-on-write
-        if let Some((old_id, new_id, _)) = parent_replacement_info {
-            current_replacement_info = Some((old_id, new_id, 0)); // index resolved at next iteration
-        } else {
-            current_replacement_info = None;
-        }
+        current_replacement_info = parent_replacement_info;
     }
 
     // Apply root replacement if needed
-    if let Some((old_id, new_id, _)) = current_replacement_info.take() {
+    if let Some((old_id, new_id)) = current_replacement_info.take() {
         if writer.tags_tree_root_id == old_id {
             writer.tags_tree_root_id = new_id;
             if verbose {

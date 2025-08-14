@@ -259,20 +259,16 @@ impl TagsInternalNode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TagLeafNode {
     pub positions: Vec<Position>,
-    pub next_leaf_id: Option<PageID>,
 }
 
 impl TagLeafNode {
     pub fn calc_serialized_size(&self) -> usize {
-        // 8 bytes for next_leaf_id (0 indicates None) + 2 for positions_len + positions
-        8 + 2 + (self.positions.len() * 8)
+        // 2 for positions_len + positions
+        2 + (self.positions.len() * 8)
     }
 
     pub fn serialize(&self) -> Result<Vec<u8>> {
         let mut out = Vec::with_capacity(self.calc_serialized_size());
-        // next_leaf_id as u64 (0 for None)
-        let id = self.next_leaf_id.map(|p| p.0).unwrap_or(0);
-        out.extend_from_slice(&id.to_le_bytes());
         // positions length
         out.extend_from_slice(&(self.positions.len() as u16).to_le_bytes());
         // positions
@@ -283,30 +279,25 @@ impl TagLeafNode {
     }
 
     pub fn from_slice(slice: &[u8]) -> Result<Self> {
-        if slice.len() < 10 {
+        if slice.len() < 2 {
             return Err(LmdbError::DeserializationError(format!(
-                "Expected at least 10 bytes, got {}",
+                "Expected at least 2 bytes, got {}",
                 slice.len()
             )));
         }
-        // next_leaf_id
-        let id = u64::from_le_bytes([
-            slice[0], slice[1], slice[2], slice[3], slice[4], slice[5], slice[6], slice[7],
-        ]);
-        let next_leaf_id = if id == 0 { None } else { Some(PageID(id)) };
-        // positions len
-        let positions_len = u16::from_le_bytes([slice[8], slice[9]]) as usize;
+        // positions len (first 2 bytes)
+        let positions_len = u16::from_le_bytes([slice[0], slice[1]]) as usize;
         let need = positions_len * 8;
-        if slice.len() < 10 + need {
+        if slice.len() < 2 + need {
             return Err(LmdbError::DeserializationError(format!(
                 "Expected at least {} bytes for positions, got {}",
-                10 + need,
+                2 + need,
                 slice.len()
             )));
         }
         let mut positions = Vec::with_capacity(positions_len);
         for i in 0..positions_len {
-            let p = 10 + i * 8;
+            let p = 2 + i * 8;
             let v = u64::from_le_bytes([
                 slice[p],
                 slice[p + 1],
@@ -319,10 +310,7 @@ impl TagLeafNode {
             ]);
             positions.push(Position(v));
         }
-        Ok(TagLeafNode {
-            positions,
-            next_leaf_id,
-        })
+        Ok(TagLeafNode { positions })
     }
 
     pub fn pop_last_position(&mut self) -> Result<Position> {
@@ -459,7 +447,6 @@ mod tests {
     fn test_tag_leaf_node_serialize_roundtrip() {
         let leaf = TagLeafNode {
             positions: vec![Position(10), Position(20), Position(30)],
-            next_leaf_id: Some(PageID(1234)),
         };
         let ser = leaf.serialize().unwrap();
         let de = TagLeafNode::from_slice(&ser).unwrap();

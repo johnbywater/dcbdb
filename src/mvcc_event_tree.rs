@@ -1,4 +1,4 @@
-use crate::mvcc::{Lmdb, LmdbWriter, Result};
+use crate::mvcc::{Lmdb, LmdbReader, LmdbWriter, Result};
 use crate::mvcc_common::{LmdbError, PageID};
 use crate::mvcc_node_event::{EventInternalNode, EventLeafNode, EventRecord, Position};
 use crate::mvcc_nodes::Node;
@@ -266,6 +266,19 @@ pub fn append_event(
     Ok(())
 }
 
+pub struct EventIterator<'a> {
+    pub db: &'a Lmdb,
+    pub reader: LmdbReader,
+    pub stack: Vec<(PageID, usize)>,
+}
+
+impl<'a> EventIterator<'a> {
+    pub fn new(db: &'a Lmdb, reader: LmdbReader) -> Self {
+        let next_position = (reader.event_tree_root_id, 0);
+        Self { db, reader, stack: vec![next_position] }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,6 +286,7 @@ mod tests {
     use rand::random;
     use serial_test::serial;
     use tempfile::tempdir;
+    use crate::mvcc::LmdbReader;
 
     static VERBOSE: bool = false;
 
@@ -661,5 +675,65 @@ mod tests {
             }
         }
         assert_eq!(0, copy_inserted.len());
+    }
+
+    #[test]
+    #[serial]
+    fn test_scan_events() {
+        // Setup a temporary database
+        let (_temp_dir, mut db) = construct_db(512);
+
+        let mut has_split_internal = false;
+        let mut appended: Vec<(Position, EventRecord)> = Vec::new();
+
+        // Insert events until we split a root internal node
+        while !has_split_internal {
+            // Start a writer
+            let mut writer = db.writer().unwrap();
+
+            // Issue a new position and create a record
+            let position = writer.issue_position();
+            let record = EventRecord {
+                event_type: "UserCreated".to_string(),
+                data: (0..8).map(|_| random::<u8>()).collect(),
+                tags: vec!["users".to_string(), "creation".to_string()],
+            };
+            appended.push((position, record.clone()));
+
+            // Append the event
+            append_event(&db, &mut writer, record, position).unwrap();
+
+            // Check if the root is an internal node
+            let root_page = writer.dirty.get(&writer.event_tree_root_id).unwrap();
+            match &root_page.node {
+                Node::EventInternal(root_node) => {
+                    // Check if the first child is an internal node
+                    if !root_node.child_ids.is_empty() {
+                        let child_id = root_node.child_ids[0];
+                        if let Some(child_page) = writer.dirty.get(&child_id) {
+                            match &child_page.node {
+                                Node::EventInternal(_) => {
+                                    has_split_internal = true;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            db.commit(&mut writer).unwrap();
+        }
+
+        // Check keys and values of all pages
+        let mut copy_inserted = appended.clone();
+
+        // Start a reader
+        let reader = db.reader().unwrap();
+
+        let mut events_iterator = EventIterator::new(&db, reader);
+
+
+
     }
 }

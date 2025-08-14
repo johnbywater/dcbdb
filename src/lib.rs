@@ -49,7 +49,7 @@ mod mvcc_node_header;
 pub mod mvcc_nodes;
 mod mvcc_page;
 mod mvcc_pager;
-mod mvcc_tag_index;
+mod mvcc_node_tags;
 
 #[cfg(test)]
 mod tests {

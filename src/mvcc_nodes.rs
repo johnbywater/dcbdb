@@ -3,6 +3,7 @@ use crate::mvcc_common::LmdbError;
 use crate::mvcc_node_event::{EventInternalNode, EventLeafNode};
 use crate::mvcc_node_free_list::{FreeListInternalNode, FreeListLeafNode};
 use crate::mvcc_node_header::HeaderNode;
+use crate::mvcc_node_tags::{TagInternalNode, TagLeafNode, TagsInternalNode, TagsLeafNode};
 
 // Constants for serialization
 const PAGE_TYPE_HEADER: u8 = b'1';
@@ -10,6 +11,10 @@ const PAGE_TYPE_FREELIST_LEAF: u8 = b'2';
 const PAGE_TYPE_FREELIST_INTERNAL: u8 = b'3';
 const PAGE_TYPE_EVENT_LEAF: u8 = b'4';
 const PAGE_TYPE_EVENT_INTERNAL: u8 = b'5';
+const PAGE_TYPE_TAGS_LEAF: u8 = b'6';
+const PAGE_TYPE_TAGS_INTERNAL: u8 = b'7';
+const PAGE_TYPE_TAG_LEAF: u8 = b'8';
+const PAGE_TYPE_TAG_INTERNAL: u8 = b'9';
 
 // Enum to represent different node types
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,6 +24,10 @@ pub enum Node {
     FreeListInternal(FreeListInternalNode),
     EventLeaf(EventLeafNode),
     EventInternal(EventInternalNode),
+    TagsLeaf(TagsLeafNode),
+    TagsInternal(TagsInternalNode),
+    TagLeaf(TagLeafNode),
+    TagInternal(TagInternalNode),
 }
 
 impl Node {
@@ -29,6 +38,10 @@ impl Node {
             Node::FreeListInternal(_) => PAGE_TYPE_FREELIST_INTERNAL,
             Node::EventLeaf(_) => PAGE_TYPE_EVENT_LEAF,
             Node::EventInternal(_) => PAGE_TYPE_EVENT_INTERNAL,
+            Node::TagsLeaf(_) => PAGE_TYPE_TAGS_LEAF,
+            Node::TagsInternal(_) => PAGE_TYPE_TAGS_INTERNAL,
+            Node::TagLeaf(_) => PAGE_TYPE_TAG_LEAF,
+            Node::TagInternal(_) => PAGE_TYPE_TAG_INTERNAL,
         }
     }
 
@@ -39,6 +52,10 @@ impl Node {
             Node::FreeListInternal(node) => node.calc_serialized_size(),
             Node::EventLeaf(node) => node.calc_serialized_size(),
             Node::EventInternal(node) => node.calc_serialized_size(),
+            Node::TagsLeaf(node) => node.calc_serialized_size(),
+            Node::TagsInternal(node) => node.calc_serialized_size(),
+            Node::TagLeaf(node) => node.calc_serialized_size(),
+            Node::TagInternal(node) => node.calc_serialized_size(),
         }
     }
 
@@ -49,6 +66,10 @@ impl Node {
             Node::FreeListInternal(node) => node.serialize(),
             Node::EventLeaf(node) => node.serialize(),
             Node::EventInternal(node) => node.serialize(),
+            Node::TagsLeaf(node) => node.serialize(),
+            Node::TagsInternal(node) => node.serialize(),
+            Node::TagLeaf(node) => node.serialize(),
+            Node::TagInternal(node) => node.serialize(),
         }
     }
 
@@ -73,6 +94,22 @@ impl Node {
             PAGE_TYPE_EVENT_INTERNAL => {
                 let node = EventInternalNode::from_slice(data)?;
                 Ok(Node::EventInternal(node))
+            }
+            PAGE_TYPE_TAGS_LEAF => {
+                let node = TagsLeafNode::from_slice(data)?;
+                Ok(Node::TagsLeaf(node))
+            }
+            PAGE_TYPE_TAGS_INTERNAL => {
+                let node = TagsInternalNode::from_slice(data)?;
+                Ok(Node::TagsInternal(node))
+            }
+            PAGE_TYPE_TAG_LEAF => {
+                let node = TagLeafNode::from_slice(data)?;
+                Ok(Node::TagLeaf(node))
+            }
+            PAGE_TYPE_TAG_INTERNAL => {
+                let node = TagInternalNode::from_slice(data)?;
+                Ok(Node::TagInternal(node))
             }
             _ => Err(LmdbError::DatabaseCorrupted(format!(
                 "Invalid node type: {node_type}"

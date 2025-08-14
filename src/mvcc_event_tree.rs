@@ -801,7 +801,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_scan_events() {
+    fn test_read_events_all() {
         // Setup a temporary database
         let (_temp_dir, mut db) = construct_db(512);
 
@@ -917,7 +917,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_scan_events_after() {
+    fn test_read_events_after() {
         // Setup a temporary database
         let (_temp_dir, mut db) = construct_db(512);
 

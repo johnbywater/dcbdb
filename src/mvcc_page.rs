@@ -81,7 +81,7 @@ impl Page {
 mod tests {
     use super::*;
     use crate::mvcc_common::{PageID, Tsn};
-    use crate::mvcc_node_event::Position;
+    use crate::mvcc_common::Position;
     use crate::mvcc_node_header::HeaderNode;
 
     #[test]

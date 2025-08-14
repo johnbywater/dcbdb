@@ -1,8 +1,5 @@
 use crate::mvcc_common::{LmdbError, PageID, Result};
-
-/// Local Position type used by the MVCC tag index nodes
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Position(pub u64);
+use crate::mvcc_common::Position;
 
 /// Length in bytes of the hashed tag key used in tag index leaf/internal nodes
 pub const TAG_HASH_LEN: usize = 8;
@@ -10,21 +7,28 @@ pub const TAG_HASH_LEN: usize = 8;
 // ========================= Tag Index (by tag-hash) =========================
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagsLeafValue {
+    // PageID(0) indicates there is no per-tag position tree for this tag
+    pub root_id: PageID,
+    // Positions stored directly in the leaf when no tree is present
+    pub positions: Vec<Position>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TagsLeafNode {
     pub keys: Vec<[u8; TAG_HASH_LEN]>,
-    // value tuple: (has_tag_tree flag 0/1, positions stored directly if no tag tree)
-    pub values: Vec<(u8, Vec<Position>)>,
+    pub values: Vec<TagsLeafValue>,
 }
 
 impl TagsLeafNode {
     pub fn calc_serialized_size(&self) -> usize {
         // 2 bytes for keys_len + keys + values
         let mut total = 2 + self.keys.len() * TAG_HASH_LEN;
-        for (flag, positions) in &self.values {
-            let _ = flag; // 1 byte flag
-            total += 1; // has_tag_tree flag
+        for v in &self.values {
+            // root_id (8 bytes)
+            total += 8;
             total += 2; // positions len
-            total += positions.len() * 8; // each Position is 8 bytes
+            total += v.positions.len() * 8; // each Position is 8 bytes
         }
         total
     }
@@ -41,13 +45,13 @@ impl TagsLeafNode {
         }
 
         // values
-        for (flag, positions) in &self.values {
-            // flag (1 byte)
-            out.push(*flag);
+        for v in &self.values {
+            // root_id (8 bytes)
+            out.extend_from_slice(&v.root_id.0.to_le_bytes());
             // positions length (2 bytes)
-            out.extend_from_slice(&(positions.len() as u16).to_le_bytes());
+            out.extend_from_slice(&(v.positions.len() as u16).to_le_bytes());
             // positions
-            for pos in positions {
+            for pos in &v.positions {
                 out.extend_from_slice(&pos.0.to_le_bytes());
             }
         }
@@ -88,14 +92,24 @@ impl TagsLeafNode {
         let mut values = Vec::with_capacity(keys_len);
         let mut offset = keys_bytes;
         for _ in 0..keys_len {
-            if offset + 3 > slice.len() {
+            if offset + 10 > slice.len() {
                 return Err(LmdbError::DeserializationError(
                     "Unexpected end of data while reading value header".to_string(),
                 ));
             }
-            // flag
-            let flag = slice[offset];
-            offset += 1;
+            // root_id (8 bytes)
+            let root_id_u64 = u64::from_le_bytes([
+                slice[offset],
+                slice[offset + 1],
+                slice[offset + 2],
+                slice[offset + 3],
+                slice[offset + 4],
+                slice[offset + 5],
+                slice[offset + 6],
+                slice[offset + 7],
+            ]);
+            let root_id = PageID(root_id_u64);
+            offset += 8;
             // positions len
             let positions_len = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
             offset += 2;
@@ -124,13 +138,13 @@ impl TagsLeafNode {
             }
             offset += need;
 
-            values.push((flag, positions));
+            values.push(TagsLeafValue { root_id, positions });
         }
 
         Ok(TagsLeafNode { keys, values })
     }
 
-    pub fn pop_last_key_and_value(&mut self) -> Result<([u8; TAG_HASH_LEN], (u8, Vec<Position>))> {
+    pub fn pop_last_key_and_value(&mut self) -> Result<([u8; TAG_HASH_LEN], TagsLeafValue)> {
         let last_key = self.keys.pop().ok_or_else(|| {
             LmdbError::DeserializationError("No keys to pop".to_string())
         })?;
@@ -440,7 +454,7 @@ impl TagInternalNode {
 
 #[cfg(test)]
 mod tests {
-    use super::{TagsInternalNode, TagsLeafNode, Position, TagInternalNode, TagLeafNode, TAG_HASH_LEN};
+    use super::{TagsInternalNode, TagsLeafNode, TagsLeafValue, Position, TagInternalNode, TagLeafNode, TAG_HASH_LEN};
     use crate::mvcc_common::PageID;
 
     #[test]
@@ -476,9 +490,9 @@ mod tests {
         let leaf = TagsLeafNode {
             keys: vec![k1, k2, k3],
             values: vec![
-                (0, vec![Position(1), Position(2), Position(3)]),
-                (1, vec![Position(100)]),
-                (0, vec![]),
+                TagsLeafValue { root_id: PageID(0), positions: vec![Position(1), Position(2), Position(3)] },
+                TagsLeafValue { root_id: PageID(123), positions: vec![Position(100)] },
+                TagsLeafValue { root_id: PageID(0), positions: vec![] },
             ],
         };
 

@@ -55,3 +55,7 @@ pub struct PageID(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Tsn(pub u64);
+
+// Position used by MVCC structures (distinct from wal::Position alias)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Position(pub u64);

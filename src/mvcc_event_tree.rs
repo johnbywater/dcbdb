@@ -1,6 +1,7 @@
 use crate::mvcc::{Lmdb, LmdbReader, LmdbWriter, Result};
 use crate::mvcc_common::{LmdbError, PageID};
-use crate::mvcc_node_event::{EventInternalNode, EventLeafNode, EventRecord, Position};
+use crate::mvcc_node_event::{EventInternalNode, EventLeafNode, EventRecord};
+use crate::mvcc_common::Position;
 use crate::mvcc_nodes::Node;
 use crate::mvcc_page::Page;
 use std::collections::HashMap;

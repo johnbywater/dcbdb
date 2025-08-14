@@ -9,31 +9,35 @@ pub struct HeaderNode {
     pub next_page_id: PageID,
     pub free_page_tree_root_id: PageID,
     pub event_tree_root_id: PageID,
+    pub tags_tree_root_id: PageID,
     pub next_position: Position,
 }
 
 impl HeaderNode {
-    /// Serializes the HeaderNode to a byte array with 40 bytes
-    /// 8 bytes for tsn, 8 bytes for next_page_id, 8 bytes for freetree_root_id, 8 bytes for position_root_id, and 8 bytes for next_position
+    /// Serializes the HeaderNode to a byte array with 48 bytes
+    /// 8 bytes for tsn, 8 bytes for next_page_id, 8 bytes for freetree_root_id, 8 bytes for position_root_id,
+    /// 8 bytes for root_tags_tree_id, and 8 bytes for next_position
     ///
     /// # Returns
     /// * `Vec<u8>` - The serialized data
     pub fn serialize(&self) -> Vec<u8> {
-        let mut result = Vec::with_capacity(40);
+        let mut result = Vec::with_capacity(48);
         result.extend_from_slice(&self.tsn.0.to_le_bytes());
         result.extend_from_slice(&self.next_page_id.0.to_le_bytes());
         result.extend_from_slice(&self.free_page_tree_root_id.0.to_le_bytes());
         result.extend_from_slice(&self.event_tree_root_id.0.to_le_bytes());
+        result.extend_from_slice(&self.tags_tree_root_id.0.to_le_bytes());
         result.extend_from_slice(&self.next_position.0.to_le_bytes());
         result
     }
 
     /// Creates a HeaderNode from a byte slice
-    /// Expects a slice with 40 bytes:
+    /// Expects a slice with 48 bytes:
     /// - 8 bytes for tsn
     /// - 8 bytes for next_page_id
     /// - 8 bytes for freetree_root_id
     /// - 8 bytes for position_root_id
+    /// - 8 bytes for root_tags_tree_id
     /// - 8 bytes for next_position
     ///
     /// # Arguments
@@ -42,9 +46,9 @@ impl HeaderNode {
     /// # Returns
     /// * `Result<Self>` - The deserialized HeaderNode or an error
     pub fn from_slice(slice: &[u8]) -> mvcc_common::Result<Self> {
-        if slice.len() != 40 {
+        if slice.len() != 48 {
             return Err(LmdbError::DeserializationError(format!(
-                "Expected 40 bytes, got {}",
+                "Expected 48 bytes, got {}",
                 slice.len()
             )));
         }
@@ -61,8 +65,11 @@ impl HeaderNode {
         let position_root_id = u64::from_le_bytes([
             slice[24], slice[25], slice[26], slice[27], slice[28], slice[29], slice[30], slice[31],
         ]);
-        let next_position = u64::from_le_bytes([
+        let tags_root_id = u64::from_le_bytes([
             slice[32], slice[33], slice[34], slice[35], slice[36], slice[37], slice[38], slice[39],
+        ]);
+        let next_position = u64::from_le_bytes([
+            slice[40], slice[41], slice[42], slice[43], slice[44], slice[45], slice[46], slice[47],
         ]);
 
         Ok(HeaderNode {
@@ -70,6 +77,7 @@ impl HeaderNode {
             next_page_id: PageID(next_page_id),
             free_page_tree_root_id: PageID(freetree_root_id),
             event_tree_root_id: PageID(position_root_id),
+            tags_tree_root_id: PageID(tags_root_id),
             next_position: Position(next_position),
         })
     }
@@ -86,6 +94,7 @@ mod tests {
             next_page_id: PageID(123),
             free_page_tree_root_id: PageID(456),
             event_tree_root_id: PageID(789),
+            tags_tree_root_id: PageID(321),
             next_position: Position(9876543210),
         };
 
@@ -93,7 +102,7 @@ mod tests {
         let serialized = header_node.serialize();
 
         // Verify the serialized output has the correct length
-        assert_eq!(40, serialized.len());
+        assert_eq!(48, serialized.len());
 
         // Verify the serialized output has the correct byte values
         // TSN(42) = 42u64 = [42, 0, 0, 0, 0, 0, 0, 0] in little-endian
@@ -108,8 +117,11 @@ mod tests {
         // PageID(789) as u64
         assert_eq!(&789u64.to_le_bytes(), &serialized[24..32]);
 
-        // next_position 9876543210u64 = 0x000000024CB016EA => little-endian bytes
-        assert_eq!(&9876543210u64.to_le_bytes(), &serialized[32..40]);
+        // root_tags_tree_id PageID(321) as u64
+        assert_eq!(&321u64.to_le_bytes(), &serialized[32..40]);
+
+        // next_position 9876543210u64 => little-endian bytes
+        assert_eq!(&9876543210u64.to_le_bytes(), &serialized[40..48]);
 
         // Deserialize back to a HeaderNode
         let deserialized =

@@ -3,6 +3,7 @@ use crate::mvcc_common::{LmdbError, PageID, Tsn};
 use crate::mvcc_node_event::EventLeafNode;
 use crate::mvcc_node_free_list::{FreeListInternalNode, FreeListLeafNode};
 use crate::mvcc_node_header::HeaderNode;
+use crate::mvcc_node_tags::TagsLeafNode;
 use crate::mvcc_nodes::Node;
 use crate::mvcc_page::Page;
 use crate::mvcc_pager::Pager;
@@ -44,6 +45,7 @@ pub struct LmdbWriter {
     pub next_page_id: PageID,
     pub free_page_tree_root_id: PageID,
     pub event_tree_root_id: PageID,
+    pub tags_tree_root_id: PageID,
     pub next_position: Position,
     pub reusable_page_ids: VecDeque<(PageID, Tsn)>,
     pub freed_page_ids: VecDeque<PageID>,
@@ -86,7 +88,8 @@ impl Lmdb {
             // Initialize new database
             let freetree_root_id = PageID(2);
             let position_root_id = PageID(3);
-            let next_page_id = PageID(4);
+            let tags_root_id = PageID(4);
+            let next_page_id = PageID(5);
 
             // Create and write header pages
             let header_node0 = HeaderNode {
@@ -94,6 +97,7 @@ impl Lmdb {
                 next_page_id,
                 free_page_tree_root_id: freetree_root_id,
                 event_tree_root_id: position_root_id,
+                tags_tree_root_id: tags_root_id,
                 next_position: Position(1),
             };
 
@@ -118,6 +122,14 @@ impl Lmdb {
             };
             let position_page = Page::new(position_root_id, Node::EventLeaf(event_leaf));
             lmdb.write_page(&position_page)?;
+
+            // Create and write an empty tags index root page
+            let tags_leaf = TagsLeafNode {
+                keys: Vec::new(),
+                values: Vec::new(),
+            };
+            let tags_page = Page::new(tags_root_id, Node::TagsLeaf(tags_leaf));
+            lmdb.write_page(&tags_page)?;
 
             lmdb.flush()?;
         }
@@ -215,6 +227,7 @@ impl Lmdb {
             header_node.next_page_id,
             header_node.free_page_tree_root_id,
             header_node.event_tree_root_id,
+            header_node.tags_tree_root_id,
             header_node.next_position,
             self.verbose,
         );
@@ -273,6 +286,7 @@ impl Lmdb {
             next_page_id: writer.next_page_id,
             free_page_tree_root_id: writer.free_page_tree_root_id,
             event_tree_root_id: writer.event_tree_root_id,
+            tags_tree_root_id: writer.tags_tree_root_id,
             next_position: writer.next_position,
         };
 
@@ -297,7 +311,8 @@ impl LmdbWriter {
         tsn: Tsn,
         next_page_id: PageID,
         freetree_root_id: PageID,
-        position_root_id: PageID,
+        event_tree_root_id: PageID,
+        tags_tree_root_id: PageID,
         next_position: Position,
         verbose: bool,
     ) -> Self {
@@ -306,7 +321,8 @@ impl LmdbWriter {
             tsn,
             next_page_id,
             free_page_tree_root_id: freetree_root_id,
-            event_tree_root_id: position_root_id,
+            event_tree_root_id: event_tree_root_id,
+            tags_tree_root_id: tags_tree_root_id,
             next_position,
             reusable_page_ids: VecDeque::new(),
             freed_page_ids: VecDeque::new(),
@@ -1178,14 +1194,14 @@ mod tests {
 
             // Allocate and insert free page ID.
             let free_page_id = writer.alloc_page_id();
-            assert_eq!(PageID(4), free_page_id);
+            assert_eq!(PageID(5), free_page_id);
             writer
                 .insert_freed_page_id(&db, writer.tsn, free_page_id)
                 .unwrap();
 
             // Check the dirty page IDs
             assert_eq!(1, writer.dirty.len());
-            assert_eq!(PageID(5), *writer.dirty.keys().collect::<Vec<_>>()[0]);
+            assert_eq!(PageID(6), *writer.dirty.keys().collect::<Vec<_>>()[0]);
 
             // Check the freed page IDs
             assert_eq!(1, writer.freed_page_ids.len());
@@ -1200,18 +1216,18 @@ mod tests {
 
             // Check there are two free pages
             assert_eq!(2, writer.reusable_page_ids.len());
-            assert_eq!((PageID(4), Tsn(1)), writer.reusable_page_ids[0]);
+            assert_eq!((PageID(5), Tsn(1)), writer.reusable_page_ids[0]);
             assert_eq!((PageID(2), Tsn(1)), writer.reusable_page_ids[1]);
 
             // Check the free list root is page 2
-            assert_eq!(PageID(5), writer.free_page_tree_root_id);
+            assert_eq!(PageID(6), writer.free_page_tree_root_id);
 
             // Check the position root is page 3
             assert_eq!(PageID(3), writer.event_tree_root_id);
 
             // Allocate and insert free page ID.
             let free_page_id = writer.alloc_page_id();
-            assert_eq!(PageID(4), free_page_id);
+            assert_eq!(PageID(5), free_page_id);
             writer
                 .insert_freed_page_id(&db, writer.tsn, free_page_id)
                 .unwrap();
@@ -1222,7 +1238,7 @@ mod tests {
 
             // Check the freed page IDs
             assert_eq!(1, writer.freed_page_ids.len());
-            assert_eq!(PageID(5), writer.freed_page_ids[0]);
+            assert_eq!(PageID(6), writer.freed_page_ids[0]);
 
             db.commit(&mut writer).unwrap();
         }
@@ -1233,8 +1249,8 @@ mod tests {
 
             // Check there are two free pages
             assert_eq!(2, writer.reusable_page_ids.len());
-            assert_eq!((PageID(4), Tsn(2)), writer.reusable_page_ids[0]);
-            assert_eq!((PageID(5), Tsn(2)), writer.reusable_page_ids[1]);
+            assert_eq!((PageID(5), Tsn(2)), writer.reusable_page_ids[0]);
+            assert_eq!((PageID(6), Tsn(2)), writer.reusable_page_ids[1]);
 
             // Check the free list root is page 2
             assert_eq!(PageID(2), writer.free_page_tree_root_id);
@@ -1244,14 +1260,14 @@ mod tests {
 
             // Allocate and insert free page ID.
             let free_page_id = writer.alloc_page_id();
-            assert_eq!(PageID(4), free_page_id);
+            assert_eq!(PageID(5), free_page_id);
             writer
                 .insert_freed_page_id(&db, writer.tsn, free_page_id)
                 .unwrap();
 
             // Check the dirty page IDs
             assert_eq!(1, writer.dirty.len());
-            assert_eq!(PageID(5), *writer.dirty.keys().collect::<Vec<_>>()[0]);
+            assert_eq!(PageID(6), *writer.dirty.keys().collect::<Vec<_>>()[0]);
 
             // Check the freed page IDs
             assert_eq!(1, writer.freed_page_ids.len());
@@ -1285,7 +1301,7 @@ mod tests {
             assert_eq!(PageID(0), header_page_id);
 
             // Get next page ID
-            assert_eq!(PageID(4), header_node.next_page_id);
+            assert_eq!(PageID(5), header_node.next_page_id);
 
             // Construct a writer
             let tsn = Tsn(1001);
@@ -1296,6 +1312,7 @@ mod tests {
                 header_node.next_page_id,
                 header_node.free_page_tree_root_id,
                 header_node.event_tree_root_id,
+                header_node.tags_tree_root_id,
                 header_node.next_position,
                 VERBOSE,
             );
@@ -1441,6 +1458,7 @@ mod tests {
                 header_node.next_page_id,
                 header_node.free_page_tree_root_id,
                 header_node.event_tree_root_id,
+                header_node.tags_tree_root_id,
                 header_node.next_position,
                 VERBOSE,
             );
@@ -1489,6 +1507,7 @@ mod tests {
                 db.header_page_id1,
                 writer.free_page_tree_root_id,
                 writer.event_tree_root_id,
+                writer.tags_tree_root_id,
             ];
 
             // Collect freed page IDs
@@ -1523,7 +1542,7 @@ mod tests {
             }
 
             // We just split a leaf, so now we have 6 pages
-            assert_eq!(6, active_page_ids.len());
+            assert_eq!(7, active_page_ids.len());
 
             // Audit page IDs
             let mut all_page_ids = active_page_ids.clone();
@@ -1629,6 +1648,7 @@ mod tests {
                 db.header_page_id1,
                 writer.free_page_tree_root_id,
                 writer.event_tree_root_id,
+                writer.tags_tree_root_id,
             ];
 
             // Collect freed page IDs from the writer
@@ -1660,8 +1680,8 @@ mod tests {
                 }
             }
 
-            // We have split a leaf node, so now we have 6 active pages
-            assert_eq!(7, active_page_ids.len());
+            // We have split a leaf node, so now we have 8 active pages
+            assert_eq!(8, active_page_ids.len());
 
             // Audit page IDs
             let mut all_page_ids = active_page_ids.clone();
@@ -1755,6 +1775,7 @@ mod tests {
                     header_node.next_page_id,
                     header_node.free_page_tree_root_id,
                     header_node.event_tree_root_id,
+                    header_node.tags_tree_root_id,
                     header_node.next_position,
                     VERBOSE,
                 );
@@ -1808,6 +1829,7 @@ mod tests {
                     db.header_page_id1,
                     writer.free_page_tree_root_id,
                     writer.event_tree_root_id,
+                    writer.tags_tree_root_id,
                 ];
 
                 // Collect all freed page IDs
@@ -1855,6 +1877,7 @@ mod tests {
                 header_node.next_page_id,
                 header_node.free_page_tree_root_id,
                 header_node.event_tree_root_id,
+                header_node.tags_tree_root_id,
                 header_node.next_position,
                 VERBOSE,
             );
@@ -1916,6 +1939,7 @@ mod tests {
                 db.header_page_id1,
                 writer.free_page_tree_root_id,
                 writer.event_tree_root_id,
+                writer.tags_tree_root_id,
             ];
 
             // Collect freed page IDs
@@ -1983,7 +2007,7 @@ mod tests {
             assert!(inserted.is_empty());
 
             // We should have 10 active pages
-            assert_eq!(10, active_page_ids.len());
+            assert_eq!(11, active_page_ids.len());
 
             // Audit page IDs
             let mut all_page_ids = active_page_ids.clone();
@@ -2072,6 +2096,7 @@ mod tests {
                     header_node.next_page_id,
                     header_node.free_page_tree_root_id,
                     header_node.event_tree_root_id,
+                    header_node.tags_tree_root_id,
                     header_node.next_position,
                     VERBOSE,
                 );
@@ -2121,6 +2146,7 @@ mod tests {
                     db.header_page_id1,
                     writer.free_page_tree_root_id,
                     writer.event_tree_root_id,
+                    writer.tags_tree_root_id,
                 ];
 
                 // Collect all freed page IDs

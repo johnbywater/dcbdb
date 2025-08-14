@@ -92,6 +92,7 @@ mod tests {
             next_page_id: PageID(123),
             free_page_tree_root_id: PageID(456),
             event_tree_root_id: PageID(789),
+            tags_tree_root_id: PageID(1011),
             next_position: Position(1234),
         });
 

@@ -496,4 +496,89 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_insert_tags_and_positions_until_split_internal_one_writer() {
+        // Setup a temporary database
+        let (_temp_dir, mut db) = construct_db(256);
+
+        // Start a writer
+        let mut writer = db.writer().unwrap();
+
+        let mut has_split_internal = false;
+        let mut appended: Vec<(TagHash, Position)> = Vec::new();
+
+        // Insert tag-position pairs until we split an internal node
+        let mut n: u64 = 0;
+        while !has_split_internal {
+            // Issue a new position and create a deterministic increasing tag
+            let position = writer.issue_position();
+            let tag = th(n);
+            n += 1;
+            appended.push((tag, position));
+
+            // Insert the pair into the tags tree
+            insert_position(&db, &mut writer, tag, position).unwrap();
+
+            // Check if we've split an internal node: root is internal and its first child is also internal
+            let root_page = writer.dirty.get(&writer.tags_tree_root_id).unwrap();
+            match &root_page.node {
+                Node::TagsInternal(root_node) => {
+                    if !root_node.child_ids.is_empty() {
+                        let child_id = root_node.child_ids[0];
+                        if let Some(child_page) = writer.dirty.get(&child_id) {
+                            match &child_page.node {
+                                Node::TagsInternal(_) => {
+                                    has_split_internal = true;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Check keys and values of all pages
+        let mut copy_inserted = appended.clone();
+
+        // Get the root node
+        let root_page = writer.dirty.get(&writer.tags_tree_root_id).unwrap();
+        let root_node = match &root_page.node {
+            Node::TagsInternal(node) => node,
+            _ => panic!("Expected TagsInternal node"),
+        };
+
+        // Check each child of the root
+        for &child_id in root_node.child_ids.iter() {
+            let child_page = writer.dirty.get(&child_id).unwrap();
+            assert_eq!(child_id, child_page.page_id);
+
+            let child_node = match &child_page.node {
+                Node::TagsInternal(node) => node,
+                _ => panic!("Expected TagsInternal node"),
+            };
+
+            for &grand_child_id in child_node.child_ids.iter() {
+                let grand_child_page = writer.dirty.get(&grand_child_id).unwrap();
+                assert_eq!(grand_child_id, grand_child_page.page_id);
+
+                let grand_child_node = match &grand_child_page.node {
+                    Node::TagsLeaf(node) => node,
+                    _ => panic!("Expected TagsLeaf node"),
+                };
+
+                // Check each key and value in the leaf
+                for (k, &key) in grand_child_node.keys.iter().enumerate() {
+                    let val = &grand_child_node.values[k];
+                    let (appended_tag, appended_pos) = copy_inserted.remove(0);
+                    assert_eq!(appended_tag, key);
+                    assert_eq!(val.positions.len(), 1);
+                    assert_eq!(val.positions[0], appended_pos);
+                }
+            }
+        }
+        assert_eq!(0, copy_inserted.len());
+    }
 }

@@ -80,8 +80,8 @@ impl Page {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mvcc_common::{PageID, Tsn};
     use crate::mvcc_common::Position;
+    use crate::mvcc_common::{PageID, Tsn};
     use crate::mvcc_node_header::HeaderNode;
 
     #[test]

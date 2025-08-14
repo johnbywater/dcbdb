@@ -1,7 +1,7 @@
 use crate::mvcc_common::LmdbError;
-use crate::mvcc_common::Result;
 use crate::mvcc_common::PageID;
 use crate::mvcc_common::Position;
+use crate::mvcc_common::Result;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EventRecord {
@@ -359,11 +359,7 @@ impl EventInternalNode {
 
         Ok(EventInternalNode { keys, child_ids })
     }
-    pub fn replace_last_child_id(
-        &mut self,
-        old_id: PageID,
-        new_id: PageID,
-    ) -> Result<()> {
+    pub fn replace_last_child_id(&mut self, old_id: PageID, new_id: PageID) -> Result<()> {
         // Replace the last child ID.
         let last_idx = self.child_ids.len() - 1;
         if self.child_ids[last_idx] == old_id {

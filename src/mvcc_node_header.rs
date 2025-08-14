@@ -1,6 +1,6 @@
 use crate::mvcc_common;
-use crate::mvcc_common::{LmdbError, PageID, Tsn};
 use crate::mvcc_common::Position;
+use crate::mvcc_common::{LmdbError, PageID, Tsn};
 
 // Node type definitions
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -51,9 +51,7 @@ impl Pager {
         }
 
         // Seek to the correct position
-        file.seek(SeekFrom::Start(
-            (page_id.0 as u64) * (self.page_size as u64),
-        ))?;
+        file.seek(SeekFrom::Start(page_id.0 * (self.page_size as u64)))?;
 
         // Write the page data
         file.write_all(page)?;
@@ -70,7 +68,7 @@ impl Pager {
 
     pub fn read_page(&self, page_id: PageID) -> io::Result<Vec<u8>> {
         let mut file: MutexGuard<File> = self.file.lock().unwrap();
-        let offset = (page_id.0 as u64) * (self.page_size as u64);
+        let offset = page_id.0 * (self.page_size as u64);
         file.seek(SeekFrom::Start(offset))?;
         let mut page = vec![0u8; self.page_size];
         let bytes_read = file.read(&mut page)?;

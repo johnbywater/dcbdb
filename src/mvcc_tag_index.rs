@@ -1,4 +1,4 @@
-use crate::mvcc_common::{LmdbError, PageID, Result, Position};
+use crate::mvcc_common::{LmdbError, PageID, Position, Result};
 
 /// Length in bytes of the hashed tag key used in tag index leaf/internal nodes
 pub const TAG_HASH_LEN: usize = 8;
@@ -147,12 +147,14 @@ impl TagsLeafNode {
     }
 
     pub fn pop_last_key_and_value(&mut self) -> Result<(TagHash, TagsLeafValue)> {
-        let last_key = self.keys.pop().ok_or_else(|| {
-            LmdbError::DeserializationError("No keys to pop".to_string())
-        })?;
-        let last_value = self.values.pop().ok_or_else(|| {
-            LmdbError::DeserializationError("No values to pop".to_string())
-        })?;
+        let last_key = self
+            .keys
+            .pop()
+            .ok_or_else(|| LmdbError::DeserializationError("No keys to pop".to_string()))?;
+        let last_value = self
+            .values
+            .pop()
+            .ok_or_else(|| LmdbError::DeserializationError("No values to pop".to_string()))?;
         Ok((last_key, last_value))
     }
 }
@@ -258,9 +260,7 @@ impl TagsInternalNode {
         Ok(())
     }
 
-    pub(crate) fn split_off(
-        &mut self,
-    ) -> Result<(TagHash, Vec<TagHash>, Vec<PageID>)> {
+    pub(crate) fn split_off(&mut self) -> Result<(TagHash, Vec<TagHash>, Vec<PageID>)> {
         // Follow the same split approach as other MVCC internal nodes
         let middle_idx = self.keys.len() - 2;
         let promoted_key = self.keys.remove(middle_idx);
@@ -456,7 +456,10 @@ impl TagInternalNode {
 
 #[cfg(test)]
 mod tests {
-    use super::{TagsInternalNode, TagsLeafNode, TagsLeafValue, Position, TagInternalNode, TagLeafNode, TAG_HASH_LEN};
+    use super::{
+        Position, TAG_HASH_LEN, TagInternalNode, TagLeafNode, TagsInternalNode, TagsLeafNode,
+        TagsLeafValue,
+    };
     use crate::mvcc_common::PageID;
 
     #[test]
@@ -492,9 +495,18 @@ mod tests {
         let leaf = TagsLeafNode {
             keys: vec![k1, k2, k3],
             values: vec![
-                TagsLeafValue { root_id: PageID(0), positions: vec![Position(1), Position(2), Position(3)] },
-                TagsLeafValue { root_id: PageID(123), positions: vec![Position(100)] },
-                TagsLeafValue { root_id: PageID(0), positions: vec![] },
+                TagsLeafValue {
+                    root_id: PageID(0),
+                    positions: vec![Position(1), Position(2), Position(3)],
+                },
+                TagsLeafValue {
+                    root_id: PageID(123),
+                    positions: vec![Position(100)],
+                },
+                TagsLeafValue {
+                    root_id: PageID(0),
+                    positions: vec![],
+                },
             ],
         };
 

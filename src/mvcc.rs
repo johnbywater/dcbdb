@@ -476,7 +476,7 @@ impl LmdbWriter {
                         }
 
                         let leaf_value = &node.values[i];
-                        if leaf_value.root_id.is_none() {
+                        if leaf_value.root_id == PageID(0) {
                             for &page_id in &leaf_value.page_ids {
                                 reusable_page_ids.push_back((page_id, tsn));
                             }
@@ -831,7 +831,7 @@ impl LmdbWriter {
 
             let leaf_value = &mut dirty_leaf_node.values[0];
 
-            if leaf_value.root_id.is_some() {
+            if leaf_value.root_id != PageID(0) {
                 return Err(LmdbError::DatabaseCorrupted(
                     "Free list subtree not implemented".to_string(),
                 ));
@@ -1335,7 +1335,7 @@ mod tests {
 
                     let expected_values = vec![FreeListLeafValue {
                         page_ids: vec![header_node.next_page_id],
-                        root_id: None,
+                        root_id: PageID(0),
                     }];
                     assert_eq!(expected_values, node.values);
                 }
@@ -1415,7 +1415,7 @@ mod tests {
 
                         let expected_values = vec![FreeListLeafValue {
                             page_ids: vec![previous_root_id],
-                            root_id: None,
+                            root_id: PageID(0),
                         }];
                         assert_eq!(expected_values, node.values);
                     }
@@ -1568,13 +1568,6 @@ mod tests {
                     .unwrap();
                 inserted.push((writer.tsn, page_id1));
 
-                // Allocate and insert second page ID
-                let page_id2 = writer.alloc_page_id();
-                writer
-                    .insert_freed_page_id(&db, writer.tsn, page_id2)
-                    .unwrap();
-                inserted.push((writer.tsn, page_id2));
-
                 // Check if we've split the leaf
                 let root_page = writer.dirty.get(&writer.free_page_tree_root_id).unwrap();
                 match &root_page.node {
@@ -1582,6 +1575,24 @@ mod tests {
                         has_split_leaf = true;
                     }
                     _ => {}
+                }
+
+                if !has_split_leaf {
+                    // Allocate and insert second page ID
+                    let page_id2 = writer.alloc_page_id();
+                    writer
+                        .insert_freed_page_id(&db, writer.tsn, page_id2)
+                        .unwrap();
+                    inserted.push((writer.tsn, page_id2));
+
+                    // Check if we've split the leaf
+                    let root_page = writer.dirty.get(&writer.free_page_tree_root_id).unwrap();
+                    match &root_page.node {
+                        Node::FreeListInternal(_) => {
+                            has_split_leaf = true;
+                        }
+                        _ => {}
+                    }
                 }
 
                 db.commit(&mut writer).unwrap();
@@ -1649,7 +1660,7 @@ mod tests {
             }
 
             // We have split a leaf node, so now we have 6 active pages
-            assert_eq!(6, active_page_ids.len());
+            assert_eq!(7, active_page_ids.len());
 
             // Audit page IDs
             let mut all_page_ids = active_page_ids.clone();
@@ -1674,7 +1685,7 @@ mod tests {
         #[test]
         #[serial]
         fn test_remove_freed_page_ids_from_split_leaf() {
-            let (_temp_dir, mut db) = construct_db(64);
+            let (_temp_dir, mut db) = construct_db(128);
 
             // First, insert page IDs until we split a leaf
             if VERBOSE {
@@ -1783,7 +1794,7 @@ mod tests {
 
                         let expected_values = vec![FreeListLeafValue {
                             page_ids: vec![previous_root_id],
-                            root_id: None,
+                            root_id: PageID(0),
                         }];
                         assert_eq!(expected_values, node.values);
                     }
@@ -2096,7 +2107,7 @@ mod tests {
 
                         let expected_values = vec![FreeListLeafValue {
                             page_ids: vec![previous_root_id],
-                            root_id: None,
+                            root_id: PageID(0),
                         }];
                         assert_eq!(expected_values, node.values);
                     }

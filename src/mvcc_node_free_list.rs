@@ -4,7 +4,7 @@ use crate::mvcc_common::{LmdbError, PageID, Tsn};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FreeListLeafValue {
     pub page_ids: Vec<PageID>,
-    pub root_id: Option<PageID>,
+    pub root_id: PageID,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,11 +33,8 @@ impl FreeListLeafNode {
             // 8 bytes for each PageID in page_ids
             total_size += value.page_ids.len() * 8;
 
-            // 1 byte for root_id presence flag + 8 bytes if present
-            total_size += 1;
-            if value.root_id.is_some() {
-                total_size += 8;
-            }
+            // 8 bytes for root_id (PageID), PageID(0) indicates no subtree
+            total_size += 8;
         }
 
         total_size
@@ -69,13 +66,8 @@ impl FreeListLeafNode {
                 result.extend_from_slice(&page_id.0.to_le_bytes());
             }
 
-            // Serialize the root_id (1 byte flag + 4 bytes if present)
-            if let Some(root_id) = value.root_id {
-                result.push(1); // Flag indicating root_id is present
-                result.extend_from_slice(&root_id.0.to_le_bytes());
-            } else {
-                result.push(0); // Flag indicating root_id is not present
-            }
+            // Serialize the root_id (always 8 bytes); PageID(0) indicates no subtree
+            result.extend_from_slice(&value.root_id.0.to_le_bytes());
         }
 
         Ok(result)
@@ -166,39 +158,25 @@ impl FreeListLeafNode {
             }
             offset += page_ids_len * 8;
 
-            if offset >= slice.len() {
+            if offset + 8 > slice.len() {
                 return Err(LmdbError::DeserializationError(
-                    "Unexpected end of data while reading root_id flag".to_string(),
+                    "Unexpected end of data while reading root_id".to_string(),
                 ));
             }
 
-            // Extract the root_id flag (1 byte)
-            let has_root_id = slice[offset] != 0;
-            offset += 1;
-
-            // Extract the root_id if present (8 bytes)
-            let root_id = if has_root_id {
-                if offset + 8 > slice.len() {
-                    return Err(LmdbError::DeserializationError(
-                        "Unexpected end of data while reading root_id".to_string(),
-                    ));
-                }
-
-                let page_id = u64::from_le_bytes([
-                    slice[offset],
-                    slice[offset + 1],
-                    slice[offset + 2],
-                    slice[offset + 3],
-                    slice[offset + 4],
-                    slice[offset + 5],
-                    slice[offset + 6],
-                    slice[offset + 7],
-                ]);
-                offset += 8;
-                Some(PageID(page_id))
-            } else {
-                None
-            };
+            // Extract the root_id (always 8 bytes); PageID(0) indicates no subtree
+            let page_id = u64::from_le_bytes([
+                slice[offset],
+                slice[offset + 1],
+                slice[offset + 2],
+                slice[offset + 3],
+                slice[offset + 4],
+                slice[offset + 5],
+                slice[offset + 6],
+                slice[offset + 7],
+            ]);
+            offset += 8;
+            let root_id = PageID(page_id);
 
             values.push(FreeListLeafValue { page_ids, root_id });
         }
@@ -213,7 +191,7 @@ impl FreeListLeafNode {
         // Insert the value
         if let Some(idx) = leaf_idx {
             // TSN already exists, append to its page_ids
-            if self.values[idx].root_id.is_none() {
+            if self.values[idx].root_id == PageID(0) {
                 self.values[idx].page_ids.push(page_id);
             } else {
                 return Err(LmdbError::DatabaseCorrupted(
@@ -229,7 +207,7 @@ impl FreeListLeafNode {
             self.keys.push(tsn);
             self.values.push(FreeListLeafValue {
                 page_ids: vec![page_id],
-                root_id: None,
+                root_id: PageID(0),
             });
             // println!(
             //     "Inserted {:?} and appended {:?} in {:?}: {:?}",
@@ -435,15 +413,15 @@ mod tests {
             values: vec![
                 FreeListLeafValue {
                     page_ids: vec![PageID(100), PageID(101)],
-                    root_id: Some(PageID(200)),
+                    root_id: PageID(200),
                 },
                 FreeListLeafValue {
                     page_ids: vec![PageID(102), PageID(103), PageID(104)],
-                    root_id: None,
+                    root_id: PageID(0),
                 },
                 FreeListLeafValue {
                     page_ids: vec![PageID(105)],
-                    root_id: Some(PageID(300)),
+                    root_id: PageID(300),
                 },
             ],
         };
@@ -474,19 +452,19 @@ mod tests {
         assert_eq!(2, deserialized.values[0].page_ids.len());
         assert_eq!(PageID(100), deserialized.values[0].page_ids[0]);
         assert_eq!(PageID(101), deserialized.values[0].page_ids[1]);
-        assert_eq!(Some(PageID(200)), deserialized.values[0].root_id);
+        assert_eq!(PageID(200), deserialized.values[0].root_id);
 
         // Check second value
         assert_eq!(3, deserialized.values[1].page_ids.len());
         assert_eq!(PageID(102), deserialized.values[1].page_ids[0]);
         assert_eq!(PageID(103), deserialized.values[1].page_ids[1]);
         assert_eq!(PageID(104), deserialized.values[1].page_ids[2]);
-        assert_eq!(None, deserialized.values[1].root_id);
+        assert_eq!(PageID(0), deserialized.values[1].root_id);
 
         // Check third value
         assert_eq!(1, deserialized.values[2].page_ids.len());
         assert_eq!(PageID(105), deserialized.values[2].page_ids[0]);
-        assert_eq!(Some(PageID(300)), deserialized.values[2].root_id);
+        assert_eq!(PageID(300), deserialized.values[2].root_id);
     }
 
     #[test]

@@ -654,7 +654,7 @@ mod tests {
                 for (k, &key) in grand_child_node.keys.iter().enumerate() {
                     let record = &grand_child_node.values[k];
                     let (appended_position, appended_record) = copy_inserted.remove(0);
-                    println!("Checking appended event: {appended_position:?} {appended_record:?}");
+                    // println!("Checking appended event: {appended_position:?} {appended_record:?}");
                     assert_eq!(appended_position, key);
                     assert_eq!(appended_record, record.clone());
                 }

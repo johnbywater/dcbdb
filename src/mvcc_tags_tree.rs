@@ -309,35 +309,91 @@ pub fn tags_tree_lookup(db: &Db, reader: &Reader, tag: TagHash) -> Result<Vec<Po
 }
 
 // Iterator over positions for a given tag in the tags tree
-pub struct TagsTreeIterator {
-    positions: Vec<Position>,
-    current_index: usize,
+pub struct TagsTreeIterator<'a> {
+    db: &'a Db,
+    reader: &'a Reader,
+    tag: TagHash,
+    state: IterState,
 }
 
-impl TagsTreeIterator {
-    pub fn new(positions: Vec<Position>) -> Self {
-        Self { positions, current_index: 0 }
+enum IterState {
+    NotStarted,
+    Ready { positions: Vec<Position>, index: usize },
+    Done,
+}
+
+impl<'a> TagsTreeIterator<'a> {
+    pub fn new(db: &'a Db, reader: &'a Reader, tag: TagHash) -> Self {
+        Self { db, reader, tag, state: IterState::NotStarted }
     }
 }
 
-impl Iterator for TagsTreeIterator {
+impl<'a> Iterator for TagsTreeIterator<'a> {
     type Item = Position;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.current_index < self.positions.len() {
-            let p = self.positions[self.current_index];
-            self.current_index += 1;
-            Some(p)
-        } else {
-            None
+        loop {
+            match &mut self.state {
+                IterState::NotStarted => {
+                    // Lazily traverse the tags tree to locate positions for the tag
+                    let mut current_page_id: PageID = self.reader.tags_tree_root_id;
+                    let positions: Vec<Position> = loop {
+                        match self.db.read_page(current_page_id) {
+                            Ok(page) => match page.node {
+                                Node::TagsInternal(internal) => {
+                                    let idx = match internal.keys.binary_search(&self.tag) {
+                                        Ok(i) => i + 1,
+                                        Err(i) => i,
+                                    };
+                                    if idx >= internal.child_ids.len() {
+                                        // Corruption detected: end iteration
+                                        break Vec::new();
+                                    }
+                                    current_page_id = internal.child_ids[idx];
+                                }
+                                Node::TagsLeaf(leaf) => match leaf.keys.binary_search(&self.tag) {
+                                    Ok(i) => {
+                                        let val = &leaf.values[i];
+                                        if val.root_id == PageID(0) {
+                                            break val.positions.clone();
+                                        } else {
+                                            // Per-tag subtree not implemented yet
+                                            break Vec::new();
+                                        }
+                                    }
+                                    Err(_) => break Vec::new(),
+                                },
+                                _ => break Vec::new(),
+                            },
+                            Err(_) => break Vec::new(),
+                        }
+                    };
+
+                    if positions.is_empty() {
+                        self.state = IterState::Done;
+                    } else {
+                        self.state = IterState::Ready { positions, index: 0 };
+                    }
+                    // Continue loop to yield the first element if any
+                }
+                IterState::Ready { positions, index } => {
+                    if *index < positions.len() {
+                        let p = positions[*index];
+                        *index += 1;
+                        return Some(p);
+                    } else {
+                        self.state = IterState::Done;
+                    }
+                }
+                IterState::Done => return None,
+            }
         }
     }
 }
 
 // Create an iterator over positions that have been inserted for the given tag
-pub fn tags_tree_iter(db: &Db, reader: &Reader, tag: TagHash) -> Result<TagsTreeIterator> {
-    let positions = tags_tree_lookup(db, reader, tag)?;
-    Ok(TagsTreeIterator::new(positions))
+pub fn tags_tree_iter<'a>(db: &'a Db, reader: &'a Reader, tag: TagHash) -> Result<TagsTreeIterator<'a>> {
+    Ok(TagsTreeIterator::new(db, reader, tag))
 }
 
 #[cfg(test)]

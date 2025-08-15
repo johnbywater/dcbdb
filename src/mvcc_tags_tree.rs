@@ -270,42 +270,9 @@ pub fn tags_tree_insert(db: &Db, writer: &mut Writer, tag: TagHash, pos: Positio
 }
 
 pub fn tags_tree_lookup(db: &Db, reader: &Reader, tag: TagHash) -> Result<Vec<Position>> {
-    let mut current_page_id: PageID = reader.tags_tree_root_id;
-    loop {
-        let page = db.read_page(current_page_id)?;
-        match &page.node {
-            Node::TagsInternal(internal) => {
-                let idx = match internal.keys.binary_search(&tag) {
-                    Ok(i) => i + 1,
-                    Err(i) => i,
-                };
-                if idx >= internal.child_ids.len() {
-                    return Err(LmdbError::DatabaseCorrupted(
-                        "Child index out of bounds in tags tree".to_string(),
-                    ));
-                }
-                current_page_id = internal.child_ids[idx];
-            }
-            Node::TagsLeaf(leaf) => match leaf.keys.binary_search(&tag) {
-                Ok(i) => {
-                    let val = &leaf.values[i];
-                    if val.root_id == PageID(0) {
-                        return Ok(val.positions.clone());
-                    } else {
-                        return Err(LmdbError::DatabaseCorrupted(
-                            "Per-tag subtree not implemented".to_string(),
-                        ));
-                    }
-                }
-                Err(_) => return Ok(Vec::new()),
-            },
-            _ => {
-                return Err(LmdbError::DatabaseCorrupted(
-                    "Expected TagsInternal or TagsLeaf node in tags tree".to_string(),
-                ));
-            }
-        }
-    }
+    // Reuse the iterator to traverse and collect all positions for the tag
+    let iter = tags_tree_iter(db, reader, tag)?;
+    Ok(iter.collect())
 }
 
 // Iterator over positions for a given tag in the tags tree

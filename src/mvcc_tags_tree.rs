@@ -308,6 +308,38 @@ pub fn tags_tree_lookup(db: &Db, reader: &Reader, tag: TagHash) -> Result<Vec<Po
     }
 }
 
+// Iterator over positions for a given tag in the tags tree
+pub struct TagTreeIterator {
+    positions: Vec<Position>,
+    current_index: usize,
+}
+
+impl TagTreeIterator {
+    pub fn new(positions: Vec<Position>) -> Self {
+        Self { positions, current_index: 0 }
+    }
+}
+
+impl Iterator for TagTreeIterator {
+    type Item = Position;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current_index < self.positions.len() {
+            let p = self.positions[self.current_index];
+            self.current_index += 1;
+            Some(p)
+        } else {
+            None
+        }
+    }
+}
+
+// Create an iterator over positions that have been inserted for the given tag
+pub fn tags_tree_iter(db: &Db, reader: &Reader, tag: TagHash) -> Result<TagTreeIterator> {
+    let positions = tags_tree_lookup(db, reader, tag)?;
+    Ok(TagTreeIterator::new(positions))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::api::{DCBEvent, DCBSequencedEvent, DCBQuery, DCBQueryItem};
+use crate::api::{DCBEvent, DCBSequencedEvent, DCBQuery};
 use crate::mvcc_db::{Db, Result};
 use crate::mvcc_event_tree::{event_tree_append, EventIterator};
 use crate::mvcc_node_event::EventRecord;
@@ -95,7 +95,7 @@ pub fn read(db: &mut Db, query: DCBQuery) -> Result<Vec<DCBSequencedEvent>> {
     let mut iter = EventIterator::new(&db, reader, None);
     let mut out: Vec<DCBSequencedEvent> = Vec::new();
 
-    let mut matches_item = |rec: &EventRecord| -> bool {
+    let matches_item = |rec: &EventRecord| -> bool {
         if query.items.is_empty() {
             return true;
         }

@@ -309,18 +309,18 @@ pub fn tags_tree_lookup(db: &Db, reader: &Reader, tag: TagHash) -> Result<Vec<Po
 }
 
 // Iterator over positions for a given tag in the tags tree
-pub struct TagTreeIterator {
+pub struct TagsTreeIterator {
     positions: Vec<Position>,
     current_index: usize,
 }
 
-impl TagTreeIterator {
+impl TagsTreeIterator {
     pub fn new(positions: Vec<Position>) -> Self {
         Self { positions, current_index: 0 }
     }
 }
 
-impl Iterator for TagTreeIterator {
+impl Iterator for TagsTreeIterator {
     type Item = Position;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -335,9 +335,9 @@ impl Iterator for TagTreeIterator {
 }
 
 // Create an iterator over positions that have been inserted for the given tag
-pub fn tags_tree_iter(db: &Db, reader: &Reader, tag: TagHash) -> Result<TagTreeIterator> {
+pub fn tags_tree_iter(db: &Db, reader: &Reader, tag: TagHash) -> Result<TagsTreeIterator> {
     let positions = tags_tree_lookup(db, reader, tag)?;
-    Ok(TagTreeIterator::new(positions))
+    Ok(TagsTreeIterator::new(positions))
 }
 
 #[cfg(test)]
@@ -643,7 +643,7 @@ mod tests {
             }
             db.commit(&mut writer).unwrap();
         }
-        
+
         // Check keys and values of all pages
         let mut copy_inserted = appended.clone();
         // Sort expected values by TagHash lexicographic order (array cmp)
@@ -696,6 +696,29 @@ mod tests {
             let positions = tags_tree_lookup(&db, &reader, *tag).unwrap();
             assert_eq!(positions, vec![*pos]);
         }
+    }
+
+    #[test]
+    fn test_tags_tree_iter_collects_inserted_positions() {
+        let (_tmp, mut db) = construct_db(1024);
+        let mut writer = db.writer().unwrap();
+        let tag = th(55);
+        let mut inserted: Vec<Position> = Vec::new();
+        for _ in 0..5 {
+            let p = writer.issue_position();
+            tags_tree_insert(&db, &mut writer, tag, p).unwrap();
+            inserted.push(p);
+        }
+        db.commit(&mut writer).unwrap();
+
+        let reader = db.reader().unwrap();
+        let iter = tags_tree_iter(&db, &reader, tag).unwrap();
+        let collected: Vec<Position> = iter.collect();
+        assert_eq!(collected, inserted);
+
+        // non-existent tag yields empty iterator
+        let empty_iter = tags_tree_iter(&db, &reader, th(9999)).unwrap();
+        assert_eq!(empty_iter.collect::<Vec<Position>>(), Vec::new());
     }
 
     #[test]

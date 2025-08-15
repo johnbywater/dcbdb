@@ -16,7 +16,7 @@ use std::sync::Mutex;
 pub type Result<T> = std::result::Result<T, LmdbError>;
 
 // Reader transaction
-pub struct LmdbReader {
+pub struct Reader {
     pub header_page_id: PageID,
     pub tsn: Tsn,
     pub event_tree_root_id: PageID,
@@ -25,7 +25,7 @@ pub struct LmdbReader {
     reader_tsns: *const Mutex<HashMap<usize, Tsn>>,
 }
 
-impl Drop for LmdbReader {
+impl Drop for Reader {
     fn drop(&mut self) {
         // Safety: The Mutex is valid as long as the Lmdb instance is valid,
         // and the LmdbReader doesn't outlive the Lmdb instance.
@@ -40,7 +40,7 @@ impl Drop for LmdbReader {
 }
 
 // Writer transaction
-pub struct LmdbWriter {
+pub struct Writer {
     pub header_page_id: PageID,
     pub tsn: Tsn,
     pub next_page_id: PageID,
@@ -57,7 +57,7 @@ pub struct LmdbWriter {
 }
 
 // Main LMDB structure
-pub struct Lmdb {
+pub struct Db {
     pub pager: Pager,
     pub reader_tsns: Mutex<HashMap<usize, Tsn>>,
     pub writer_lock: Mutex<()>,
@@ -68,7 +68,7 @@ pub struct Lmdb {
     pub verbose: bool,
 }
 
-impl Lmdb {
+impl Db {
     pub fn new(path: &Path, page_size: usize, verbose: bool) -> Result<Self> {
         let pager = Pager::new(path, page_size)?;
         let header_page_id0 = PageID(0);
@@ -184,7 +184,7 @@ impl Lmdb {
         Ok(())
     }
 
-    pub fn reader(&mut self) -> Result<LmdbReader> {
+    pub fn reader(&mut self) -> Result<Reader> {
         let (header_page_id, header_node) = self.get_latest_header()?;
 
         // Generate a unique ID for this reader using the counter
@@ -195,7 +195,7 @@ impl Lmdb {
         };
 
         // Create the reader with the unique ID
-        let reader = LmdbReader {
+        let reader = Reader {
             header_page_id,
             tsn: header_node.tsn,
             event_tree_root_id: header_node.event_tree_root_id,
@@ -213,7 +213,7 @@ impl Lmdb {
         Ok(reader)
     }
 
-    pub fn writer(&mut self) -> Result<LmdbWriter> {
+    pub fn writer(&mut self) -> Result<Writer> {
         if self.verbose {
             println!();
             println!("Constructing writer...");
@@ -223,7 +223,7 @@ impl Lmdb {
         let (header_page_id, header_node) = self.get_latest_header()?;
 
         // Create the writer
-        let mut writer = LmdbWriter::new(
+        let mut writer = Writer::new(
             header_page_id,
             Tsn(header_node.tsn.0 + 1),
             header_node.next_page_id,
@@ -244,7 +244,7 @@ impl Lmdb {
         Ok(writer)
     }
 
-    pub fn commit(&mut self, writer: &mut LmdbWriter) -> Result<()> {
+    pub fn commit(&mut self, writer: &mut Writer) -> Result<()> {
         // Process reused and freed page IDs
         if self.verbose {
             println!();
@@ -307,7 +307,7 @@ impl Lmdb {
 }
 
 // Implementation for LmdbWriter
-impl LmdbWriter {
+impl Writer {
     pub fn new(
         header_page_id: PageID,
         tsn: Tsn,
@@ -341,7 +341,7 @@ impl LmdbWriter {
         pos
     }
 
-    pub fn get_page_ref(&mut self, db: &Lmdb, page_id: PageID) -> Result<&Page> {
+    pub fn get_page_ref(&mut self, db: &Db, page_id: PageID) -> Result<&Page> {
         // Check the dirty pages first
         if self.dirty.contains_key(&page_id) {
             return Ok(self.dirty.get(&page_id).unwrap());
@@ -444,7 +444,7 @@ impl LmdbWriter {
         }
     }
 
-    pub fn find_reusable_page_ids(&mut self, db: &Lmdb) -> Result<()> {
+    pub fn find_reusable_page_ids(&mut self, db: &Db) -> Result<()> {
         let verbose = self.verbose;
         let mut reusable_page_ids: VecDeque<(PageID, Tsn)> = VecDeque::new();
         // Get free page IDs
@@ -525,7 +525,7 @@ impl LmdbWriter {
     // Free list tree methods
     pub fn insert_freed_page_id(
         &mut self,
-        db: &Lmdb,
+        db: &Db,
         tsn: Tsn,
         freed_page_id: PageID,
     ) -> Result<()> {
@@ -786,7 +786,7 @@ impl LmdbWriter {
 
     pub fn remove_freed_page_id(
         &mut self,
-        db: &Lmdb,
+        db: &Db,
         tsn: Tsn,
         used_page_id: PageID,
     ) -> Result<()> {
@@ -1023,12 +1023,12 @@ mod tests {
         let db_path = temp_dir.path().join("lmdb-test.db");
 
         {
-            let db = Lmdb::new(&db_path, 4096, VERBOSE).unwrap();
+            let db = Db::new(&db_path, 4096, VERBOSE).unwrap();
             assert!(db.pager.is_file_new);
         }
 
         {
-            let db = Lmdb::new(&db_path, 4096, VERBOSE).unwrap();
+            let db = Db::new(&db_path, 4096, VERBOSE).unwrap();
             assert!(!db.pager.is_file_new);
         }
     }
@@ -1038,7 +1038,7 @@ mod tests {
     fn test_write_transaction_incrementing_tsn_and_alternating_header() {
         let temp_dir = tempdir().unwrap();
         let db_path = temp_dir.path().join("lmdb-test.db");
-        let mut db = Lmdb::new(&db_path, 4096, VERBOSE).unwrap();
+        let mut db = Db::new(&db_path, 4096, VERBOSE).unwrap();
 
         {
             let mut writer = db.writer().unwrap();
@@ -1081,7 +1081,7 @@ mod tests {
     fn test_read_transaction_header_and_tsn() {
         let temp_dir = tempdir().unwrap();
         let db_path = temp_dir.path().join("lmdb-test.db");
-        let mut db = Lmdb::new(&db_path, 4096, VERBOSE).unwrap();
+        let mut db = Db::new(&db_path, 4096, VERBOSE).unwrap();
 
         // Initial reader should see TSN 0
         {
@@ -1180,7 +1180,7 @@ mod tests {
     fn test_copy_on_write_page_reuse() {
         let temp_dir = tempdir().unwrap();
         let db_path = temp_dir.path().join("lmdb-test.db");
-        let mut db = Lmdb::new(&db_path, 4096, VERBOSE).unwrap();
+        let mut db = Db::new(&db_path, 4096, VERBOSE).unwrap();
         // First transaction
         {
             let mut writer = db.writer().unwrap();
@@ -1286,10 +1286,10 @@ mod tests {
         use tempfile::tempdir;
 
         // Helper function to create a test database with a specified page size
-        fn construct_db(page_size: usize) -> (tempfile::TempDir, Lmdb) {
+        fn construct_db(page_size: usize) -> (tempfile::TempDir, Db) {
             let temp_dir = tempdir().unwrap();
             let db_path = temp_dir.path().join("lmdb-test.db");
-            let db = Lmdb::new(&db_path, page_size, VERBOSE).unwrap();
+            let db = Db::new(&db_path, page_size, VERBOSE).unwrap();
             (temp_dir, db)
         }
 
@@ -1308,7 +1308,7 @@ mod tests {
             // Construct a writer
             let tsn = Tsn(1001);
 
-            let mut writer = LmdbWriter::new(
+            let mut writer = Writer::new(
                 header_page_id,
                 tsn,
                 header_node.next_page_id,
@@ -1454,7 +1454,7 @@ mod tests {
 
             // Create a writer
             let mut tsn = Tsn(100);
-            let mut writer = LmdbWriter::new(
+            let mut writer = Writer::new(
                 header_page_id,
                 Tsn(header_node.tsn.0 + 1),
                 header_node.next_page_id,
@@ -1771,7 +1771,7 @@ mod tests {
                 let (header_page_id, header_node) = db.get_latest_header().unwrap();
 
                 // Create a new writer
-                let mut writer = LmdbWriter::new(
+                let mut writer = Writer::new(
                     header_page_id,
                     Tsn(header_node.tsn.0 + 1),
                     header_node.next_page_id,
@@ -1873,7 +1873,7 @@ mod tests {
             let (header_page_id, header_node) = db.get_latest_header().unwrap();
 
             // Create a writer
-            let mut writer = LmdbWriter::new(
+            let mut writer = Writer::new(
                 header_page_id,
                 Tsn(header_node.tsn.0 + 1),
                 header_node.next_page_id,
@@ -2092,7 +2092,7 @@ mod tests {
                 let (header_page_id, header_node) = db.get_latest_header().unwrap();
 
                 // Create a new writer
-                let mut writer = LmdbWriter::new(
+                let mut writer = Writer::new(
                     header_page_id,
                     Tsn(header_node.tsn.0 + 1),
                     header_node.next_page_id,

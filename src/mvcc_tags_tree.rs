@@ -1,4 +1,4 @@
-use crate::mvcc::{Lmdb, LmdbReader, LmdbWriter, Result};
+use crate::mvcc_db::{Db, Reader, Writer, Result};
 use crate::mvcc_common::{LmdbError, PageID, Position};
 use crate::mvcc_node_tags::{TagHash, TagsInternalNode, TagsLeafNode, TagsLeafValue};
 use crate::mvcc_nodes::Node;
@@ -12,7 +12,7 @@ use crate::mvcc_page::Page;
 /// subtree (root_id == PageID(0)), the Position is appended to the positions
 /// vector. Otherwise a new key/value pair is inserted at the correct sorted
 /// index.
-pub fn insert_position(db: &Lmdb, writer: &mut LmdbWriter, tag: TagHash, pos: Position) -> Result<()> {
+pub fn tags_tree_insert(db: &Db, writer: &mut Writer, tag: TagHash, pos: Position) -> Result<()> {
     let verbose = db.verbose;
     if verbose {
         println!("Inserting position {pos:?} for tag {:?}", tag);
@@ -269,7 +269,7 @@ pub fn insert_position(db: &Lmdb, writer: &mut LmdbWriter, tag: TagHash, pos: Po
     Ok(())
 }
 
-pub fn lookup_tag(db: &Lmdb, reader: &LmdbReader, tag: TagHash) -> Result<Vec<Position>> {
+pub fn tags_tree_lookup(db: &Db, reader: &Reader, tag: TagHash) -> Result<Vec<Position>> {
     let mut current_page_id: PageID = reader.tags_tree_root_id;
     loop {
         let page = db.read_page(current_page_id)?;
@@ -311,17 +311,17 @@ pub fn lookup_tag(db: &Lmdb, reader: &LmdbReader, tag: TagHash) -> Result<Vec<Po
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mvcc::Lmdb;
+    use crate::mvcc_db::Db;
     use tempfile::{tempdir, TempDir};
     use std::time::Instant;
     use std::hint;
 
     static VERBOSE: bool = false;
 
-    fn construct_db(page_size: usize) -> (TempDir, Lmdb) {
+    fn construct_db(page_size: usize) -> (TempDir, Db) {
         let temp_dir = tempdir().unwrap();
         let db_path = temp_dir.path().join("lmdb-test.db");
-        let db = Lmdb::new(&db_path, page_size, VERBOSE).unwrap();
+        let db = Db::new(&db_path, page_size, VERBOSE).unwrap();
         (temp_dir, db)
     }
 
@@ -336,7 +336,7 @@ mod tests {
         let mut writer = db.writer().unwrap();
         let tag = th(10);
         let pos = writer.issue_position();
-        insert_position(&db, &mut writer, tag, pos).unwrap();
+        tags_tree_insert(&db, &mut writer, tag, pos).unwrap();
         db.commit(&mut writer).unwrap();
 
         let writer = db.writer().unwrap();
@@ -360,7 +360,7 @@ mod tests {
         let tags = [30u64, 10, 20, 20, 15];
         for &n in &tags {
             let pos = writer.issue_position();
-            insert_position(&db, &mut writer, th(n), pos).unwrap();
+            tags_tree_insert(&db, &mut writer, th(n), pos).unwrap();
         }
         // Verify sorted order and duplicate handling in leaf
         let page = writer.get_page_ref(&db, writer.tags_tree_root_id).unwrap();
@@ -378,9 +378,9 @@ mod tests {
         // Commit and verify lookup_tag on some keys
         db.commit(&mut writer).unwrap();
         let reader = db.reader().unwrap();
-        let res_10 = lookup_tag(&db, &reader, th(10)).unwrap();
+        let res_10 = tags_tree_lookup(&db, &reader, th(10)).unwrap();
         assert!(!res_10.is_empty());
-        let res_missing = lookup_tag(&db, &reader, th(999)).unwrap();
+        let res_missing = tags_tree_lookup(&db, &reader, th(999)).unwrap();
         assert!(res_missing.is_empty());
     }
 
@@ -390,19 +390,19 @@ mod tests {
         let mut writer = db.writer().unwrap();
         let t1 = th(42);
         let p1 = writer.issue_position();
-        insert_position(&db, &mut writer, t1, p1).unwrap();
+        tags_tree_insert(&db, &mut writer, t1, p1).unwrap();
         let p2 = writer.issue_position();
-        insert_position(&db, &mut writer, t1, p2).unwrap();
+        tags_tree_insert(&db, &mut writer, t1, p2).unwrap();
         let t2 = th(7);
         let p3 = writer.issue_position();
-        insert_position(&db, &mut writer, t2, p3).unwrap();
+        tags_tree_insert(&db, &mut writer, t2, p3).unwrap();
         db.commit(&mut writer).unwrap();
 
         let reader = db.reader().unwrap();
-        let vals = lookup_tag(&db, &reader, t1).unwrap();
+        let vals = tags_tree_lookup(&db, &reader, t1).unwrap();
         assert_eq!(vals, vec![p1, p2]);
         // non-existent
-        let vals_none = lookup_tag(&db, &reader, th(1000)).unwrap();
+        let vals_none = tags_tree_lookup(&db, &reader, th(1000)).unwrap();
         assert!(vals_none.is_empty());
     }
 
@@ -427,7 +427,7 @@ mod tests {
             appended.push((tag, position));
 
             // Insert the pair into the tags tree
-            insert_position(&db, &mut writer, tag, position).unwrap();
+            tags_tree_insert(&db, &mut writer, tag, position).unwrap();
 
             // Check if we've split the leaf
             let root_page = writer.dirty.get(&writer.tags_tree_root_id).unwrap();
@@ -496,7 +496,7 @@ mod tests {
             appended.push((tag, position));
 
             // Insert the pair into the tags tree
-            insert_position(&db, &mut writer, tag, position).unwrap();
+            tags_tree_insert(&db, &mut writer, tag, position).unwrap();
 
             // Check if we've split an internal node: root is internal and its first child is also internal
             let root_page = writer.dirty.get(&writer.tags_tree_root_id).unwrap();
@@ -563,7 +563,7 @@ mod tests {
         db.commit(&mut writer).unwrap();
         let reader = db.reader().unwrap();
         for (tag, pos) in &appended {
-            let positions = lookup_tag(&db, &reader, *tag).unwrap();
+            let positions = tags_tree_lookup(&db, &reader, *tag).unwrap();
             assert_eq!(positions, vec![*pos]);
         }
     }
@@ -589,7 +589,7 @@ mod tests {
             appended.push((tag, position));
 
             // Insert the pair into the tags tree
-            insert_position(&db, &mut writer, tag, position).unwrap();
+            tags_tree_insert(&db, &mut writer, tag, position).unwrap();
 
             // Check if the root is an internal node and its first child is also internal
             let root_page = writer.dirty.get(&writer.tags_tree_root_id).unwrap();
@@ -661,7 +661,7 @@ mod tests {
         // Validate lookup_tag for each inserted tag
         let reader = db.reader().unwrap();
         for (tag, pos) in &appended {
-            let positions = lookup_tag(&db, &reader, *tag).unwrap();
+            let positions = tags_tree_lookup(&db, &reader, *tag).unwrap();
             assert_eq!(positions, vec![*pos]);
         }
     }
@@ -670,7 +670,7 @@ mod tests {
     fn benchmark_insert_and_lookup_varied_sizes() {
         // Benchmark-like test; prints durations for different sizes. Run with:
         // cargo test --lib mvcc_tags_tree::tests::benchmark_insert_and_lookup_varied_sizes -- --nocapture
-        let sizes: [usize; 5] = [100, 1_000, 5_000, 10_000, 100_000];
+        let sizes: [usize; 8] = [1, 1, 10, 100, 1_000, 5_000, 10_000, 50_000];
         for &size in &sizes {
             let (_tmp, mut db) = construct_db(4096);
 
@@ -682,28 +682,28 @@ mod tests {
                 let tag = th(n);
                 hint::black_box(tag);
                 hint::black_box(pos);
-                insert_position(&db, &mut writer, tag, pos).unwrap();
+                tags_tree_insert(&db, &mut writer, tag, pos).unwrap();
             }
             let insert_elapsed = start_insert.elapsed();
+            let start_commit = Instant::now();
             db.commit(&mut writer).unwrap();
+            let commit_elapsed = start_commit.elapsed();
 
             // Lookup phase
             let reader = db.reader().unwrap();
             let start_lookup = Instant::now();
             for n in 0..(size as u64) {
-                let res = lookup_tag(&db, &reader, th(n)).unwrap();
+                let res = tags_tree_lookup(&db, &reader, th(n)).unwrap();
                 hint::black_box(&res);
             }
             let lookup_elapsed = start_lookup.elapsed();
 
             let insert_avg_us = (insert_elapsed.as_secs_f64() * 1_000_000.0) / (size as f64);
+            let commit_avg_us = commit_elapsed.as_secs_f64() * 1_000_000.0;
             let lookup_avg_us = (lookup_elapsed.as_secs_f64() * 1_000_000.0) / (size as f64);
 
             println!(
-                "mvcc_tags_tree benchmark: size={}, insert_us_per_call={:.3}, lookup_us_per_call={:.3}",
-                size,
-                insert_avg_us,
-                lookup_avg_us
+                "mvcc_tags_tree benchmark: size={size}, insert_us_per_call={insert_avg_us:.3}, commit_us={commit_avg_us:.3}, lookup_us_per_call={lookup_avg_us:.3}"
             );
         }
     }

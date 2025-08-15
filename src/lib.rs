@@ -37,7 +37,7 @@ pub mod store;
 pub mod grpc;
 
 // Export the MVCC module
-pub mod mvcc;
+pub mod mvcc_db;
 
 // Export the MVCC Nodes module
 mod crc;

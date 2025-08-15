@@ -1,4 +1,4 @@
-use crate::mvcc::{Lmdb, LmdbReader, LmdbWriter, Result};
+use crate::mvcc_db::{Db, Reader, Writer, Result};
 use crate::mvcc_common::Position;
 use crate::mvcc_common::{LmdbError, PageID};
 use crate::mvcc_node_event::{EventInternalNode, EventLeafNode, EventRecord};
@@ -11,9 +11,9 @@ use std::collections::HashMap;
 /// This function obtains a mutable reference to a dirty copy of the root event
 /// leaf page (using copy-on-write if necessary) and appends the provided
 /// Position to the keys and the EventRecord to the values.
-pub fn append_event(
-    db: &Lmdb,
-    writer: &mut LmdbWriter,
+pub fn event_tree_append(
+    db: &Db,
+    writer: &mut Writer,
     event: EventRecord,
     position: Position,
 ) -> Result<()> {
@@ -269,7 +269,7 @@ pub fn append_event(
     Ok(())
 }
 
-pub fn lookup_event(db: &Lmdb, reader: &LmdbReader, position: Position) -> Result<EventRecord> {
+pub fn event_tree_lookup(db: &Db, reader: &Reader, position: Position) -> Result<EventRecord> {
     let mut current_page_id: PageID = reader.event_tree_root_id;
     loop {
         let page = db.read_page(current_page_id)?;
@@ -308,15 +308,15 @@ pub fn lookup_event(db: &Lmdb, reader: &LmdbReader, position: Position) -> Resul
 }
 
 pub struct EventIterator<'a> {
-    pub db: &'a Lmdb,
-    pub reader: LmdbReader,
+    pub db: &'a Db,
+    pub reader: Reader,
     pub stack: Vec<(PageID, usize)>,
     pub page_cache: HashMap<PageID, Page>,
     pub after: Position,
 }
 
 impl<'a> EventIterator<'a> {
-    pub fn new(db: &'a Lmdb, reader: LmdbReader, after: Option<Position>) -> Self {
+    pub fn new(db: &'a Db, reader: Reader, after: Option<Position>) -> Self {
         let next_position = (reader.event_tree_root_id, 0);
         let after = after.unwrap_or(Position(0));
         Self {
@@ -454,10 +454,10 @@ mod tests {
     static VERBOSE: bool = false;
 
     // Helper function to create a test database with a specified page size
-    fn construct_db(page_size: usize) -> (tempfile::TempDir, Lmdb) {
+    fn construct_db(page_size: usize) -> (tempfile::TempDir, Db) {
         let temp_dir = tempdir().unwrap();
         let db_path = temp_dir.path().join("lmdb-test.db");
-        let db = Lmdb::new(&db_path, page_size, VERBOSE).unwrap();
+        let db = Db::new(&db_path, page_size, VERBOSE).unwrap();
         (temp_dir, db)
     }
 
@@ -481,7 +481,7 @@ mod tests {
         };
 
         // Call append_event
-        append_event(&db, &mut writer, record.clone(), position).unwrap();
+        event_tree_append(&db, &mut writer, record.clone(), position).unwrap();
 
         // Verify that the dirty root page contains the appended key/value
         let new_root_id = writer.event_tree_root_id;
@@ -534,7 +534,7 @@ mod tests {
             appended.push((position, record.clone()));
 
             // Append the event
-            append_event(&db, &mut writer, record, position).unwrap();
+            event_tree_append(&db, &mut writer, record, position).unwrap();
 
             // Check if we've split the leaf
             let root_page = writer.dirty.get(&writer.event_tree_root_id).unwrap();
@@ -605,7 +605,7 @@ mod tests {
             appended.push((position, record.clone()));
 
             // Append the event
-            append_event(&db, &mut writer, record, position).unwrap();
+            event_tree_append(&db, &mut writer, record, position).unwrap();
 
             // Check if we've split the leaf
             let root_page = writer.dirty.get(&writer.event_tree_root_id).unwrap();
@@ -681,7 +681,7 @@ mod tests {
             appended.push((position, record.clone()));
 
             // Append the event
-            append_event(&db, &mut writer, record, position).unwrap();
+            event_tree_append(&db, &mut writer, record, position).unwrap();
 
             // Check if we've split an internal node
             let root_page = writer.dirty.get(&writer.event_tree_root_id).unwrap();
@@ -768,7 +768,7 @@ mod tests {
             appended.push((position, record.clone()));
 
             // Append the event
-            append_event(&db, &mut writer, record, position).unwrap();
+            event_tree_append(&db, &mut writer, record, position).unwrap();
 
             // Check if the root is an internal node
             let root_page = writer.dirty.get(&writer.event_tree_root_id).unwrap();
@@ -861,7 +861,7 @@ mod tests {
             appended.push((position, record.clone()));
 
             // Append the event
-            append_event(&db, &mut writer, record, position).unwrap();
+            event_tree_append(&db, &mut writer, record, position).unwrap();
 
             // Check if the root is an internal node
             let root_page = writer.dirty.get(&writer.event_tree_root_id).unwrap();
@@ -928,7 +928,7 @@ mod tests {
 
         // Additionally, validate lookup_event for each appended position using the existing reader in the iterator
         for (pos, expected_rec) in copy_inserted.iter() {
-            let found = lookup_event(&db, &events_iterator.reader, *pos).unwrap();
+            let found = event_tree_lookup(&db, &events_iterator.reader, *pos).unwrap();
             assert_eq!(expected_rec, &found);
         }
 
@@ -983,7 +983,7 @@ mod tests {
             appended.push((position, record.clone()));
 
             // Append the event
-            append_event(&db, &mut writer, record, position).unwrap();
+            event_tree_append(&db, &mut writer, record, position).unwrap();
 
             // Check if the root is an internal node
             let root_page = writer.dirty.get(&writer.event_tree_root_id).unwrap();
@@ -1063,6 +1063,59 @@ mod tests {
             assert!(
                 map.values().all(|&tsn| tsn != reader_tsn),
                 "reader_tsn should be removed after EventIterator is dropped"
+            );
+        }
+    }
+
+    #[test]
+    fn benchmark_append_and_lookup_varied_sizes() {
+        // Benchmark-like test; prints durations for different sizes. Run with:
+        // cargo test --lib mvcc_event_tree::tests::benchmark_append_and_lookup_varied_sizes -- --nocapture
+        let sizes: [usize; 7] = [1, 10, 100, 1_000, 5_000, 10_000, 50_000];
+        for &size in &sizes {
+            let (_tmp, mut db) = construct_db(4096);
+
+            // Append phase
+            let mut writer = db.writer().unwrap();
+            let mut positions: Vec<Position> = Vec::with_capacity(size);
+            let start_append = std::time::Instant::now();
+            for n in 0..(size as u64) {
+                let pos = writer.issue_position();
+                let event = EventRecord {
+                    event_type: "E".to_string(),
+                    data: Vec::new(),
+                    tags: Vec::new(),
+                };
+                std::hint::black_box(n);
+                std::hint::black_box(&event);
+                std::hint::black_box(pos);
+                event_tree_append(&db, &mut writer, event, pos).unwrap();
+                positions.push(pos);
+            }
+            let append_elapsed = start_append.elapsed();
+            let start_commit = std::time::Instant::now();
+            db.commit(&mut writer).unwrap();
+            let commit_elapsed = start_commit.elapsed();
+
+            // Lookup phase
+            let reader = db.reader().unwrap();
+            let start_lookup = std::time::Instant::now();
+            for &pos in &positions {
+                let rec = event_tree_lookup(&db, &reader, pos).unwrap();
+                std::hint::black_box(&rec);
+            }
+            let lookup_elapsed = start_lookup.elapsed();
+
+            let append_avg_us = (append_elapsed.as_secs_f64() * 1_000_000.0) / (size as f64);
+            let commit_avg_us = commit_elapsed.as_secs_f64() * 1_000_000.0;
+            let lookup_avg_us = (lookup_elapsed.as_secs_f64() * 1_000_000.0) / (size as f64);
+
+            println!(
+                "mvcc_event_tree benchmark: size={}, append_us_per_call={:.3}, commit_us={:.3}, lookup_us_per_call={:.3}",
+                size,
+                append_avg_us,
+                commit_avg_us,
+                lookup_avg_us
             );
         }
     }

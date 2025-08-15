@@ -39,6 +39,9 @@ pub mod grpc;
 // Export the MVCC module
 pub mod mvcc_db;
 
+// Export the MVCC API facade for simplified usage
+pub mod mvcc_api;
+
 // Export the MVCC Nodes module
 mod crc;
 mod mvcc_common;

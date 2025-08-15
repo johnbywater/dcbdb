@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::api::DCBEvent;
+use crate::api::{DCBEvent, DCBSequencedEvent};
 use crate::mvcc_db::{Db, Result};
 use crate::mvcc_event_tree::{event_tree_append, EventIterator};
 use crate::mvcc_node_event::EventRecord;
@@ -57,24 +57,27 @@ pub fn unconditional_append(db: &mut Db, events: Vec<DCBEvent>) -> Result<()> {
     db.commit(&mut writer)
 }
 
-/// Read all events from the database, returning them as DCBEvent instances.
-/// Uses EventIterator to iterate over all (Position, EventRecord) pairs and maps
-/// them back to DCBEvent (dropping the positions as per the requirement).
-pub fn read_all(db: &mut Db) -> Result<Vec<DCBEvent>> {
+/// Read all events from the database, returning them as DCBSequencedEvent instances.
+/// Uses EventIterator to iterate over all (Position, EventRecord) pairs and includes
+/// the position in the returned items.
+pub fn read_all(db: &mut Db) -> Result<Vec<DCBSequencedEvent>> {
     let reader = db.reader()?;
     let mut iter = EventIterator::new(&db, reader, None);
-    let mut out: Vec<DCBEvent> = Vec::new();
+    let mut out: Vec<DCBSequencedEvent> = Vec::new();
 
     loop {
         let batch = iter.next_batch(64)?;
         if batch.is_empty() {
             break;
         }
-        for (_pos, rec) in batch.into_iter() {
-            out.push(DCBEvent {
-                event_type: rec.event_type,
-                data: rec.data,
-                tags: rec.tags,
+        for (pos, rec) in batch.into_iter() {
+            out.push(DCBSequencedEvent {
+                position: pos.0,
+                event: DCBEvent {
+                    event_type: rec.event_type,
+                    data: rec.data,
+                    tags: rec.tags,
+                },
             });
         }
     }
@@ -120,9 +123,15 @@ mod tests {
         assert_eq!(input.len(), output.len());
         // Compare items field-by-field (no PartialEq derive on DCBEvent)
         for (a, b) in input.iter().zip(output.iter()) {
-            assert_eq!(a.event_type, b.event_type);
-            assert_eq!(a.data, b.data);
-            assert_eq!(a.tags, b.tags);
+            assert_eq!(a.event_type, b.event.event_type);
+            assert_eq!(a.data, b.event.data);
+            assert_eq!(a.tags, b.event.tags);
+        }
+        // Positions should be positive and strictly increasing
+        let mut prev = 0u64;
+        for s in output.iter() {
+            assert!(s.position > prev);
+            prev = s.position;
         }
     }
 }

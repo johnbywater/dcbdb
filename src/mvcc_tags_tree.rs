@@ -313,6 +313,8 @@ mod tests {
     use super::*;
     use crate::mvcc::Lmdb;
     use tempfile::{tempdir, TempDir};
+    use std::time::Instant;
+    use std::hint;
 
     static VERBOSE: bool = false;
 
@@ -661,6 +663,48 @@ mod tests {
         for (tag, pos) in &appended {
             let positions = lookup_tag(&db, &reader, *tag).unwrap();
             assert_eq!(positions, vec![*pos]);
+        }
+    }
+
+    #[test]
+    fn benchmark_insert_and_lookup_varied_sizes() {
+        // Benchmark-like test; prints durations for different sizes. Run with:
+        // cargo test --lib mvcc_tags_tree::tests::benchmark_insert_and_lookup_varied_sizes -- --nocapture
+        let sizes: [usize; 5] = [100, 1_000, 5_000, 10_000, 100_000];
+        for &size in &sizes {
+            let (_tmp, mut db) = construct_db(4096);
+
+            // Insert phase
+            let mut writer = db.writer().unwrap();
+            let start_insert = Instant::now();
+            for n in 0..(size as u64) {
+                let pos = writer.issue_position();
+                let tag = th(n);
+                hint::black_box(tag);
+                hint::black_box(pos);
+                insert_position(&db, &mut writer, tag, pos).unwrap();
+            }
+            let insert_elapsed = start_insert.elapsed();
+            db.commit(&mut writer).unwrap();
+
+            // Lookup phase
+            let reader = db.reader().unwrap();
+            let start_lookup = Instant::now();
+            for n in 0..(size as u64) {
+                let res = lookup_tag(&db, &reader, th(n)).unwrap();
+                hint::black_box(&res);
+            }
+            let lookup_elapsed = start_lookup.elapsed();
+
+            let insert_avg_us = (insert_elapsed.as_secs_f64() * 1_000_000.0) / (size as f64);
+            let lookup_avg_us = (lookup_elapsed.as_secs_f64() * 1_000_000.0) / (size as f64);
+
+            println!(
+                "mvcc_tags_tree benchmark: size={}, insert_us_per_call={:.3}, lookup_us_per_call={:.3}",
+                size,
+                insert_avg_us,
+                lookup_avg_us
+            );
         }
     }
 }

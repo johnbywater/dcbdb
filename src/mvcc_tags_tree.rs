@@ -271,7 +271,7 @@ pub fn tags_tree_insert(db: &Db, writer: &mut Writer, tag: TagHash, pos: Positio
 
 pub fn tags_tree_lookup(db: &Db, reader: &Reader, tag: TagHash) -> Result<Vec<Position>> {
     // Reuse the iterator to traverse and collect all positions for the tag
-    let iter = tags_tree_iter(db, reader, tag)?;
+    let iter = tags_tree_iter(db, reader, tag, Position(0))?;
     Ok(iter.collect())
 }
 
@@ -280,6 +280,7 @@ pub struct TagsTreeIterator<'a> {
     db: &'a Db,
     reader: &'a Reader,
     tag: TagHash,
+    after: Position,
     state: IterState,
 }
 
@@ -290,8 +291,8 @@ enum IterState {
 }
 
 impl<'a> TagsTreeIterator<'a> {
-    pub fn new(db: &'a Db, reader: &'a Reader, tag: TagHash) -> Self {
-        Self { db, reader, tag, state: IterState::NotStarted }
+    pub fn new(db: &'a Db, reader: &'a Reader, tag: TagHash, after: Position) -> Self {
+        Self { db, reader, tag, after, state: IterState::NotStarted }
     }
 }
 
@@ -339,7 +340,13 @@ impl<'a> Iterator for TagsTreeIterator<'a> {
                     if positions.is_empty() {
                         self.state = IterState::Done;
                     } else {
-                        self.state = IterState::Ready { positions, index: 0 };
+                        // Start from the first position strictly greater than self.after
+                        let start_idx = positions.partition_point(|p| *p <= self.after);
+                        if start_idx >= positions.len() {
+                            self.state = IterState::Done;
+                        } else {
+                            self.state = IterState::Ready { positions, index: start_idx };
+                        }
                     }
                     // Continue loop to yield the first element if any
                 }
@@ -359,8 +366,8 @@ impl<'a> Iterator for TagsTreeIterator<'a> {
 }
 
 // Create an iterator over positions that have been inserted for the given tag
-pub fn tags_tree_iter<'a>(db: &'a Db, reader: &'a Reader, tag: TagHash) -> Result<TagsTreeIterator<'a>> {
-    Ok(TagsTreeIterator::new(db, reader, tag))
+pub fn tags_tree_iter<'a>(db: &'a Db, reader: &'a Reader, tag: TagHash, after: Position) -> Result<TagsTreeIterator<'a>> {
+    Ok(TagsTreeIterator::new(db, reader, tag, after))
 }
 
 #[cfg(test)]
@@ -735,12 +742,28 @@ mod tests {
         db.commit(&mut writer).unwrap();
 
         let reader = db.reader().unwrap();
-        let iter = tags_tree_iter(&db, &reader, tag).unwrap();
-        let collected: Vec<Position> = iter.collect();
-        assert_eq!(collected, inserted);
 
-        // non-existent tag yields empty iterator
-        let empty_iter = tags_tree_iter(&db, &reader, th(9999)).unwrap();
+        // after = 0 -> all positions
+        let collected_all: Vec<Position> = tags_tree_iter(&db, &reader, tag, Position(0)).unwrap().collect();
+        assert_eq!(collected_all, inserted);
+
+        // after = first -> drop first
+        let after_first = inserted[0];
+        let collected_after_first: Vec<Position> = tags_tree_iter(&db, &reader, tag, after_first).unwrap().collect();
+        assert_eq!(collected_after_first, inserted[1..].to_vec());
+
+        // after = middle -> drop up to and including that element
+        let after_mid = inserted[2];
+        let collected_after_mid: Vec<Position> = tags_tree_iter(&db, &reader, tag, after_mid).unwrap().collect();
+        assert_eq!(collected_after_mid, inserted[3..].to_vec());
+
+        // after = last -> empty
+        let after_last = *inserted.last().unwrap();
+        let collected_empty: Vec<Position> = tags_tree_iter(&db, &reader, tag, after_last).unwrap().collect();
+        assert!(collected_empty.is_empty());
+
+        // non-existent tag yields empty iterator regardless of after
+        let empty_iter = tags_tree_iter(&db, &reader, th(9999), Position(0)).unwrap();
         assert_eq!(empty_iter.collect::<Vec<Position>>(), Vec::new());
     }
 

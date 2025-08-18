@@ -209,7 +209,7 @@ fn event_matches_query_items(rec: &EventRecord, query: &Option<DCBQuery>) -> boo
 
 /// Read events using the tags index by merging per-tag iterators, grouping by position,
 /// filtering by tag and type matches, and then looking up the event record.
-pub fn read_conditional(db: &mut Db, query: DCBQuery) -> MvccResult<Vec<DCBSequencedEvent>> {
+pub fn read_conditional(db: &mut Db, query: DCBQuery, after: MvccPosition) -> MvccResult<Vec<DCBSequencedEvent>> {
     // If no items, return all events
     if query.items.is_empty() {
         return read_all(db);
@@ -264,7 +264,7 @@ pub fn read_conditional(db: &mut Db, query: DCBQuery) -> MvccResult<Vec<DCBSeque
     let mut tag_iters: Vec<PositionTagQiidIterator<_>> = Vec::new();
     for (tag, qiids) in tag_qiis.iter() {
         let tag_hash: TagHash = tag_to_hash(tag);
-        let positions_iter = tags_tree_iter(&db, &reader, tag_hash)?; // yields positions for tag
+        let positions_iter = tags_tree_iter(&db, &reader, tag_hash, after)?; // yields positions for tag
         tag_iters.push(PositionTagQiidIterator::new(positions_iter, tag.clone(), qiids.clone()));
     }
 
@@ -573,7 +573,7 @@ mod tests {
         let query_alpha = DCBQuery {
             items: vec![DCBQueryItem { types: vec![], tags: vec!["alpha".to_string()] }],
         };
-        let res_alpha = read_conditional(&mut db, query_alpha).unwrap();
+        let res_alpha = read_conditional(&mut db, query_alpha, MvccPosition(0)).unwrap();
         assert_eq!(4, res_alpha.len());
         let mut prev = 0u64;
         for s in &res_alpha {
@@ -582,11 +582,23 @@ mod tests {
             assert!(s.event.tags.iter().any(|t| t == "alpha"));
         }
 
+        // Validate after filtering for alpha
+        let alpha_positions: Vec<u64> = res_alpha.iter().map(|e| e.position).collect();
+        // after = 0 -> all
+        let res_alpha_all = read_conditional(&mut db, DCBQuery { items: vec![DCBQueryItem { types: vec![], tags: vec!["alpha".to_string()] }] }, MvccPosition(0)).unwrap();
+        assert_eq!(res_alpha_all.iter().map(|e| e.position).collect::<Vec<_>>(), alpha_positions);
+        // after = first -> tail
+        let res_alpha_after_first = read_conditional(&mut db, DCBQuery { items: vec![DCBQueryItem { types: vec![], tags: vec!["alpha".to_string()] }] }, MvccPosition(alpha_positions[0])).unwrap();
+        assert_eq!(res_alpha_after_first.iter().map(|e| e.position).collect::<Vec<_>>(), alpha_positions[1..].to_vec());
+        // after = last -> empty
+        let res_alpha_after_last = read_conditional(&mut db, DCBQuery { items: vec![DCBQueryItem { types: vec![], tags: vec!["alpha".to_string()] }] }, MvccPosition(*alpha_positions.last().unwrap())).unwrap();
+        assert!(res_alpha_after_last.is_empty());
+
         // Query: tags 'alpha' AND 'gamma' -> expect 2 events (i=0,5)
         let query_alpha_gamma = DCBQuery {
             items: vec![DCBQueryItem { types: vec![], tags: vec!["alpha".to_string(), "gamma".to_string()] }],
         };
-        let res_alpha_gamma = read_conditional(&mut db, query_alpha_gamma).unwrap();
+        let res_alpha_gamma = read_conditional(&mut db, query_alpha_gamma, MvccPosition(0)).unwrap();
         assert_eq!(2, res_alpha_gamma.len());
         for s in &res_alpha_gamma {
             assert!(s.event.tags.iter().any(|t| t == "alpha"));
@@ -597,7 +609,7 @@ mod tests {
         let query_type0_alpha = DCBQuery {
             items: vec![DCBQueryItem { types: vec!["Type0".to_string()], tags: vec!["alpha".to_string()] }],
         };
-        let res_type0_alpha = read_conditional(&mut db, query_type0_alpha).unwrap();
+        let res_type0_alpha = read_conditional(&mut db, query_type0_alpha, MvccPosition(0)).unwrap();
         assert_eq!(1, res_type0_alpha.len());
         assert_eq!("Type0", res_type0_alpha[0].event.event_type);
         assert!(res_type0_alpha[0].event.tags.iter().any(|t| t == "alpha"));
@@ -609,7 +621,7 @@ mod tests {
                 DCBQueryItem { types: vec![], tags: vec!["beta".to_string()] },
             ],
         };
-        let res_alpha_or_beta = read_conditional(&mut db, query_alpha_or_beta).unwrap();
+        let res_alpha_or_beta = read_conditional(&mut db, query_alpha_or_beta, MvccPosition(0)).unwrap();
         assert_eq!(8, res_alpha_or_beta.len());
     }
 }

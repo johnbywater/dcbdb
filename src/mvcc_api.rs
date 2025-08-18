@@ -632,3 +632,79 @@ mod tests {
         assert_eq!(8, res_alpha_or_beta.len());
     }
 }
+
+
+#[cfg(test)]
+mod consolidated_extra_tests {
+    use super::*;
+    use serial_test::serial;
+    use tempfile::tempdir;
+    use crate::api::{DCBQuery, DCBQueryItem};
+
+    static VERBOSE: bool = false;
+
+    #[test]
+    #[serial]
+    fn test_read_conditional_empty_query_after_and_limit() {
+        let temp_dir = tempdir().unwrap();
+        let db_path = temp_dir.path().join("mvcc-empty-query.db");
+        let mut db = open_db(&db_path, 512, VERBOSE).unwrap();
+
+        // Append 5 simple events
+        let events: Vec<DCBEvent> = (0u8..5)
+            .map(|i| DCBEvent { event_type: format!("T{}", i), data: vec![i], tags: vec![format!("tag{}", i)] })
+            .collect();
+        unconditional_append(&mut db, events.clone()).unwrap();
+
+        // Empty query behaves like read-all but with after/limit
+        let all = read_conditional(&mut db, DCBQuery { items: vec![] }, MvccPosition(0), None).unwrap();
+        assert_eq!(all.len(), 5);
+        // Positions strictly increasing
+        assert!(all.windows(2).all(|w| w[0].position < w[1].position));
+
+        // Limit
+        let lim3 = read_conditional(&mut db, DCBQuery { items: vec![] }, MvccPosition(0), Some(3)).unwrap();
+        assert_eq!(lim3.len(), 3);
+
+        // After semantics
+        let first_pos = all[0].position;
+        let after_first = read_conditional(&mut db, DCBQuery { items: vec![] }, MvccPosition(first_pos), None).unwrap();
+        assert_eq!(after_first.len(), 4);
+        let last_pos = all.last().unwrap().position;
+        let after_last = read_conditional(&mut db, DCBQuery { items: vec![] }, MvccPosition(last_pos), None).unwrap();
+        assert!(after_last.is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn test_read_conditional_fallback_types_only() {
+        let temp_dir = tempdir().unwrap();
+        let db_path = temp_dir.path().join("mvcc-fallback-types-only.db");
+        let mut db = open_db(&db_path, 512, VERBOSE).unwrap();
+
+        // Create events with mixed types and arbitrary tags
+        let events = vec![
+            DCBEvent { event_type: "TypeA".to_string(), data: vec![1], tags: vec!["x".to_string()] },
+            DCBEvent { event_type: "TypeB".to_string(), data: vec![2], tags: vec!["y".to_string()] },
+            DCBEvent { event_type: "TypeA".to_string(), data: vec![3], tags: vec!["z".to_string()] },
+        ];
+        unconditional_append(&mut db, events).unwrap();
+
+        // Query item with no tags => forces fallback path; select TypeA only
+        let query = DCBQuery { items: vec![DCBQueryItem { types: vec!["TypeA".to_string()], tags: vec![] }] };
+        let res = read_conditional(&mut db, query.clone(), MvccPosition(0), None).unwrap();
+        assert_eq!(res.len(), 2);
+        assert!(res.iter().all(|e| e.event.event_type == "TypeA"));
+
+        // After: skip first TypeA
+        let first_type_a_pos = res[0].position;
+        let res_after = read_conditional(&mut db, query.clone(), MvccPosition(first_type_a_pos), None).unwrap();
+        assert_eq!(res_after.len(), 1);
+        assert_eq!(res_after[0].event.event_type, "TypeA");
+
+        // Limit: request at most 1
+        let res_limited = read_conditional(&mut db, query, MvccPosition(0), Some(1)).unwrap();
+        assert_eq!(res_limited.len(), 1);
+        assert_eq!(res_limited[0].event.event_type, "TypeA");
+    }
+}

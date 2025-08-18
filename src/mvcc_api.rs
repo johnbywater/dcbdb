@@ -145,7 +145,7 @@ fn event_matches_query_items(rec: &EventRecord, query: &Option<DCBQuery>) -> boo
 
 /// Read events using the tags index by merging per-tag iterators, grouping by position,
 /// filtering by tag and type matches, and then looking up the event record.
-pub fn read_conditional(db: &mut Db, query: DCBQuery, after: MvccPosition, limit: Option<usize>) -> MvccResult<Vec<DCBSequencedEvent>> {
+pub fn read_conditional(db: &Db, query: DCBQuery, after: MvccPosition, limit: Option<usize>) -> MvccResult<Vec<DCBSequencedEvent>> {
     // Special case: explicit zero limit
     if let Some(0) = limit {
         return Ok(Vec::new());
@@ -340,35 +340,18 @@ impl DCBEventStoreAPI for EventStore {
         after: Option<u64>,
         limit: Option<usize>,
     ) -> ApiResult<Box<dyn DCBReadResponse + '_>> {
-        // Special-case limit == 0
-        if let Some(0) = limit { return Ok(Box::new(MVCCReadResponse { events: vec![], idx: 0, head: None })); }
-
         let db = &self.db;
 
         // Compute last committed position for unlimited head
         let (_, header) = db.get_latest_header().map_err(map_mvcc_err)?;
         let last_committed_position = header.next_position.0.saturating_sub(1);
 
-        let reader = db.reader().map_err(map_mvcc_err)?;
-        let after_pos = after.map(|a| MvccPosition(a));
-        let mut iter = EventIterator::new(&db, reader, after_pos);
-        let mut events: Vec<DCBSequencedEvent> = Vec::new();
+        // Build query and after
+        let q = query.unwrap_or(DCBQuery { items: vec![] });
+        let after_pos = MvccPosition(after.unwrap_or(0));
 
-        loop {
-            let batch = iter.next_batch(128).map_err(map_mvcc_err)?;
-            if batch.is_empty() { break; }
-            for (pos, rec) in batch.into_iter() {
-                if event_matches_query_items(&rec, &query) {
-                    let se = DCBSequencedEvent {
-                        position: pos.0,
-                        event: DCBEvent { event_type: rec.event_type, data: rec.data, tags: rec.tags },
-                    };
-                    events.push(se);
-                    if let Some(lim) = limit { if events.len() >= lim { break; } }
-                }
-            }
-            if let Some(lim) = limit { if events.len() >= lim { break; } }
-        }
+        // Delegate to read_conditional
+        let events = read_conditional(db, q, after_pos, limit).map_err(map_mvcc_err)?;
 
         // Compute head according to semantics
         let head = if limit.is_none() {

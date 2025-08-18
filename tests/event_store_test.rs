@@ -3,11 +3,19 @@ use dcbdb::api::{
 };
 use dcbdb::grpc::GrpcEventStoreClient;
 use dcbdb::store::EventStore;
+use dcbdb::mvcc_api::EventStore as MVCCEventStore;
 use std::thread;
 use std::time::Duration;
 use tempfile::tempdir;
 use uuid::Uuid;
 // Import the EventStore and related types from the main crate
+
+#[test]
+fn test_mvcc_event_store() {
+    let temp_dir = tempdir().unwrap();
+    let event_store = MVCCEventStore::new(temp_dir.path()).unwrap();
+    run_event_store_test(&event_store);
+}
 
 #[test]
 fn test_direct_event_store() {

@@ -1,14 +1,65 @@
 use std::path::Path;
+use std::sync::Mutex;
 
-use crate::api::{DCBEvent, DCBSequencedEvent, DCBQuery};
-use crate::mvcc_db::{Db, Result};
+use crate::api::{DCBAppendCondition, DCBEvent, DCBEventStoreAPI, DCBQuery, DCBSequencedEvent, DCBReadResponse, EventStoreError, Result as ApiResult};
+use crate::mvcc_db::{Db, Result as MvccResult};
 use crate::mvcc_event_tree::{event_tree_append, EventIterator};
 use crate::mvcc_node_event::EventRecord;
 use crate::mvcc_node_tags::TagHash;
 use crate::mvcc_tags_tree::tags_tree_insert;
+use crate::mvcc_common::Position as MvccPosition;
+
+// Map MVCC errors to API errors
+fn map_mvcc_err<E: std::fmt::Display>(e: E) -> EventStoreError {
+    EventStoreError::Corruption(format!("{}", e))
+}
+
+/// MVCC-backed EventStore implementing the DCBEventStoreAPI
+pub struct EventStore {
+    db: Mutex<Db>,
+}
+
+impl EventStore {
+    /// Create a new MVCC EventStore at the given directory or file path.
+    /// If a directory path is provided, a file named "mvcc.db" will be used inside it.
+    pub fn new<P: AsRef<Path>>(path: P) -> ApiResult<Self> {
+        let p = path.as_ref();
+        let file_path = if p.is_dir() { p.join("mvcc.db") } else { p.to_path_buf() };
+        let db = Db::new(&file_path, 512, false).map_err(map_mvcc_err)?;
+        Ok(Self { db: Mutex::new(db) })
+    }
+}
+
+struct MVCCReadResponse {
+    events: Vec<DCBSequencedEvent>,
+    idx: usize,
+    head: Option<u64>,
+}
+
+impl Iterator for MVCCReadResponse {
+    type Item = DCBSequencedEvent;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.idx >= self.events.len() { return None; }
+        let item = self.events[self.idx].clone();
+        self.idx += 1;
+        Some(item)
+    }
+}
+
+impl DCBReadResponse for MVCCReadResponse {
+    fn head(&self) -> Option<u64> { self.head }
+    fn collect_with_head(&mut self) -> (Vec<DCBSequencedEvent>, Option<u64>) {
+        (self.events.clone(), self.head)
+    }
+    fn next_batch(&mut self) -> ApiResult<Vec<DCBSequencedEvent>> {
+        let batch = self.events[self.idx..].to_vec();
+        self.idx = self.events.len();
+        Ok(batch)
+    }
+}
 
 /// Open a database by calling Db::new
-pub fn open_db<P: AsRef<Path>>(path: P, page_size: usize, verbose: bool) -> Result<Db> {
+pub fn open_db<P: AsRef<Path>>(path: P, page_size: usize, verbose: bool) -> MvccResult<Db> {
     Db::new(path.as_ref(), page_size, verbose)
 }
 
@@ -35,7 +86,7 @@ fn tag_to_hash(tag: &str) -> TagHash {
 /// - append an EventRecord to the event tree
 /// - insert the position for each tag into the tags tree
 /// Finally, it commits the writer.
-pub fn unconditional_append(db: &mut Db, events: Vec<DCBEvent>) -> Result<()> {
+pub fn unconditional_append(db: &mut Db, events: Vec<DCBEvent>) -> MvccResult<()> {
     let mut writer = db.writer()?;
 
     for ev in events.into_iter() {
@@ -60,7 +111,7 @@ pub fn unconditional_append(db: &mut Db, events: Vec<DCBEvent>) -> Result<()> {
 /// Read all events from the database, returning them as DCBSequencedEvent instances.
 /// Uses EventIterator to iterate over all (Position, EventRecord) pairs and includes
 /// the position in the returned items.
-pub fn read_all(db: &mut Db) -> Result<Vec<DCBSequencedEvent>> {
+pub fn read_all(db: &mut Db) -> MvccResult<Vec<DCBSequencedEvent>> {
     let reader = db.reader()?;
     let mut iter = EventIterator::new(&db, reader, None);
     let mut out: Vec<DCBSequencedEvent> = Vec::new();
@@ -90,7 +141,7 @@ pub fn read_all(db: &mut Db) -> Result<Vec<DCBSequencedEvent>> {
 /// - For each DCBQueryItem, an event matches if (item.types is empty or contains the event type)
 ///   AND every tag in item.tags is present in the event's tags.
 /// - If the query has no items, all events are returned.
-pub fn read(db: &mut Db, query: DCBQuery) -> Result<Vec<DCBSequencedEvent>> {
+pub fn read(db: &mut Db, query: DCBQuery) -> MvccResult<Vec<DCBSequencedEvent>> {
     let reader = db.reader()?;
     let mut iter = EventIterator::new(&db, reader, None);
     let mut out: Vec<DCBSequencedEvent> = Vec::new();
@@ -126,6 +177,114 @@ pub fn read(db: &mut Db, query: DCBQuery) -> Result<Vec<DCBSequencedEvent>> {
     }
 
     Ok(out)
+}
+
+fn event_matches_query_items(rec: &EventRecord, query: &Option<DCBQuery>) -> bool {
+    match query {
+        None => true,
+        Some(q) => {
+            if q.items.is_empty() { return true; }
+            for item in &q.items {
+                let type_ok = item.types.is_empty() || item.types.iter().any(|t| t == &rec.event_type);
+                if !type_ok { continue; }
+                let tags_ok = item.tags.iter().all(|t| rec.tags.iter().any(|et| et == t));
+                if type_ok && tags_ok { return true; }
+            }
+            false
+        }
+    }
+}
+
+impl DCBEventStoreAPI for EventStore {
+    fn read(
+        &self,
+        query: Option<DCBQuery>,
+        after: Option<u64>,
+        limit: Option<usize>,
+    ) -> ApiResult<Box<dyn DCBReadResponse + '_>> {
+        // Special-case limit == 0
+        if let Some(0) = limit { return Ok(Box::new(MVCCReadResponse { events: vec![], idx: 0, head: None })); }
+
+        let mut db = self.db.lock().unwrap();
+
+        // Compute last committed position for unlimited head
+        let (_, header) = db.get_latest_header().map_err(map_mvcc_err)?;
+        let last_committed_position = header.next_position.0.saturating_sub(1);
+
+        let reader = db.reader().map_err(map_mvcc_err)?;
+        let after_pos = after.map(|a| MvccPosition(a));
+        let mut iter = EventIterator::new(&db, reader, after_pos);
+        let mut events: Vec<DCBSequencedEvent> = Vec::new();
+
+        loop {
+            let batch = iter.next_batch(128).map_err(map_mvcc_err)?;
+            if batch.is_empty() { break; }
+            for (pos, rec) in batch.into_iter() {
+                if event_matches_query_items(&rec, &query) {
+                    let se = DCBSequencedEvent {
+                        position: pos.0,
+                        event: DCBEvent { event_type: rec.event_type, data: rec.data, tags: rec.tags },
+                    };
+                    events.push(se);
+                    if let Some(lim) = limit { if events.len() >= lim { break; } }
+                }
+            }
+            if let Some(lim) = limit { if events.len() >= lim { break; } }
+        }
+
+        // Compute head according to semantics
+        let head = if limit.is_none() {
+            if last_committed_position == 0 { None } else { Some(last_committed_position) }
+        } else {
+            events.last().map(|e| e.position)
+        };
+
+        Ok(Box::new(MVCCReadResponse { events, idx: 0, head }))
+    }
+
+    fn head(&self) -> ApiResult<Option<u64>> {
+        let mut db = self.db.lock().unwrap();
+        let (_, header) = db.get_latest_header().map_err(map_mvcc_err)?;
+        let last = header.next_position.0.saturating_sub(1);
+        if last == 0 { Ok(None) } else { Ok(Some(last)) }
+    }
+
+    fn append(&self, events: Vec<DCBEvent>, condition: Option<DCBAppendCondition>) -> ApiResult<u64> {
+        let mut db = self.db.lock().unwrap();
+
+        // Check condition
+        if let Some(cond) = condition {
+            // If query matches any existing event (after cond.after), fail
+            let reader = db.reader().map_err(map_mvcc_err)?;
+            let after_pos = cond.after.map(MvccPosition);
+            let mut iter = EventIterator::new(&db, reader, after_pos);
+            let mut matched = false;
+            'outer: loop {
+                let batch = iter.next_batch(128).map_err(map_mvcc_err)?;
+                if batch.is_empty() { break; }
+                for (_pos, rec) in batch.into_iter() {
+                    if event_matches_query_items(&rec, &Some(cond.fail_if_events_match.clone())) { matched = true; break 'outer; }
+                }
+            }
+            if matched { return Err(EventStoreError::IntegrityError); }
+        }
+
+        let mut writer = db.writer().map_err(map_mvcc_err)?;
+        let mut last_pos: u64 = 0;
+        for ev in events.into_iter() {
+            let pos = writer.issue_position();
+            let record = EventRecord { event_type: ev.event_type, data: ev.data, tags: ev.tags };
+            let tags = record.tags.clone();
+            event_tree_append(&db, &mut writer, record, pos).map_err(map_mvcc_err)?;
+            for tag in tags.iter() {
+                let tag_hash: TagHash = tag_to_hash(tag);
+                tags_tree_insert(&db, &mut writer, tag_hash, pos).map_err(map_mvcc_err)?;
+            }
+            last_pos = pos.0;
+        }
+        db.commit(&mut writer).map_err(map_mvcc_err)?;
+        Ok(last_pos)
+    }
 }
 
 #[cfg(test)]

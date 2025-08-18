@@ -120,82 +120,12 @@ pub fn unconditional_append(db: &mut Db, events: Vec<DCBEvent>) -> MvccResult<()
     db.commit(&mut writer)
 }
 
-/// Read all events from the database, returning them as DCBSequencedEvent instances.
-/// Uses EventIterator to iterate over all (Position, EventRecord) pairs and includes
-/// the position in the returned items.
-pub fn read_all(db: &mut Db) -> MvccResult<Vec<DCBSequencedEvent>> {
-    let reader = db.reader()?;
-    let mut iter = EventIterator::new(&db, reader, None);
-    let mut out: Vec<DCBSequencedEvent> = Vec::new();
-
-    loop {
-        let batch = iter.next_batch(64)?;
-        if batch.is_empty() {
-            break;
-        }
-        for (pos, rec) in batch.into_iter() {
-            out.push(DCBSequencedEvent {
-                position: pos.0,
-                event: DCBEvent {
-                    event_type: rec.event_type,
-                    data: rec.data,
-                    tags: rec.tags,
-                },
-            });
-        }
-    }
-
-    Ok(out)
-}
 
 /// Read events that match any of the items in the DCBQuery.
 /// Matching logic:
 /// - For each DCBQueryItem, an event matches if (item.types is empty or contains the event type)
 ///   AND every tag in item.tags is present in the event's tags.
 /// - If the query has no items, all events are returned.
-pub fn read(db: &mut Db, query: DCBQuery, after: MvccPosition, limit: Option<usize>) -> MvccResult<Vec<DCBSequencedEvent>> {
-    // Special case: explicit zero limit
-    if let Some(0) = limit {
-        return Ok(Vec::new());
-    }
-
-    let reader = db.reader()?;
-    let mut iter = EventIterator::new(&db, reader, Some(after));
-    let mut out: Vec<DCBSequencedEvent> = Vec::new();
-
-    let matches_item = |rec: &EventRecord| -> bool {
-        if query.items.is_empty() {
-            return true;
-        }
-        for item in &query.items {
-            let type_ok = item.types.is_empty() || item.types.iter().any(|t| t == &rec.event_type);
-            if !type_ok { continue; }
-            let tags_ok = item.tags.iter().all(|t| rec.tags.iter().any(|et| et == t));
-            if type_ok && tags_ok { return true; }
-        }
-        false
-    };
-
-    'outer: loop {
-        let batch = iter.next_batch(64)?;
-        if batch.is_empty() { break; }
-        for (pos, rec) in batch.into_iter() {
-            if matches_item(&rec) {
-                out.push(DCBSequencedEvent {
-                    position: pos.0,
-                    event: DCBEvent {
-                        event_type: rec.event_type,
-                        data: rec.data,
-                        tags: rec.tags,
-                    },
-                });
-                if let Some(lim) = limit { if out.len() >= lim { break 'outer; } }
-            }
-        }
-    }
-
-    Ok(out)
-}
 
 fn event_matches_query_items(rec: &EventRecord, query: &Option<DCBQuery>) -> bool {
     match query {
@@ -221,19 +151,55 @@ pub fn read_conditional(db: &mut Db, query: DCBQuery, after: MvccPosition, limit
         return Ok(Vec::new());
     }
 
-    // If no items, return all events (apply limit if provided)
+    // If no items, return all events with after/limit respected via sequential scan
     if query.items.is_empty() {
-        let mut res = read_all(db)?;
-        if let Some(lim) = limit { if res.len() > lim { res.truncate(lim); } }
-        return Ok(res);
+        let reader = db.reader()?;
+        let mut iter = EventIterator::new(&db, reader, Some(after));
+        let mut out: Vec<DCBSequencedEvent> = Vec::new();
+        'outer_all: loop {
+            let batch = iter.next_batch(64)?;
+            if batch.is_empty() { break; }
+            for (pos, rec) in batch.into_iter() {
+                out.push(DCBSequencedEvent {
+                    position: pos.0,
+                    event: DCBEvent { event_type: rec.event_type, data: rec.data, tags: rec.tags },
+                });
+                if let Some(lim) = limit { if out.len() >= lim { break 'outer_all; } }
+            }
+        }
+        return Ok(out);
     }
 
     // All query items must have at least one tag to use the tag index path.
     let all_items_have_tags = query.items.iter().all(|it| !it.tags.is_empty());
     if !all_items_have_tags {
-        // Fallback: sequentially scan all events and apply the same matching as read()
-        let res = read(db, query, after, limit)?;
-        return Ok(res);
+        // Fallback: sequentially scan all events and apply the same matching logic
+        let reader = db.reader()?;
+        let mut iter = EventIterator::new(&db, reader, Some(after));
+        let mut out: Vec<DCBSequencedEvent> = Vec::new();
+        let matches_item = |rec: &EventRecord| -> bool {
+            for item in &query.items {
+                let type_ok = item.types.is_empty() || item.types.iter().any(|t| t == &rec.event_type);
+                if !type_ok { continue; }
+                let tags_ok = item.tags.iter().all(|t| rec.tags.iter().any(|et| et == t));
+                if type_ok && tags_ok { return true; }
+            }
+            false
+        };
+        'outer_fallback: loop {
+            let batch = iter.next_batch(64)?;
+            if batch.is_empty() { break; }
+            for (pos, rec) in batch.into_iter() {
+                if matches_item(&rec) {
+                    out.push(DCBSequencedEvent {
+                        position: pos.0,
+                        event: DCBEvent { event_type: rec.event_type, data: rec.data, tags: rec.tags },
+                    });
+                    if let Some(lim) = limit { if out.len() >= lim { break 'outer_fallback; } }
+                }
+            }
+        }
+        return Ok(out);
     }
 
     // Invert query: tag -> list of query item indices that require this tag
@@ -502,7 +468,7 @@ mod tests {
         unconditional_append(&mut db, input.clone()).unwrap();
 
         // Read all
-        let output = read_all(&mut db).unwrap();
+        let output = read_conditional(&mut db, DCBQuery { items: vec![] }, MvccPosition(0), None).unwrap();
 
         // Compare lengths
         assert_eq!(input.len(), output.len());
@@ -533,7 +499,7 @@ mod tests {
         for tag in &shared_tags {
             query_all.items.push(DCBQueryItem { types: Vec::new(), tags: vec![tag.clone()] });
         }
-        let filtered = read(&mut db, query_all.clone(), MvccPosition(0), None).unwrap();
+        let filtered = read_conditional(&mut db, query_all.clone(), MvccPosition(0), None).unwrap();
 
         // The query should match all events (each event has at least one shared tag)
         assert_eq!(filtered.len(), input.len());
@@ -558,13 +524,13 @@ mod tests {
         // Validate after filtering for read()
         let filtered_positions: Vec<u64> = filtered.iter().map(|e| e.position).collect();
         // after = 0 -> all
-        let filtered_all = read(&mut db, query_all.clone(), MvccPosition(0), None).unwrap();
+        let filtered_all = read_conditional(&mut db, query_all.clone(), MvccPosition(0), None).unwrap();
         assert_eq!(filtered_all.iter().map(|e| e.position).collect::<Vec<_>>(), filtered_positions);
         // after = first -> tail
-        let filtered_after_first = read(&mut db, query_all.clone(), MvccPosition(filtered_positions[0]), None).unwrap();
+        let filtered_after_first = read_conditional(&mut db, query_all.clone(), MvccPosition(filtered_positions[0]), None).unwrap();
         assert_eq!(filtered_after_first.iter().map(|e| e.position).collect::<Vec<_>>(), filtered_positions[1..].to_vec());
         // after = last -> empty
-        let filtered_after_last = read(&mut db, query_all, MvccPosition(*filtered_positions.last().unwrap()), None).unwrap();
+        let filtered_after_last = read_conditional(&mut db, query_all, MvccPosition(*filtered_positions.last().unwrap()), None).unwrap();
         assert!(filtered_after_last.is_empty());
     }
 

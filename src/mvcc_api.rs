@@ -410,7 +410,7 @@ impl DCBEventStoreAPI for EventStore {
 
 
 #[cfg(test)]
-mod read_conditional_consolidated_tests {
+mod tests {
     use super::*;
     use serial_test::serial;
     use tempfile::tempdir;
@@ -592,5 +592,46 @@ mod read_conditional_consolidated_tests {
         assert_eq!(tail.len(), input.len() - 1);
         let lim5 = read_conditional(&mut db, qi, MvccPosition(0), Some(5)).unwrap();
         assert_eq!(lim5.len(), 5);
+    }
+
+    #[test]
+    #[serial]
+    fn test_mvcc_event_store() {
+        let temp_dir = tempdir().unwrap();
+        let store = EventStore::new(temp_dir.path()).unwrap();
+
+        // Head is None on empty store
+        assert_eq!(None, store.head().unwrap());
+
+        // Append a couple of events
+        let events = vec![
+            DCBEvent { event_type: "TypeA".to_string(), data: vec![1], tags: vec!["foo".to_string()] },
+            DCBEvent { event_type: "TypeB".to_string(), data: vec![2], tags: vec!["bar".to_string(), "foo".to_string()] },
+        ];
+        let last = store.append(events.clone(), None).unwrap();
+        assert!(last > 0);
+        assert_eq!(store.head().unwrap(), Some(last));
+
+        // Read all
+        let mut resp = store.read(None, None, None).unwrap();
+        let (all, head) = resp.collect_with_head();
+        assert_eq!(head, Some(last));
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].event.event_type, "TypeA");
+        assert_eq!(all[1].event.event_type, "TypeB");
+
+        // Tag-filtered read ("foo")
+        let query = DCBQuery { items: vec![DCBQueryItem { types: vec![], tags: vec!["foo".to_string()] }] };
+        let mut resp2 = store.read(Some(query), None, None).unwrap();
+        let out2 = resp2.next_batch().unwrap();
+        assert_eq!(out2.len(), 2);
+        assert!(out2.iter().all(|e| e.event.tags.iter().any(|t| t == "foo")));
+
+        // After semantics: skip the first event
+        let first_pos = all[0].position;
+        let mut resp3 = store.read(None, Some(first_pos), None).unwrap();
+        let out3 = resp3.next_batch().unwrap();
+        assert_eq!(out3.len(), 1);
+        assert_eq!(out3[0].event.event_type, "TypeB");
     }
 }

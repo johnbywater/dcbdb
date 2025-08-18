@@ -88,11 +88,13 @@ fn tag_to_hash(tag: &str) -> TagHash {
 /// - append an EventRecord to the event tree
 /// - insert the position for each tag into the tags tree
 /// Finally, it commits the writer.
-pub fn unconditional_append(db: &Db, events: Vec<DCBEvent>) -> MvccResult<()> {
+pub fn unconditional_append(db: &Db, events: Vec<DCBEvent>) -> MvccResult<u64> {
     let mut writer = db.writer()?;
+    let mut last_pos_u64: u64 = 0;
 
     for ev in events.into_iter() {
         let position = writer.issue_position();
+        last_pos_u64 = position.0;
         let record = EventRecord {
             event_type: ev.event_type,
             data: ev.data,
@@ -107,7 +109,8 @@ pub fn unconditional_append(db: &Db, events: Vec<DCBEvent>) -> MvccResult<()> {
         }
     }
 
-    db.commit(&mut writer)
+    db.commit(&mut writer)?;
+    Ok(last_pos_u64)
 }
 
 
@@ -356,12 +359,8 @@ impl DCBEventStoreAPI for EventStore {
             return Ok(0);
         }
 
-        // Append unconditionally via helper, which commits internally
-        unconditional_append(db, events).map_err(map_mvcc_err)?;
-
-        // Return the last committed position
-        let (_, header) = db.get_latest_header().map_err(map_mvcc_err)?;
-        let last = header.next_position.0.saturating_sub(1);
+        // Append unconditionally via helper, which commits internally and returns last position
+        let last = unconditional_append(db, events).map_err(map_mvcc_err)?;
         Ok(last)
     }
 }
@@ -404,7 +403,11 @@ mod tests {
         let db_path = temp_dir.path().join("mvcc-api-test.db");
         let db = open_db(&db_path, 512, VERBOSE).unwrap();
         let input = standard_events();
-        unconditional_append(&db, input.clone()).unwrap();
+        let last = unconditional_append(&db, input.clone()).unwrap();
+        // Verify last equals committed head
+        let (_, header) = db.get_latest_header().unwrap();
+        let head = header.next_position.0.saturating_sub(1);
+        assert_eq!(last, head);
         (temp_dir, db, input)
     }
 
@@ -516,7 +519,10 @@ mod tests {
             DCBEvent { event_type: "TypeB".to_string(), data: vec![2], tags: vec!["y".to_string()] },
             DCBEvent { event_type: "TypeA".to_string(), data: vec![3], tags: vec!["z".to_string()] },
         ];
-        unconditional_append(&db, events).unwrap();
+        let last = unconditional_append(&db, events).unwrap();
+        let (_, header) = db.get_latest_header().unwrap();
+        let head = header.next_position.0.saturating_sub(1);
+        assert_eq!(last, head);
 
         // Query item with no tags => forces fallback path; select TypeA only
         let qi = DCBQuery { items: vec![DCBQueryItem { types: vec!["TypeA".to_string()], tags: vec![] }] };

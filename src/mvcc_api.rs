@@ -4,7 +4,7 @@ use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 
 use crate::api::{DCBAppendCondition, DCBEvent, DCBEventStoreAPI, DCBQuery, DCBSequencedEvent, DCBReadResponse, EventStoreError, Result as ApiResult};
-use crate::mvcc_db::{Db, Reader, Result as MvccResult, Writer};
+use crate::mvcc_db::{Db, Result as MvccResult};
 use crate::mvcc_event_tree::{event_tree_append, event_tree_lookup, EventIterator};
 use crate::mvcc_node_event::EventRecord;
 use crate::mvcc_node_tags::TagHash;
@@ -110,28 +110,6 @@ pub fn unconditional_append(db: &Db, events: Vec<DCBEvent>) -> MvccResult<()> {
     db.commit(&mut writer)
 }
 
-
-/// Read events that match any of the items in the DCBQuery.
-/// Matching logic:
-/// - For each DCBQueryItem, an event matches if (item.types is empty or contains the event type)
-///   AND every tag in item.tags is present in the event's tags.
-/// - If the query has no items, all events are returned.
-
-fn event_matches_query_items(rec: &EventRecord, query: &Option<DCBQuery>) -> bool {
-    match query {
-        None => true,
-        Some(q) => {
-            if q.items.is_empty() { return true; }
-            for item in &q.items {
-                let type_ok = item.types.is_empty() || item.types.iter().any(|t| t == &rec.event_type);
-                if !type_ok { continue; }
-                let tags_ok = item.tags.iter().all(|t| rec.tags.iter().any(|et| et == t));
-                if type_ok && tags_ok { return true; }
-            }
-            false
-        }
-    }
-}
 
 /// Read events using the tags index by merging per-tag iterators, grouping by position,
 /// filtering by tag and type matches, and then looking up the event record.

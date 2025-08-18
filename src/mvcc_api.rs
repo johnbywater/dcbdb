@@ -1,8 +1,7 @@
 use std::path::Path;
-use std::sync::Mutex;
 
 use crate::api::{DCBAppendCondition, DCBEvent, DCBEventStoreAPI, DCBQuery, DCBSequencedEvent, DCBReadResponse, EventStoreError, Result as ApiResult};
-use crate::mvcc_db::{Db, Result as MvccResult};
+use crate::mvcc_db::{Db, Reader, Result as MvccResult, Writer};
 use crate::mvcc_event_tree::{event_tree_append, EventIterator};
 use crate::mvcc_node_event::EventRecord;
 use crate::mvcc_node_tags::TagHash;
@@ -16,7 +15,7 @@ fn map_mvcc_err<E: std::fmt::Display>(e: E) -> EventStoreError {
 
 /// MVCC-backed EventStore implementing the DCBEventStoreAPI
 pub struct EventStore {
-    db: Mutex<Db>,
+    db: Db,
 }
 
 impl EventStore {
@@ -26,7 +25,17 @@ impl EventStore {
         let p = path.as_ref();
         let file_path = if p.is_dir() { p.join("mvcc.db") } else { p.to_path_buf() };
         let db = Db::new(&file_path, 512, false).map_err(map_mvcc_err)?;
-        Ok(Self { db: Mutex::new(db) })
+        Ok(Self { db })
+    }
+
+    fn reader(&self) -> ApiResult<Reader> {
+        self.db.reader().map_err(map_mvcc_err)
+    }
+    fn writer(&self) -> ApiResult<Writer> {
+        self.db.writer().map_err(map_mvcc_err)
+    }
+    fn commit(&self, writer: &mut Writer) -> ApiResult<()> {
+        self.db.commit(writer).map_err(map_mvcc_err)
     }
 }
 
@@ -205,7 +214,7 @@ impl DCBEventStoreAPI for EventStore {
         // Special-case limit == 0
         if let Some(0) = limit { return Ok(Box::new(MVCCReadResponse { events: vec![], idx: 0, head: None })); }
 
-        let mut db = self.db.lock().unwrap();
+        let db = &self.db;
 
         // Compute last committed position for unlimited head
         let (_, header) = db.get_latest_header().map_err(map_mvcc_err)?;
@@ -243,19 +252,19 @@ impl DCBEventStoreAPI for EventStore {
     }
 
     fn head(&self) -> ApiResult<Option<u64>> {
-        let mut db = self.db.lock().unwrap();
+        let db = &self.db;
         let (_, header) = db.get_latest_header().map_err(map_mvcc_err)?;
         let last = header.next_position.0.saturating_sub(1);
         if last == 0 { Ok(None) } else { Ok(Some(last)) }
     }
 
     fn append(&self, events: Vec<DCBEvent>, condition: Option<DCBAppendCondition>) -> ApiResult<u64> {
-        let mut db = self.db.lock().unwrap();
+        let db = &self.db;
 
         // Check condition
         if let Some(cond) = condition {
             // If query matches any existing event (after cond.after), fail
-            let reader = db.reader().map_err(map_mvcc_err)?;
+            let reader = self.reader()?;
             let after_pos = cond.after.map(MvccPosition);
             let mut iter = EventIterator::new(&db, reader, after_pos);
             let mut matched = false;
@@ -269,7 +278,7 @@ impl DCBEventStoreAPI for EventStore {
             if matched { return Err(EventStoreError::IntegrityError); }
         }
 
-        let mut writer = db.writer().map_err(map_mvcc_err)?;
+        let mut writer = self.writer()?;
         let mut last_pos: u64 = 0;
         for ev in events.into_iter() {
             let pos = writer.issue_position();
@@ -282,7 +291,7 @@ impl DCBEventStoreAPI for EventStore {
             }
             last_pos = pos.0;
         }
-        db.commit(&mut writer).map_err(map_mvcc_err)?;
+        self.commit(&mut writer)?;
         Ok(last_pos)
     }
 }

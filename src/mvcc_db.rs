@@ -74,7 +74,7 @@ impl Db {
         let header_page_id0 = PageID(0);
         let header_page_id1 = PageID(1);
 
-        let mut lmdb = Self {
+        let lmdb = Self {
             pager,
             reader_tsns: Mutex::new(HashMap::new()),
             writer_lock: Mutex::new(()),
@@ -138,7 +138,7 @@ impl Db {
         Ok(lmdb)
     }
 
-    pub fn get_latest_header(&mut self) -> Result<(PageID, HeaderNode)> {
+    pub fn get_latest_header(&self) -> Result<(PageID, HeaderNode)> {
         let header0 = self.read_header(self.header_page_id0)?;
         let header1 = self.read_header(self.header_page_id1)?;
 
@@ -149,7 +149,7 @@ impl Db {
         }
     }
 
-    pub fn read_header(&mut self, page_id: PageID) -> Result<HeaderNode> {
+    pub fn read_header(&self, page_id: PageID) -> Result<HeaderNode> {
         let header = self.read_page(page_id)?;
         let header_node = match header.node {
             Node::Header(node) => node,
@@ -170,7 +170,7 @@ impl Db {
         Page::deserialize(page_id, &page_data)
     }
 
-    pub fn write_page(&mut self, page: &Page) -> Result<()> {
+    pub fn write_page(&self, page: &Page) -> Result<()> {
         let serialized = &page.serialize()?;
         self.pager.write_page(page.page_id, serialized)?;
         if self.verbose {
@@ -179,12 +179,12 @@ impl Db {
         Ok(())
     }
 
-    pub fn flush(&mut self) -> Result<()> {
+    pub fn flush(&self) -> Result<()> {
         self.pager.flush()?;
         Ok(())
     }
 
-    pub fn reader(&mut self) -> Result<Reader> {
+    pub fn reader(&self) -> Result<Reader> {
         let (header_page_id, header_node) = self.get_latest_header()?;
 
         // Generate a unique ID for this reader using the counter
@@ -213,7 +213,7 @@ impl Db {
         Ok(reader)
     }
 
-    pub fn writer(&mut self) -> Result<Writer> {
+    pub fn writer(&self) -> Result<Writer> {
         if self.verbose {
             println!();
             println!("Constructing writer...");
@@ -244,7 +244,7 @@ impl Db {
         Ok(writer)
     }
 
-    pub fn commit(&mut self, writer: &mut Writer) -> Result<()> {
+    pub fn commit(&self, writer: &mut Writer) -> Result<()> {
         // Process reused and freed page IDs
         if self.verbose {
             println!();
@@ -1038,7 +1038,7 @@ mod tests {
     fn test_write_transaction_incrementing_tsn_and_alternating_header() {
         let temp_dir = tempdir().unwrap();
         let db_path = temp_dir.path().join("lmdb-test.db");
-        let mut db = Db::new(&db_path, 4096, VERBOSE).unwrap();
+        let db = Db::new(&db_path, 4096, VERBOSE).unwrap();
 
         {
             let mut writer = db.writer().unwrap();
@@ -1081,7 +1081,7 @@ mod tests {
     fn test_read_transaction_header_and_tsn() {
         let temp_dir = tempdir().unwrap();
         let db_path = temp_dir.path().join("lmdb-test.db");
-        let mut db = Db::new(&db_path, 4096, VERBOSE).unwrap();
+        let db = Db::new(&db_path, 4096, VERBOSE).unwrap();
 
         // Initial reader should see TSN 0
         {
@@ -1180,7 +1180,7 @@ mod tests {
     fn test_copy_on_write_page_reuse() {
         let temp_dir = tempdir().unwrap();
         let db_path = temp_dir.path().join("lmdb-test.db");
-        let mut db = Db::new(&db_path, 4096, VERBOSE).unwrap();
+        let db = Db::new(&db_path, 4096, VERBOSE).unwrap();
         // First transaction
         {
             let mut writer = db.writer().unwrap();
@@ -1569,7 +1569,7 @@ mod tests {
         #[test]
         #[serial]
         fn test_insert_freed_page_ids_until_replace_internal_node_child_id() {
-            let (_temp_dir, mut db) = construct_db(128);
+            let (_temp_dir, db) = construct_db(128);
 
             // Block inserted page IDs from being reused
             {

@@ -387,7 +387,7 @@ mod tests {
 
     #[test]
     fn test_insert_position_into_empty_leaf_root() {
-        let (_tmp, mut db) = construct_db(1024);
+        let (_tmp, db) = construct_db(1024);
         let mut writer = db.writer().unwrap();
         let tag = th(10);
         let pos = writer.issue_position();
@@ -409,7 +409,7 @@ mod tests {
 
     #[test]
     fn test_insert_positions_into_empty_leaf_root() {
-        let (_tmp, mut db) = construct_db(1024);
+        let (_tmp, db) = construct_db(1024);
         let mut writer = db.writer().unwrap();
         // Insert out of order
         let tags = [30u64, 10, 20, 20, 15];
@@ -441,7 +441,7 @@ mod tests {
 
     #[test]
     fn test_lookup_tag_returns_positions() {
-        let (_tmp, mut db) = construct_db(1024);
+        let (_tmp, db) = construct_db(1024);
         let mut writer = db.writer().unwrap();
         let t1 = th(42);
         let p1 = writer.issue_position();
@@ -464,7 +464,7 @@ mod tests {
     #[test]
     fn test_insert_tags_and_positions_until_split_leaf_one_writer() {
         // Setup a temporary database
-        let (_temp_dir, mut db) = construct_db(256);
+        let (_temp_dir, db) = construct_db(256);
 
         // Start a writer
         let mut writer = db.writer().unwrap();
@@ -533,7 +533,7 @@ mod tests {
     #[test]
     fn test_insert_tags_and_positions_until_split_internal_one_writer() {
         // Setup a temporary database
-        let (_temp_dir, mut db) = construct_db(256);
+        let (_temp_dir, db) = construct_db(256);
 
         // Start a writer
         let mut writer = db.writer().unwrap();
@@ -626,7 +626,7 @@ mod tests {
     #[test]
     fn test_insert_tags_and_positions_until_split_internal_many_writers() {
         // Setup a temporary database
-        let (_temp_dir, mut db) = construct_db(512);
+        let (_temp_dir, db) = construct_db(512);
 
         let mut has_split_internal = false;
         let mut appended: Vec<(TagHash, Position)> = Vec::new();
@@ -723,7 +723,7 @@ mod tests {
 
     #[test]
     fn test_tags_tree_iter_collects_inserted_positions() {
-        let (_tmp, mut db) = construct_db(1024);
+        let (_tmp, db) = construct_db(1024);
         let mut writer = db.writer().unwrap();
         let tag = th(55);
         let mut inserted: Vec<Position> = Vec::new();
@@ -750,7 +750,7 @@ mod tests {
         // cargo test --lib mvcc_tags_tree::tests::benchmark_insert_and_lookup_varied_sizes -- --nocapture
         let sizes: [usize; 8] = [1, 1, 10, 100, 1_000, 5_000, 10_000, 50_000];
         for &size in &sizes {
-            let (_tmp, mut db) = construct_db(4096);
+            let (_tmp, db) = construct_db(4096);
 
             // Insert phase
             let mut writer = db.writer().unwrap();

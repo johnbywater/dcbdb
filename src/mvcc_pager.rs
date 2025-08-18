@@ -36,7 +36,7 @@ impl Pager {
         })
     }
 
-    pub fn write_page(&mut self, page_id: PageID, page: &[u8]) -> io::Result<()> {
+    pub fn write_page(&self, page_id: PageID, page: &[u8]) -> io::Result<()> {
         let mut file: MutexGuard<File> = self.file.lock().unwrap();
         if page.len() > self.page_size {
             return Err(io::Error::new(
@@ -81,7 +81,7 @@ impl Pager {
         Ok(page)
     }
 
-    pub fn flush(&mut self) -> io::Result<()> {
+    pub fn flush(&self) -> io::Result<()> {
         let mut file: MutexGuard<File> = self.file.lock().unwrap();
         file.flush()?;
         // fsync equivalent in Rust

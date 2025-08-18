@@ -465,7 +465,7 @@ mod tests {
     #[serial]
     fn test_append_event_to_empty_leaf_root() {
         // Setup a temporary database
-        let (_temp_dir, mut db) = construct_db(64);
+        let (_temp_dir, db) = construct_db(64);
 
         // Start a writer
         let mut writer = db.writer().unwrap();
@@ -514,7 +514,7 @@ mod tests {
     #[serial]
     fn test_insert_events_until_split_leaf_one_writer() {
         // Setup a temporary database
-        let (_temp_dir, mut db) = construct_db(256);
+        let (_temp_dir, db) = construct_db(256);
 
         // Start a writer
         let mut writer = db.writer().unwrap();
@@ -585,7 +585,7 @@ mod tests {
     #[serial]
     fn test_insert_events_until_split_leaf_many_writers() {
         // Setup a temporary database
-        let (_temp_dir, mut db) = construct_db(256);
+        let (_temp_dir, db) = construct_db(256);
 
         let mut has_split_leaf = false;
         let mut appended: Vec<(Position, EventRecord)> = Vec::new();
@@ -661,7 +661,7 @@ mod tests {
     #[serial]
     fn test_insert_events_until_split_internal_one_writer() {
         // Setup a temporary database
-        let (_temp_dir, mut db) = construct_db(256);
+        let (_temp_dir, db) = construct_db(256);
 
         // Start a writer
         let mut writer = db.writer().unwrap();
@@ -748,7 +748,7 @@ mod tests {
     #[serial]
     fn test_insert_events_until_split_internal_many_writers() {
         // Setup a temporary database
-        let (_temp_dir, mut db) = construct_db(512);
+        let (_temp_dir, db) = construct_db(512);
 
         let mut has_split_internal = false;
         let mut appended: Vec<(Position, EventRecord)> = Vec::new();
@@ -841,7 +841,7 @@ mod tests {
     #[serial]
     fn test_read_events_all() {
         // Setup a temporary database
-        let (_temp_dir, mut db) = construct_db(512);
+        let (_temp_dir, db) = construct_db(512);
 
         let mut has_split_internal = false;
         let mut appended: Vec<(Position, EventRecord)> = Vec::new();
@@ -963,7 +963,7 @@ mod tests {
     #[serial]
     fn test_read_events_after() {
         // Setup a temporary database
-        let (_temp_dir, mut db) = construct_db(512);
+        let (_temp_dir, db) = construct_db(512);
 
         let mut has_split_internal = false;
         let mut appended: Vec<(Position, EventRecord)> = Vec::new();
@@ -1073,7 +1073,7 @@ mod tests {
         // cargo test --lib mvcc_event_tree::tests::benchmark_append_and_lookup_varied_sizes -- --nocapture
         let sizes: [usize; 7] = [1, 10, 100, 1_000, 5_000, 10_000, 50_000];
         for &size in &sizes {
-            let (_tmp, mut db) = construct_db(4096);
+            let (_tmp, db) = construct_db(4096);
 
             // Append phase
             let mut writer = db.writer().unwrap();

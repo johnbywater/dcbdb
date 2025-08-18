@@ -30,16 +30,6 @@ impl EventStore {
         let db = Db::new(&file_path, 512, false).map_err(map_mvcc_err)?;
         Ok(Self { db })
     }
-
-    fn reader(&self) -> ApiResult<Reader> {
-        self.db.reader().map_err(map_mvcc_err)
-    }
-    fn writer(&self) -> ApiResult<Writer> {
-        self.db.writer().map_err(map_mvcc_err)
-    }
-    fn commit(&self, writer: &mut Writer) -> ApiResult<()> {
-        self.db.commit(writer).map_err(map_mvcc_err)
-    }
 }
 
 struct MVCCReadResponse {
@@ -98,7 +88,7 @@ fn tag_to_hash(tag: &str) -> TagHash {
 /// - append an EventRecord to the event tree
 /// - insert the position for each tag into the tags tree
 /// Finally, it commits the writer.
-pub fn unconditional_append(db: &mut Db, events: Vec<DCBEvent>) -> MvccResult<()> {
+pub fn unconditional_append(db: &Db, events: Vec<DCBEvent>) -> MvccResult<()> {
     let mut writer = db.writer()?;
 
     for ev in events.into_iter() {
@@ -373,38 +363,28 @@ impl DCBEventStoreAPI for EventStore {
     fn append(&self, events: Vec<DCBEvent>, condition: Option<DCBAppendCondition>) -> ApiResult<u64> {
         let db = &self.db;
 
-        // Check condition
+        // Check condition using read_conditional (limit 1), starting after the provided position
         if let Some(cond) = condition {
-            // If query matches any existing event (after cond.after), fail
-            let reader = self.reader()?;
-            let after_pos = cond.after.map(MvccPosition);
-            let mut iter = EventIterator::new(&db, reader, after_pos);
-            let mut matched = false;
-            'outer: loop {
-                let batch = iter.next_batch(128).map_err(map_mvcc_err)?;
-                if batch.is_empty() { break; }
-                for (_pos, rec) in batch.into_iter() {
-                    if event_matches_query_items(&rec, &Some(cond.fail_if_events_match.clone())) { matched = true; break 'outer; }
-                }
+            let after = MvccPosition(cond.after.unwrap_or(0));
+            let found = read_conditional(db, cond.fail_if_events_match.clone(), after, Some(1))
+                .map_err(map_mvcc_err)?;
+            if !found.is_empty() {
+                return Err(EventStoreError::IntegrityError);
             }
-            if matched { return Err(EventStoreError::IntegrityError); }
         }
 
-        let mut writer = self.writer()?;
-        let mut last_pos: u64 = 0;
-        for ev in events.into_iter() {
-            let pos = writer.issue_position();
-            let record = EventRecord { event_type: ev.event_type, data: ev.data, tags: ev.tags };
-            let tags = record.tags.clone();
-            event_tree_append(&db, &mut writer, record, pos).map_err(map_mvcc_err)?;
-            for tag in tags.iter() {
-                let tag_hash: TagHash = tag_to_hash(tag);
-                tags_tree_insert(&db, &mut writer, tag_hash, pos).map_err(map_mvcc_err)?;
-            }
-            last_pos = pos.0;
+        // If no events to append then return 0
+        if events.is_empty() {
+            return Ok(0);
         }
-        self.commit(&mut writer)?;
-        Ok(last_pos)
+
+        // Append unconditionally via helper, which commits internally
+        unconditional_append(db, events).map_err(map_mvcc_err)?;
+
+        // Return the last committed position
+        let (_, header) = db.get_latest_header().map_err(map_mvcc_err)?;
+        let last = header.next_position.0.saturating_sub(1);
+        Ok(last)
     }
 }
 
@@ -444,9 +424,9 @@ mod tests {
     fn setup_db_with_standard_events() -> (tempfile::TempDir, Db, Vec<DCBEvent>) {
         let temp_dir = tempdir().unwrap();
         let db_path = temp_dir.path().join("mvcc-api-test.db");
-        let mut db = open_db(&db_path, 512, VERBOSE).unwrap();
+        let db = open_db(&db_path, 512, VERBOSE).unwrap();
         let input = standard_events();
-        unconditional_append(&mut db, input.clone()).unwrap();
+        unconditional_append(&db, input.clone()).unwrap();
         (temp_dir, db, input)
     }
 
@@ -558,7 +538,7 @@ mod tests {
             DCBEvent { event_type: "TypeB".to_string(), data: vec![2], tags: vec!["y".to_string()] },
             DCBEvent { event_type: "TypeA".to_string(), data: vec![3], tags: vec!["z".to_string()] },
         ];
-        unconditional_append(&mut db, events).unwrap();
+        unconditional_append(&db, events).unwrap();
 
         // Query item with no tags => forces fallback path; select TypeA only
         let qi = DCBQuery { items: vec![DCBQueryItem { types: vec!["TypeA".to_string()], tags: vec![] }] };

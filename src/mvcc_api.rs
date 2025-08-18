@@ -209,17 +209,26 @@ fn event_matches_query_items(rec: &EventRecord, query: &Option<DCBQuery>) -> boo
 
 /// Read events using the tags index by merging per-tag iterators, grouping by position,
 /// filtering by tag and type matches, and then looking up the event record.
-pub fn read_conditional(db: &mut Db, query: DCBQuery, after: MvccPosition) -> MvccResult<Vec<DCBSequencedEvent>> {
-    // If no items, return all events
+pub fn read_conditional(db: &mut Db, query: DCBQuery, after: MvccPosition, limit: Option<usize>) -> MvccResult<Vec<DCBSequencedEvent>> {
+    // Special case: explicit zero limit
+    if let Some(0) = limit {
+        return Ok(Vec::new());
+    }
+
+    // If no items, return all events (apply limit if provided)
     if query.items.is_empty() {
-        return read_all(db);
+        let mut res = read_all(db)?;
+        if let Some(lim) = limit { if res.len() > lim { res.truncate(lim); } }
+        return Ok(res);
     }
 
     // All query items must have at least one tag to use the tag index path.
     let all_items_have_tags = query.items.iter().all(|it| !it.tags.is_empty());
     if !all_items_have_tags {
         // Fallback: sequentially scan all events and apply the same matching as read()
-        return read(db, query);
+        let mut res = read(db, query)?;
+        if let Some(lim) = limit { if res.len() > lim { res.truncate(lim); } }
+        return Ok(res);
     }
 
     // Invert query: tag -> list of query item indices that require this tag
@@ -347,6 +356,7 @@ pub fn read_conditional(db: &mut Db, query: DCBQuery, after: MvccPosition) -> Mv
         if !type_ok { continue; }
 
         out.push(DCBSequencedEvent { position: pos.0, event: DCBEvent { event_type: rec.event_type, data: rec.data, tags: rec.tags } });
+        if let Some(lim) = limit { if out.len() >= lim { break; } }
     }
 
     Ok(out)
@@ -573,7 +583,7 @@ mod tests {
         let query_alpha = DCBQuery {
             items: vec![DCBQueryItem { types: vec![], tags: vec!["alpha".to_string()] }],
         };
-        let res_alpha = read_conditional(&mut db, query_alpha, MvccPosition(0)).unwrap();
+        let res_alpha = read_conditional(&mut db, query_alpha, MvccPosition(0), None).unwrap();
         assert_eq!(4, res_alpha.len());
         let mut prev = 0u64;
         for s in &res_alpha {
@@ -585,20 +595,30 @@ mod tests {
         // Validate after filtering for alpha
         let alpha_positions: Vec<u64> = res_alpha.iter().map(|e| e.position).collect();
         // after = 0 -> all
-        let res_alpha_all = read_conditional(&mut db, DCBQuery { items: vec![DCBQueryItem { types: vec![], tags: vec!["alpha".to_string()] }] }, MvccPosition(0)).unwrap();
+        let res_alpha_all = read_conditional(&mut db, DCBQuery { items: vec![DCBQueryItem { types: vec![], tags: vec!["alpha".to_string()] }] }, MvccPosition(0), None).unwrap();
         assert_eq!(res_alpha_all.iter().map(|e| e.position).collect::<Vec<_>>(), alpha_positions);
         // after = first -> tail
-        let res_alpha_after_first = read_conditional(&mut db, DCBQuery { items: vec![DCBQueryItem { types: vec![], tags: vec!["alpha".to_string()] }] }, MvccPosition(alpha_positions[0])).unwrap();
+        let res_alpha_after_first = read_conditional(&mut db, DCBQuery { items: vec![DCBQueryItem { types: vec![], tags: vec!["alpha".to_string()] }] }, MvccPosition(alpha_positions[0]), None).unwrap();
         assert_eq!(res_alpha_after_first.iter().map(|e| e.position).collect::<Vec<_>>(), alpha_positions[1..].to_vec());
         // after = last -> empty
-        let res_alpha_after_last = read_conditional(&mut db, DCBQuery { items: vec![DCBQueryItem { types: vec![], tags: vec!["alpha".to_string()] }] }, MvccPosition(*alpha_positions.last().unwrap())).unwrap();
+        let res_alpha_after_last = read_conditional(&mut db, DCBQuery { items: vec![DCBQueryItem { types: vec![], tags: vec!["alpha".to_string()] }] }, MvccPosition(*alpha_positions.last().unwrap()), None).unwrap();
         assert!(res_alpha_after_last.is_empty());
+
+        // Limits for alpha query: ensure returned length <= limit
+        let res_alpha_lim0 = read_conditional(&mut db, DCBQuery { items: vec![DCBQueryItem { types: vec![], tags: vec!["alpha".to_string()] }] }, MvccPosition(0), Some(0)).unwrap();
+        assert!(res_alpha_lim0.is_empty());
+        let res_alpha_lim1 = read_conditional(&mut db, DCBQuery { items: vec![DCBQueryItem { types: vec![], tags: vec!["alpha".to_string()] }] }, MvccPosition(0), Some(1)).unwrap();
+        assert!(res_alpha_lim1.len() <= 1);
+        let res_alpha_lim3 = read_conditional(&mut db, DCBQuery { items: vec![DCBQueryItem { types: vec![], tags: vec!["alpha".to_string()] }] }, MvccPosition(0), Some(3)).unwrap();
+        assert!(res_alpha_lim3.len() <= 3);
+        let res_alpha_lim10 = read_conditional(&mut db, DCBQuery { items: vec![DCBQueryItem { types: vec![], tags: vec!["alpha".to_string()] }] }, MvccPosition(0), Some(10)).unwrap();
+        assert!(res_alpha_lim10.len() <= 10);
 
         // Query: tags 'alpha' AND 'gamma' -> expect 2 events (i=0,5)
         let query_alpha_gamma = DCBQuery {
             items: vec![DCBQueryItem { types: vec![], tags: vec!["alpha".to_string(), "gamma".to_string()] }],
         };
-        let res_alpha_gamma = read_conditional(&mut db, query_alpha_gamma, MvccPosition(0)).unwrap();
+        let res_alpha_gamma = read_conditional(&mut db, query_alpha_gamma, MvccPosition(0), None).unwrap();
         assert_eq!(2, res_alpha_gamma.len());
         for s in &res_alpha_gamma {
             assert!(s.event.tags.iter().any(|t| t == "alpha"));
@@ -609,7 +629,7 @@ mod tests {
         let query_type0_alpha = DCBQuery {
             items: vec![DCBQueryItem { types: vec!["Type0".to_string()], tags: vec!["alpha".to_string()] }],
         };
-        let res_type0_alpha = read_conditional(&mut db, query_type0_alpha, MvccPosition(0)).unwrap();
+        let res_type0_alpha = read_conditional(&mut db, query_type0_alpha, MvccPosition(0), None).unwrap();
         assert_eq!(1, res_type0_alpha.len());
         assert_eq!("Type0", res_type0_alpha[0].event.event_type);
         assert!(res_type0_alpha[0].event.tags.iter().any(|t| t == "alpha"));
@@ -621,7 +641,7 @@ mod tests {
                 DCBQueryItem { types: vec![], tags: vec!["beta".to_string()] },
             ],
         };
-        let res_alpha_or_beta = read_conditional(&mut db, query_alpha_or_beta, MvccPosition(0)).unwrap();
+        let res_alpha_or_beta = read_conditional(&mut db, query_alpha_or_beta, MvccPosition(0), None).unwrap();
         assert_eq!(8, res_alpha_or_beta.len());
     }
 }

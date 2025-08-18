@@ -371,7 +371,7 @@ mod tests {
     use super::*;
     use serial_test::serial;
     use tempfile::tempdir;
-    use crate::api::{DCBQuery, DCBQueryItem};
+    use crate::api::{DCBQuery, DCBQueryItem, DCBAppendCondition, EventStoreError};
 
     static VERBOSE: bool = false;
 
@@ -604,5 +604,30 @@ mod tests {
         let out3 = resp3.next_batch().unwrap();
         assert_eq!(out3.len(), 1);
         assert_eq!(out3[0].event.event_type, "TypeB");
+
+        // Append with a condition that should PASS: query matches existing 'foo' but after = last
+        let cond_pass = DCBAppendCondition {
+            fail_if_events_match: DCBQuery { items: vec![DCBQueryItem { types: vec![], tags: vec!["foo".to_string()] }] },
+            after: Some(last),
+        };
+        let ok_last = store
+            .append(vec![DCBEvent { event_type: "TypeC".to_string(), data: vec![3], tags: vec!["baz".to_string()] }], Some(cond_pass))
+            .expect("append with passing condition should succeed");
+        assert!(ok_last > last);
+        assert_eq!(store.head().unwrap(), Some(ok_last));
+
+        // Append with a condition that should FAIL: same query but after = 0
+        let cond_fail = DCBAppendCondition {
+            fail_if_events_match: DCBQuery { items: vec![DCBQueryItem { types: vec![], tags: vec!["foo".to_string()] }] },
+            after: Some(0),
+        };
+        let before_head = store.head().unwrap();
+        let res = store.append(vec![DCBEvent { event_type: "TypeD".to_string(), data: vec![4], tags: vec!["qux".to_string()] }], Some(cond_fail));
+        match res {
+            Err(EventStoreError::IntegrityError) => {}
+            other => panic!("Expected IntegrityError, got {:?}", other),
+        }
+        // Ensure head unchanged after failed append
+        assert_eq!(store.head().unwrap(), before_head);
     }
 }

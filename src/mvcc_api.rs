@@ -153,7 +153,12 @@ pub fn read_all(db: &mut Db) -> MvccResult<Vec<DCBSequencedEvent>> {
 /// - For each DCBQueryItem, an event matches if (item.types is empty or contains the event type)
 ///   AND every tag in item.tags is present in the event's tags.
 /// - If the query has no items, all events are returned.
-pub fn read(db: &mut Db, query: DCBQuery) -> MvccResult<Vec<DCBSequencedEvent>> {
+pub fn read(db: &mut Db, query: DCBQuery, limit: Option<usize>) -> MvccResult<Vec<DCBSequencedEvent>> {
+    // Special case: explicit zero limit
+    if let Some(0) = limit {
+        return Ok(Vec::new());
+    }
+
     let reader = db.reader()?;
     let mut iter = EventIterator::new(&db, reader, None);
     let mut out: Vec<DCBSequencedEvent> = Vec::new();
@@ -171,7 +176,7 @@ pub fn read(db: &mut Db, query: DCBQuery) -> MvccResult<Vec<DCBSequencedEvent>> 
         false
     };
 
-    loop {
+    'outer: loop {
         let batch = iter.next_batch(64)?;
         if batch.is_empty() { break; }
         for (pos, rec) in batch.into_iter() {
@@ -184,6 +189,7 @@ pub fn read(db: &mut Db, query: DCBQuery) -> MvccResult<Vec<DCBSequencedEvent>> 
                         tags: rec.tags,
                     },
                 });
+                if let Some(lim) = limit { if out.len() >= lim { break 'outer; } }
             }
         }
     }
@@ -226,8 +232,7 @@ pub fn read_conditional(db: &mut Db, query: DCBQuery, after: MvccPosition, limit
     let all_items_have_tags = query.items.iter().all(|it| !it.tags.is_empty());
     if !all_items_have_tags {
         // Fallback: sequentially scan all events and apply the same matching as read()
-        let mut res = read(db, query)?;
-        if let Some(lim) = limit { if res.len() > lim { res.truncate(lim); } }
+        let res = read(db, query, limit)?;
         return Ok(res);
     }
 
@@ -524,7 +529,7 @@ mod tests {
         }
 
         // Read using the query
-        let filtered = read(&mut db, query).unwrap();
+        let filtered = read(&mut db, query, None).unwrap();
 
         // The query should match all events (each event has at least one shared tag)
         assert_eq!(filtered.len(), input.len());

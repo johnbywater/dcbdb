@@ -153,14 +153,14 @@ pub fn read_all(db: &mut Db) -> MvccResult<Vec<DCBSequencedEvent>> {
 /// - For each DCBQueryItem, an event matches if (item.types is empty or contains the event type)
 ///   AND every tag in item.tags is present in the event's tags.
 /// - If the query has no items, all events are returned.
-pub fn read(db: &mut Db, query: DCBQuery, limit: Option<usize>) -> MvccResult<Vec<DCBSequencedEvent>> {
+pub fn read(db: &mut Db, query: DCBQuery, after: MvccPosition, limit: Option<usize>) -> MvccResult<Vec<DCBSequencedEvent>> {
     // Special case: explicit zero limit
     if let Some(0) = limit {
         return Ok(Vec::new());
     }
 
     let reader = db.reader()?;
-    let mut iter = EventIterator::new(&db, reader, None);
+    let mut iter = EventIterator::new(&db, reader, Some(after));
     let mut out: Vec<DCBSequencedEvent> = Vec::new();
 
     let matches_item = |rec: &EventRecord| -> bool {
@@ -232,7 +232,7 @@ pub fn read_conditional(db: &mut Db, query: DCBQuery, after: MvccPosition, limit
     let all_items_have_tags = query.items.iter().all(|it| !it.tags.is_empty());
     if !all_items_have_tags {
         // Fallback: sequentially scan all events and apply the same matching as read()
-        let res = read(db, query, limit)?;
+        let res = read(db, query, after, limit)?;
         return Ok(res);
     }
 
@@ -528,8 +528,12 @@ mod tests {
             });
         }
 
-        // Read using the query
-        let filtered = read(&mut db, query, None).unwrap();
+        // Read using the query (after = 0)
+        let mut query_all = DCBQuery { items: Vec::new() };
+        for tag in &shared_tags {
+            query_all.items.push(DCBQueryItem { types: Vec::new(), tags: vec![tag.clone()] });
+        }
+        let filtered = read(&mut db, query_all.clone(), MvccPosition(0), None).unwrap();
 
         // The query should match all events (each event has at least one shared tag)
         assert_eq!(filtered.len(), input.len());
@@ -550,6 +554,18 @@ mod tests {
             assert!(s.position > prev);
             prev = s.position;
         }
+
+        // Validate after filtering for read()
+        let filtered_positions: Vec<u64> = filtered.iter().map(|e| e.position).collect();
+        // after = 0 -> all
+        let filtered_all = read(&mut db, query_all.clone(), MvccPosition(0), None).unwrap();
+        assert_eq!(filtered_all.iter().map(|e| e.position).collect::<Vec<_>>(), filtered_positions);
+        // after = first -> tail
+        let filtered_after_first = read(&mut db, query_all.clone(), MvccPosition(filtered_positions[0]), None).unwrap();
+        assert_eq!(filtered_after_first.iter().map(|e| e.position).collect::<Vec<_>>(), filtered_positions[1..].to_vec());
+        // after = last -> empty
+        let filtered_after_last = read(&mut db, query_all, MvccPosition(*filtered_positions.last().unwrap()), None).unwrap();
+        assert!(filtered_after_last.is_empty());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use crate::mvcc_db::{Db, Reader, Writer, Result};
 use crate::mvcc_common::{LmdbError, PageID, Position};
-use crate::mvcc_node_tags::{TagHash, TagsInternalNode, TagsLeafNode, TagsLeafValue};
+use crate::mvcc_node_tags::{TagHash, TagsInternalNode, TagsLeafNode, TagsLeafValue, TagLeafNode};
 use crate::mvcc_nodes::Node;
 use crate::mvcc_page::Page;
 
@@ -62,52 +62,125 @@ pub fn tags_tree_insert(db: &Db, writer: &mut Writer, tag: TagHash, pos: Positio
         replacement_info = Some((current_page_id, dirty_leaf_page_id));
     }
 
-    // Get a mutable reference to the dirty leaf page
-    let dirty_leaf_page = writer.get_mut_dirty(dirty_leaf_page_id)?;
-
     // Insert or append the position at the sorted index
-    if let Node::TagsLeaf(leaf) = &mut dirty_leaf_page.node {
-        match leaf.keys.binary_search(&tag) {
-            Ok(i) => {
-                // Append to existing value if no subtree
-                if leaf.values[i].root_id == PageID(0) {
-                    leaf.values[i].positions.push(pos);
-                    if verbose {
-                        println!("Appended position to existing tag at index {}", i);
+    // We must avoid holding a mutable borrow of the leaf while allocating/inserting pages.
+    // So we compute what to do, mutate minimally, then perform follow-up actions after dropping the borrow.
+    let mut per_tag_append_root: Option<PageID> = None;
+    let mut inline_appended_index: Option<usize> = None;
+    {
+        let leaf_page = writer.get_mut_dirty(dirty_leaf_page_id)?;
+        match &mut leaf_page.node {
+            Node::TagsLeaf(leaf) => {
+                match leaf.keys.binary_search(&tag) {
+                    Ok(i) => {
+                        let root = leaf.values[i].root_id;
+                        if root == PageID(0) {
+                            // Append inline for now; we may migrate after we drop the borrow
+                            leaf.values[i].positions.push(pos);
+                            inline_appended_index = Some(i);
+                            if verbose { println!("Appended position to existing tag at index {}", i); }
+                        } else {
+                            // Defer per-tag append to after we drop the borrow
+                            per_tag_append_root = Some(root);
+                        }
                     }
-                } else {
-                    return Err(LmdbError::DatabaseCorrupted(
-                        "Per-tag subtree not implemented".to_string(),
-                    ));
+                    Err(i) => {
+                        // Insert new key/value at the correct index
+                        leaf.keys.insert(i, tag);
+                        leaf.values.insert(
+                            i,
+                            TagsLeafValue { root_id: PageID(0), positions: vec![pos] },
+                        );
+                        if verbose { println!("Inserted new tag at index {}", i); }
+                    }
                 }
             }
-            Err(i) => {
-                // Insert new key/value at the correct index
-                leaf.keys.insert(i, tag);
-                leaf.values.insert(
-                    i,
-                    TagsLeafValue {
-                        root_id: PageID(0),
-                        positions: vec![pos],
-                    },
-                );
-                if verbose {
-                    println!("Inserted new tag at index {}", i);
+            _ => {
+                return Err(LmdbError::DatabaseCorrupted("Expected TagsLeaf node".to_string()));
+            }
+        }
+    }
+
+    // If we need to append into an existing per-tag leaf page, do it now (avoid overlapping borrows)
+    if let Some(mut tag_root_id) = per_tag_append_root.take() {
+        // Ensure tag page is dirty (copy-on-write)
+        let dirty_tag_id = {
+            // No outstanding borrows of writer here
+            writer.get_dirty_page_id(tag_root_id)?
+        };
+        if dirty_tag_id != tag_root_id {
+            // Update the root_id in the TagsLeaf value to the new dirty page id
+            tag_root_id = dirty_tag_id;
+            {
+                let leaf_page = writer.get_mut_dirty(dirty_leaf_page_id)?;
+                if let Node::TagsLeaf(leaf) = &mut leaf_page.node {
+                    let idx = leaf.keys.binary_search(&tag).map_err(|_| LmdbError::DatabaseCorrupted("Tag key not found after COW".to_string()))?;
+                    leaf.values[idx].root_id = tag_root_id;
+                } else { return Err(LmdbError::DatabaseCorrupted("Expected TagsLeaf node".to_string())); }
+            }
+        }
+        // Now push position into per-tag leaf
+        {
+            let tag_page = writer.get_mut_dirty(tag_root_id)?;
+            match &mut tag_page.node {
+                Node::TagLeaf(tleaf) => {
+                    tleaf.positions.push(pos);
+                    if tag_page.calc_serialized_size() > db.page_size {
+                        return Err(LmdbError::DatabaseCorrupted("Per-tag subtree split not implemented".to_string()));
+                    }
+                }
+                Node::TagInternal(_) => {
+                    return Err(LmdbError::DatabaseCorrupted("Per-tag internal subtree not implemented".to_string()));
+                }
+                _ => {
+                    return Err(LmdbError::DatabaseCorrupted("Expected TagLeaf/TagInternal node for per-tag positions".to_string()));
                 }
             }
         }
-    } else {
-        return Err(LmdbError::DatabaseCorrupted(
-            "Expected TagsLeaf node".to_string(),
-        ));
+    }
+
+    // If we appended inline, check if the page overflowed and migrate positions to a per-tag TagLeaf page
+    if let Some(i) = inline_appended_index.take() {
+        let sz = writer.get_page_ref(db, dirty_leaf_page_id)?.calc_serialized_size();
+        if sz > db.page_size {
+            if verbose { println!("Migrating inline positions to per-tag TagLeafNode for index {}", i); }
+            // Take positions out into a local var
+            let positions = {
+                let leaf_page = writer.get_mut_dirty(dirty_leaf_page_id)?;
+                if let Node::TagsLeaf(leaf) = &mut leaf_page.node {
+                    std::mem::take(&mut leaf.values[i].positions)
+                } else { return Err(LmdbError::DatabaseCorrupted("Expected TagsLeaf node".to_string())); }
+            };
+            // Create per-tag page
+            let tag_leaf_id = {
+                let tag_leaf = TagLeafNode { positions };
+                let tag_leaf_id = writer.alloc_page_id();
+                let tag_leaf_page = Page::new(tag_leaf_id, Node::TagLeaf(tag_leaf));
+                if tag_leaf_page.calc_serialized_size() > db.page_size {
+                    return Err(LmdbError::DatabaseCorrupted("Per-tag leaf overflow not implemented".to_string()));
+                }
+                writer.insert_dirty(tag_leaf_page)?;
+                tag_leaf_id
+            };
+            // Update root_id in the leaf
+            let leaf_page = writer.get_mut_dirty(dirty_leaf_page_id)?;
+            if let Node::TagsLeaf(leaf) = &mut leaf_page.node {
+                leaf.values[i].root_id = tag_leaf_id;
+            } else { return Err(LmdbError::DatabaseCorrupted("Expected TagsLeaf node".to_string())); }
+        }
     }
 
     // Track split information as (promoted_key, new_page_id, parent_child_idx_to_insert_after)
     let mut split_info: Option<(TagHash, PageID)> = None;
 
     // Check if leaf overflows
-    if dirty_leaf_page.calc_serialized_size() > db.page_size {
-        if let Node::TagsLeaf(leaf) = &mut dirty_leaf_page.node {
+    let needs_split = {
+        let page = writer.get_mut_dirty(dirty_leaf_page_id)?;
+        page.calc_serialized_size() > db.page_size
+    };
+    if needs_split {
+        let leaf_page = writer.get_mut_dirty(dirty_leaf_page_id)?;
+        if let Node::TagsLeaf(leaf) = &mut leaf_page.node {
             // Move half of the keys and values to a new right sibling
             let mid = leaf.keys.len() / 2;
             let right_keys: Vec<TagHash> = leaf.keys.split_off(mid);
@@ -325,8 +398,15 @@ impl<'a> Iterator for TagsTreeIterator<'a> {
                                         if val.root_id == PageID(0) {
                                             break val.positions.clone();
                                         } else {
-                                            // Per-tag subtree not implemented yet
-                                            break Vec::new();
+                                            // Load positions from per-tag leaf page
+                                            match self.db.read_page(val.root_id) {
+                                                Ok(p) => match p.node {
+                                                    Node::TagLeaf(tleaf) => break tleaf.positions.clone(),
+                                                    // Per-tag internal subtree not yet implemented
+                                                    _ => break Vec::new(),
+                                                },
+                                                Err(_) => break Vec::new(),
+                                            }
                                         }
                                     }
                                     Err(_) => break Vec::new(),
@@ -725,6 +805,40 @@ mod tests {
         for (tag, pos) in &appended {
             let positions = tags_tree_lookup(&db, &reader, *tag).unwrap();
             assert_eq!(positions, vec![*pos]);
+        }
+    }
+
+    #[test]
+    fn test_per_tag_positions_overflow_migrates_to_tag_leaf() {
+        // Use small page size to force overflow with inline positions
+        let (_tmp, db) = construct_db(256);
+        let mut writer = db.writer().unwrap();
+        let tag = th(777);
+        let mut inserted: Vec<Position> = Vec::new();
+        // 30 positions will exceed: header(9) + node(20 + 8P) > 256 when P >= 29
+        for _ in 0..30 {
+            let p = writer.issue_position();
+            tags_tree_insert(&db, &mut writer, tag, p).unwrap();
+            inserted.push(p);
+        }
+        // Root should still be a TagsLeaf containing the tag key
+        let root_page = writer.dirty.get(&writer.tags_tree_root_id).unwrap();
+        match &root_page.node {
+            Node::TagsLeaf(leaf) => {
+                let idx = leaf.keys.binary_search(&tag).unwrap();
+                let val = &leaf.values[idx];
+                assert_ne!(val.root_id, PageID(0), "Expected per-tag root_id to be non-zero after overflow migration");
+                assert!(val.positions.is_empty(), "Inline positions should have been migrated to per-tag page");
+                // The per-tag page should exist and be a TagLeaf containing all inserted positions
+                let tag_page = writer.dirty.get(&val.root_id).expect("Per-tag page should be dirty");
+                match &tag_page.node {
+                    Node::TagLeaf(tleaf) => {
+                        assert_eq!(tleaf.positions, inserted);
+                    }
+                    other => panic!("Expected TagLeaf node, got {:?}", other),
+                }
+            }
+            other => panic!("Expected TagsLeaf root, got {:?}", other),
         }
     }
 

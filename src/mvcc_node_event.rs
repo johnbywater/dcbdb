@@ -681,4 +681,89 @@ mod tests {
             _ => panic!("Expected Inline for third value"),
         }
     }
+
+    #[test]
+    fn test_event_leaf_serialize_with_overflow_single() {
+        let leaf_node = EventLeafNode {
+            keys: vec![Position(111)],
+            values: vec![EventValue::Overflow {
+                event_type: "over_evt".to_string(),
+                data_len: 1234567,
+                tags: vec!["a".to_string(), "b".to_string()],
+                root_id: PageID(123),
+            }],
+        };
+        // Serialize
+        let serialized = leaf_node.serialize().unwrap();
+        assert!(!serialized.is_empty());
+        // Deserialize
+        let deserialized = EventLeafNode::from_slice(&serialized).expect("Failed to deserialize EventLeafNode with overflow");
+        assert_eq!(leaf_node, deserialized);
+
+        // Check specific fields
+        assert_eq!(1, deserialized.keys.len());
+        assert_eq!(Position(111), deserialized.keys[0]);
+        assert_eq!(1, deserialized.values.len());
+        match &deserialized.values[0] {
+            EventValue::Overflow { event_type, data_len, tags, root_id } => {
+                assert_eq!("over_evt", event_type);
+                assert_eq!(1234567, *data_len);
+                assert_eq!(vec!["a".to_string(), "b".to_string()], *tags);
+                assert_eq!(PageID(123), *root_id);
+            }
+            _ => panic!("Expected Overflow variant"),
+        }
+    }
+
+    #[test]
+    fn test_event_leaf_serialize_mixed_inline_and_overflow() {
+        let inline = EventValue::Inline(EventRecord {
+            event_type: "inline_evt".to_string(),
+            data: vec![1, 2, 3],
+            tags: vec!["x".to_string()],
+        });
+        let overflow = EventValue::Overflow {
+            event_type: "overflow_evt".to_string(),
+            data_len: 9999,
+            tags: vec!["y".to_string(), "z".to_string()],
+            root_id: PageID(999),
+        };
+        let leaf_node = EventLeafNode {
+            keys: vec![Position(10), Position(20)],
+            values: vec![inline.clone(), overflow.clone()],
+        };
+        let serialized = leaf_node.serialize().unwrap();
+        let deserialized = EventLeafNode::from_slice(&serialized).unwrap();
+        assert_eq!(leaf_node, deserialized);
+
+        // Validate order and variants
+        match &deserialized.values[0] {
+            EventValue::Inline(rec) => {
+                assert_eq!("inline_evt", rec.event_type);
+                assert_eq!(vec![1, 2, 3], rec.data);
+                assert_eq!(vec!["x".to_string()], rec.tags);
+            }
+            _ => panic!("Expected Inline at index 0"),
+        }
+        match &deserialized.values[1] {
+            EventValue::Overflow { event_type, data_len, tags, root_id } => {
+                assert_eq!("overflow_evt", event_type);
+                assert_eq!(9999, *data_len);
+                assert_eq!(vec!["y".to_string(), "z".to_string()], *tags);
+                assert_eq!(PageID(999), *root_id);
+            }
+            _ => panic!("Expected Overflow at index 1"),
+        }
+    }
+
+    #[test]
+    fn test_event_overflow_node_serialize_roundtrip() {
+        let node = EventOverflowNode { next: PageID(77), data: vec![7, 8, 9, 10] };
+        let ser = node.serialize().unwrap();
+        assert_eq!(8 + 4, ser.len()); // 8 bytes next + 4 bytes data
+        let de = EventOverflowNode::from_slice(&ser).unwrap();
+        assert_eq!(node, de);
+        assert_eq!(PageID(77), de.next);
+        assert_eq!(vec![7, 8, 9, 10], de.data);
+    }
 }

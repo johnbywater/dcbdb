@@ -1,10 +1,80 @@
 use crate::mvcc_db::{Db, Reader, Writer, Result};
 use crate::mvcc_common::Position;
 use crate::mvcc_common::{LmdbError, PageID};
-use crate::mvcc_node_event::{EventInternalNode, EventLeafNode, EventRecord};
+use crate::mvcc_node_event::{EventInternalNode, EventLeafNode, EventRecord, EventValue, EventOverflowNode};
 use crate::mvcc_nodes::Node;
-use crate::mvcc_page::Page;
+use crate::mvcc_page::{Page, PAGE_HEADER_SIZE};
 use std::collections::HashMap;
+
+// Helpers for storing large event data across overflow pages
+fn write_overflow_chain(db: &Db, writer: &mut Writer, data: &[u8]) -> Result<PageID> {
+    // Maximum payload per overflow page: page_size - header - next pointer (8 bytes)
+    let payload_cap = db.page_size.saturating_sub(PAGE_HEADER_SIZE + 8);
+    if payload_cap == 0 {
+        return Err(LmdbError::DatabaseCorrupted(
+            "Page size too small to store overflow data".to_string(),
+        ));
+    }
+    // Split data into chunks from end to start so we can set next ids easily
+    let mut chunks: Vec<&[u8]> = Vec::new();
+    let mut i = 0;
+    while i < data.len() {
+        let end = (i + payload_cap).min(data.len());
+        chunks.push(&data[i..end]);
+        i = end;
+    }
+    if chunks.is_empty() {
+        // Store an empty chunk page to indicate zero-length data
+        let page_id = writer.alloc_page_id();
+        let node = EventOverflowNode { next: PageID(0), data: Vec::new() };
+        let page = Page::new(page_id, Node::EventOverflow(node));
+        writer.insert_dirty(page)?;
+        return Ok(page_id);
+    }
+    let mut next_id = PageID(0);
+    for chunk in chunks.iter().rev() {
+        let page_id = writer.alloc_page_id();
+        let node = EventOverflowNode { next: next_id, data: (*chunk).to_vec() };
+        let page = Page::new(page_id, Node::EventOverflow(node));
+        writer.insert_dirty(page)?;
+        next_id = page_id;
+    }
+    Ok(next_id)
+}
+
+fn read_overflow_chain(db: &Db, mut page_id: PageID) -> Result<Vec<u8>> {
+    let mut out: Vec<u8> = Vec::new();
+    while page_id.0 != 0 {
+        let page = db.read_page(page_id)?;
+        match page.node {
+            Node::EventOverflow(node) => {
+                out.extend_from_slice(&node.data);
+                page_id = node.next;
+            }
+            _ => {
+                return Err(LmdbError::DatabaseCorrupted(
+                    "Expected EventOverflow node".to_string(),
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn materialize_event_value(db: &Db, value: &EventValue) -> Result<EventRecord> {
+    match value {
+        EventValue::Inline(rec) => Ok(rec.clone()),
+        EventValue::Overflow { event_type, data_len, tags, root_id } => {
+            let data = read_overflow_chain(db, *root_id)?;
+            if (data.len() as u64) != *data_len {
+                return Err(LmdbError::DatabaseCorrupted(
+                    "Overflow data length mismatch".to_string(),
+                ));
+            }
+            Ok(EventRecord { event_type: event_type.clone(), data, tags: tags.clone() })
+        }
+    }
+}
 
 /// Append an event to the root event leaf page.
 ///
@@ -48,6 +118,19 @@ pub fn event_tree_append(
         println!("{current_page_id:?} is leaf node");
     }
 
+    // Decide inline vs overflow based on data length before mut-borrowing the page
+    let pending_value = if event.data.len() > u16::MAX as usize {
+        let root_id = write_overflow_chain(db, writer, &event.data)?;
+        EventValue::Overflow {
+            event_type: event.event_type.clone(),
+            data_len: event.data.len() as u64,
+            tags: event.tags.clone(),
+            root_id,
+        }
+    } else {
+        EventValue::Inline(event)
+    };
+
     // Make the leaf page dirty
     let dirty_page_id = { writer.get_dirty_page_id(current_page_id)? };
     let replacement_info: Option<(PageID, PageID)> = {
@@ -57,72 +140,84 @@ pub fn event_tree_append(
             None
         }
     };
-    // Get a mutable leaf node....
-    let dirty_leaf_page = writer.get_mut_dirty(dirty_page_id)?;
 
-    // Ensure it is an EventLeaf and append the data
-    match &mut dirty_leaf_page.node {
-        Node::EventLeaf(node) => {
-            node.keys.push(position);
-            node.values.push(event);
-        }
-        _ => {
-            return Err(LmdbError::DatabaseCorrupted(
-                "Expected EventLeaf node at event tree root".to_string(),
-            ));
+    // We may need to pop the last key/value for splitting; hold it after we drop the borrow
+    let mut popped: Option<(Position, EventValue)> = None;
+
+    // Get a mutable leaf node and append the data
+    {
+        let dirty_leaf_page = writer.get_mut_dirty(dirty_page_id)?;
+        match &mut dirty_leaf_page.node {
+            Node::EventLeaf(node) => {
+                node.keys.push(position);
+                node.values.push(pending_value);
+
+                // Check if the leaf needs splitting by estimating the serialized size
+                let serialized_size = dirty_leaf_page.calc_serialized_size();
+                if serialized_size > db.page_size {
+                    if let Node::EventLeaf(dirty_leaf_node) = &mut dirty_leaf_page.node {
+                        let (last_key, last_value) = dirty_leaf_node.pop_last_key_and_value()?;
+                        if verbose {
+                            println!(
+                                "Split leaf {:?}: {:?}",
+                                dirty_page_id,
+                                dirty_leaf_node.clone()
+                            );
+                        }
+                        popped = Some((last_key, last_value));
+                    } else {
+                        return Err(LmdbError::DatabaseCorrupted(
+                            "Expected EventLeaf node".to_string(),
+                        ));
+                    }
+                }
+            }
+            _ => {
+                return Err(LmdbError::DatabaseCorrupted(
+                    "Expected EventLeaf node at event tree root".to_string(),
+                ));
+            }
         }
     }
 
-    // Check if the leaf needs splitting by estimating the serialized size
+    // Prepare for split propagation
     let mut split_info: Option<(Position, PageID)> = None;
 
-    let serialized_size = dirty_leaf_page.calc_serialized_size();
-    if serialized_size > db.page_size {
-        // Split the leaf node
-        if let Node::EventLeaf(dirty_leaf_node) = &mut dirty_leaf_page.node {
-            let (last_key, last_value) = dirty_leaf_node.pop_last_key_and_value()?;
-
-            if verbose {
-                println!(
-                    "Split leaf {:?}: {:?}",
-                    dirty_page_id,
-                    dirty_leaf_node.clone()
-                );
+    if let Some((last_key, mut last_value)) = popped {
+        // Build new leaf node; convert to overflow if needed to fit
+        let new_leaf_page_id = writer.alloc_page_id();
+        let mut new_leaf_node = EventLeafNode { keys: vec![last_key], values: vec![last_value.clone()] };
+        let mut new_leaf_page = Page::new(new_leaf_page_id, Node::EventLeaf(new_leaf_node.clone()));
+        let mut serialized_size = new_leaf_page.calc_serialized_size();
+        if serialized_size > db.page_size {
+            if let EventValue::Inline(rec) = last_value {
+                let root_id = write_overflow_chain(db, writer, &rec.data)?;
+                last_value = EventValue::Overflow {
+                    event_type: rec.event_type,
+                    data_len: rec.data.len() as u64,
+                    tags: rec.tags,
+                    root_id,
+                };
+                new_leaf_node = EventLeafNode { keys: vec![last_key], values: vec![last_value.clone()] };
+                new_leaf_page = Page::new(new_leaf_page_id, Node::EventLeaf(new_leaf_node.clone()));
+                serialized_size = new_leaf_page.calc_serialized_size();
             }
-            let new_leaf_node = EventLeafNode {
-                keys: vec![last_key],
-                values: vec![last_value],
-            };
-
-            let new_leaf_page_id = writer.alloc_page_id();
-            let new_leaf_page = Page::new(new_leaf_page_id, Node::EventLeaf(new_leaf_node));
-
-            // Check if the new leaf page needs splitting
-            let serialized_size = new_leaf_page.calc_serialized_size();
             if serialized_size > db.page_size {
                 return Err(LmdbError::DatabaseCorrupted(format!(
-                    "Overflow event data not implemented (size: {serialized_size}, max: {})",
+                    "Event too large even after overflow conversion (size: {serialized_size}, max: {})",
                     db.page_size
                 )));
             }
-            if verbose {
-                println!(
-                    "Created new leaf {:?}: {:?}",
-                    new_leaf_page_id, new_leaf_page.node
-                );
-            }
-            writer.insert_dirty(new_leaf_page)?;
-
-            // Propagate the split up the tree
-            if verbose {
-                println!("Promoting {last_key:?} and {new_leaf_page_id:?}");
-            }
-            split_info = Some((last_key, new_leaf_page_id));
-        } else {
-            return Err(LmdbError::DatabaseCorrupted(
-                "Expected EventLeaf node".to_string(),
-            ));
         }
+        if verbose {
+            println!(
+                "Created new leaf {:?}: {:?}",
+                new_leaf_page_id, new_leaf_page.node
+            );
+        }
+        writer.insert_dirty(new_leaf_page)?;
+        if verbose { println!("Promoting {last_key:?} and {new_leaf_page_id:?}"); }
+        split_info = Some((last_key, new_leaf_page_id));
     }
 
     // Propagate splits and replacements up the stack
@@ -289,7 +384,10 @@ pub fn event_tree_lookup(db: &Db, reader: &Reader, position: Position) -> Result
             }
             Node::EventLeaf(leaf) => {
                 match leaf.keys.binary_search(&position) {
-                    Ok(i) => return Ok(leaf.values[i].clone()),
+                    Ok(i) => {
+                        let rec = materialize_event_value(db, &leaf.values[i])?;
+                        return Ok(rec);
+                    }
                     Err(_) => {
                         return Err(LmdbError::DatabaseCorrupted(format!(
                             "Event at position {:?} not found",
@@ -404,7 +502,7 @@ impl<'a> EventIterator<'a> {
                                 remove_page = true;
                             }
                             let pos = leaf.keys[item_idx];
-                            let rec = leaf.values[item_idx].clone();
+                            let rec = materialize_event_value(self.db, &leaf.values[item_idx])?;
                             if pos > self.after {
                                 emit = Some((pos, rec));
                             } else {
@@ -490,7 +588,7 @@ mod tests {
         match &page.node {
             Node::EventLeaf(node) => {
                 assert_eq!(vec![position], node.keys);
-                assert_eq!(vec![record.clone()], node.values);
+                assert_eq!(vec![crate::mvcc_node_event::EventValue::Inline(record.clone())], node.values);
             }
             _ => panic!("Expected EventLeaf node"),
         }
@@ -504,7 +602,7 @@ mod tests {
         match &persisted_page.node {
             Node::EventLeaf(node) => {
                 assert_eq!(vec![position], node.keys);
-                assert_eq!(vec![record], node.values);
+                assert_eq!(vec![crate::mvcc_node_event::EventValue::Inline(record)], node.values);
             }
             _ => panic!("Expected EventLeaf node after commit"),
         }

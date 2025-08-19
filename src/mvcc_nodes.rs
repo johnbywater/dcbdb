@@ -1,6 +1,6 @@
 use crate::mvcc_common;
 use crate::mvcc_common::LmdbError;
-use crate::mvcc_node_event::{EventInternalNode, EventLeafNode};
+use crate::mvcc_node_event::{EventInternalNode, EventLeafNode, EventOverflowNode};
 use crate::mvcc_node_free_list::{FreeListInternalNode, FreeListLeafNode};
 use crate::mvcc_node_header::HeaderNode;
 use crate::mvcc_node_tags::{TagInternalNode, TagLeafNode, TagsInternalNode, TagsLeafNode};
@@ -15,6 +15,7 @@ const PAGE_TYPE_TAGS_LEAF: u8 = b'6';
 const PAGE_TYPE_TAGS_INTERNAL: u8 = b'7';
 const PAGE_TYPE_TAG_LEAF: u8 = b'8';
 const PAGE_TYPE_TAG_INTERNAL: u8 = b'9';
+const PAGE_TYPE_EVENT_OVERFLOW: u8 = b'O';
 
 // Enum to represent different node types
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,6 +25,7 @@ pub enum Node {
     FreeListInternal(FreeListInternalNode),
     EventLeaf(EventLeafNode),
     EventInternal(EventInternalNode),
+    EventOverflow(EventOverflowNode),
     TagsLeaf(TagsLeafNode),
     TagsInternal(TagsInternalNode),
     TagLeaf(TagLeafNode),
@@ -38,6 +40,7 @@ impl Node {
             Node::FreeListInternal(_) => PAGE_TYPE_FREELIST_INTERNAL,
             Node::EventLeaf(_) => PAGE_TYPE_EVENT_LEAF,
             Node::EventInternal(_) => PAGE_TYPE_EVENT_INTERNAL,
+            Node::EventOverflow(_) => PAGE_TYPE_EVENT_OVERFLOW,
             Node::TagsLeaf(_) => PAGE_TYPE_TAGS_LEAF,
             Node::TagsInternal(_) => PAGE_TYPE_TAGS_INTERNAL,
             Node::TagLeaf(_) => PAGE_TYPE_TAG_LEAF,
@@ -52,6 +55,7 @@ impl Node {
             Node::FreeListInternal(node) => node.calc_serialized_size(),
             Node::EventLeaf(node) => node.calc_serialized_size(),
             Node::EventInternal(node) => node.calc_serialized_size(),
+            Node::EventOverflow(node) => node.calc_serialized_size(),
             Node::TagsLeaf(node) => node.calc_serialized_size(),
             Node::TagsInternal(node) => node.calc_serialized_size(),
             Node::TagLeaf(node) => node.calc_serialized_size(),
@@ -66,6 +70,7 @@ impl Node {
             Node::FreeListInternal(node) => node.serialize(),
             Node::EventLeaf(node) => node.serialize(),
             Node::EventInternal(node) => node.serialize(),
+            Node::EventOverflow(node) => node.serialize(),
             Node::TagsLeaf(node) => node.serialize(),
             Node::TagsInternal(node) => node.serialize(),
             Node::TagLeaf(node) => node.serialize(),
@@ -94,6 +99,10 @@ impl Node {
             PAGE_TYPE_EVENT_INTERNAL => {
                 let node = EventInternalNode::from_slice(data)?;
                 Ok(Node::EventInternal(node))
+            }
+            PAGE_TYPE_EVENT_OVERFLOW => {
+                let node = EventOverflowNode::from_slice(data)?;
+                Ok(Node::EventOverflow(node))
             }
             PAGE_TYPE_TAGS_LEAF => {
                 let node = TagsLeafNode::from_slice(data)?;

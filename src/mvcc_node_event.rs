@@ -11,9 +11,36 @@ pub struct EventRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EventValue {
+    Inline(EventRecord),
+    // For large data stored across overflow pages
+    Overflow {
+        event_type: String,
+        data_len: u64,
+        tags: Vec<String>,
+        root_id: PageID,
+    },
+}
+
+impl PartialEq<EventValue> for EventRecord {
+    fn eq(&self, other: &EventValue) -> bool {
+        match other {
+            EventValue::Inline(rec) => self == rec,
+            EventValue::Overflow { event_type, data_len, tags, .. } => {
+                &self.event_type == event_type && &self.tags == tags && (self.data.len() as u64) == *data_len
+            }
+        }
+    }
+}
+
+impl PartialEq<EventRecord> for EventValue {
+    fn eq(&self, other: &EventRecord) -> bool { other == self }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EventLeafNode {
     pub keys: Vec<Position>,
-    pub values: Vec<EventRecord>,
+    pub values: Vec<EventValue>,
 }
 
 impl EventLeafNode {
@@ -24,20 +51,37 @@ impl EventLeafNode {
         // 8 bytes for each Position in keys
         total_size += self.keys.len() * 8;
 
-        // For each EventRecord in values:
+        // For each value
         for value in &self.values {
-            // 2 bytes for event_type length + bytes for the string
-            total_size += 2 + value.event_type.len();
-
-            // 2 bytes for data length + bytes for the data
-            total_size += 2 + value.data.len();
-
-            // 2 bytes for number of tags
-            total_size += 2;
-
-            // For each tag: 2 bytes for length + bytes for the string
-            for tag in &value.tags {
-                total_size += 2 + tag.len();
+            // 1 byte for discriminator
+            total_size += 1;
+            match value {
+                EventValue::Inline(rec) => {
+                    // 2 bytes for event_type length + bytes for the string
+                    total_size += 2 + rec.event_type.len();
+                    // 2 bytes for data length + bytes for the data
+                    total_size += 2 + rec.data.len();
+                    // 2 bytes for number of tags
+                    total_size += 2;
+                    // For each tag: 2 bytes for length + bytes for the string
+                    for tag in &rec.tags {
+                        total_size += 2 + tag.len();
+                    }
+                }
+                EventValue::Overflow { event_type, data_len: _, tags, root_id: _ } => {
+                    // 2 bytes for event_type length + bytes for the string
+                    total_size += 2 + event_type.len();
+                    // 8 bytes for data_len (u64)
+                    total_size += 8;
+                    // 2 bytes for number of tags
+                    total_size += 2;
+                    // For each tag: 2 bytes for length + bytes for the string
+                    for tag in tags {
+                        total_size += 2 + tag.len();
+                    }
+                    // 8 bytes for root_id
+                    total_size += 8;
+                }
             }
         }
 
@@ -56,30 +100,49 @@ impl EventLeafNode {
             result.extend_from_slice(&key.0.to_le_bytes());
         }
 
-        // Serialize each value (EventRecord)
+        // Serialize each value
         for value in &self.values {
-            // Serialize event_type length (2 bytes)
-            result.extend_from_slice(&(value.event_type.len() as u16).to_le_bytes());
-
-            // Serialize event_type bytes
-            result.extend_from_slice(value.event_type.as_bytes());
-
-            // Serialize data length (2 bytes)
-            result.extend_from_slice(&(value.data.len() as u16).to_le_bytes());
-
-            // Serialize data bytes
-            result.extend_from_slice(&value.data);
-
-            // Serialize number of tags (2 bytes)
-            result.extend_from_slice(&(value.tags.len() as u16).to_le_bytes());
-
-            // Serialize each tag (2 bytes for length + string bytes)
-            for tag in &value.tags {
-                // Serialize tag length (2 bytes)
-                result.extend_from_slice(&(tag.len() as u16).to_le_bytes());
-
-                // Serialize tag bytes
-                result.extend_from_slice(tag.as_bytes());
+            match value {
+                EventValue::Inline(rec) => {
+                    // kind = 0
+                    result.push(0u8);
+                    // Serialize event_type length (2 bytes)
+                    result.extend_from_slice(&(rec.event_type.len() as u16).to_le_bytes());
+                    // Serialize event_type bytes
+                    result.extend_from_slice(rec.event_type.as_bytes());
+                    // Serialize data length (2 bytes)
+                    result.extend_from_slice(&(rec.data.len() as u16).to_le_bytes());
+                    // Serialize data bytes
+                    result.extend_from_slice(&rec.data);
+                    // Serialize number of tags (2 bytes)
+                    result.extend_from_slice(&(rec.tags.len() as u16).to_le_bytes());
+                    // Serialize each tag (2 bytes for length + string bytes)
+                    for tag in &rec.tags {
+                        // Serialize tag length (2 bytes)
+                        result.extend_from_slice(&(tag.len() as u16).to_le_bytes());
+                        // Serialize tag bytes
+                        result.extend_from_slice(tag.as_bytes());
+                    }
+                }
+                EventValue::Overflow { event_type, data_len, tags, root_id } => {
+                    // kind = 1
+                    result.push(1u8);
+                    // Serialize event_type length (2 bytes)
+                    result.extend_from_slice(&(event_type.len() as u16).to_le_bytes());
+                    // Serialize event_type bytes
+                    result.extend_from_slice(event_type.as_bytes());
+                    // Serialize data_len (8 bytes)
+                    result.extend_from_slice(&(*data_len as u64).to_le_bytes());
+                    // Serialize number of tags (2 bytes)
+                    result.extend_from_slice(&(tags.len() as u16).to_le_bytes());
+                    // Serialize each tag (2 bytes for length + string bytes)
+                    for tag in tags {
+                        result.extend_from_slice(&(tag.len() as u16).to_le_bytes());
+                        result.extend_from_slice(tag.as_bytes());
+                    }
+                    // Serialize root_id (8 bytes)
+                    result.extend_from_slice(&root_id.0.to_le_bytes());
+                }
             }
         }
 
@@ -125,30 +188,33 @@ impl EventLeafNode {
             keys.push(Position(position));
         }
 
-        // Extract the values (EventRecord)
+        // Extract the values (EventValue)
         let mut values = Vec::with_capacity(keys_len);
         let mut offset = 2 + (keys_len * 8);
 
         for _ in 0..keys_len {
-            // Check if there's enough data for event_type length (2 bytes)
+            // Read discriminator (1 byte)
+            if offset + 1 > slice.len() {
+                return Err(LmdbError::DeserializationError(
+                    "Unexpected end of data while reading value kind".to_string(),
+                ));
+            }
+            let kind = slice[offset];
+            offset += 1;
+
+            // Extract event_type length (2 bytes)
             if offset + 2 > slice.len() {
                 return Err(LmdbError::DeserializationError(
                     "Unexpected end of data while reading event_type length".to_string(),
                 ));
             }
-
-            // Extract event_type length (2 bytes)
             let event_type_len = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
             offset += 2;
-
-            // Check if there's enough data for event_type
             if offset + event_type_len > slice.len() {
                 return Err(LmdbError::DeserializationError(
                     "Unexpected end of data while reading event_type".to_string(),
                 ));
             }
-
-            // Extract event_type as a string
             let event_type = match std::str::from_utf8(&slice[offset..offset + event_type_len]) {
                 Ok(s) => s.to_string(),
                 Err(_) => {
@@ -159,88 +225,178 @@ impl EventLeafNode {
             };
             offset += event_type_len;
 
-            // Check if there's enough data for data length (2 bytes)
-            if offset + 2 > slice.len() {
-                return Err(LmdbError::DeserializationError(
-                    "Unexpected end of data while reading data length".to_string(),
-                ));
-            }
-
-            // Extract data length (2 bytes)
-            let data_len = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
-            offset += 2;
-
-            // Check if there's enough data for data
-            if offset + data_len > slice.len() {
-                return Err(LmdbError::DeserializationError(
-                    "Unexpected end of data while reading data".to_string(),
-                ));
-            }
-
-            // Extract data
-            let data = slice[offset..offset + data_len].to_vec();
-            offset += data_len;
-
-            // Check if there's enough data for number of tags (2 bytes)
-            if offset + 2 > slice.len() {
-                return Err(LmdbError::DeserializationError(
-                    "Unexpected end of data while reading number of tags".to_string(),
-                ));
-            }
-
-            // Extract number of tags (2 bytes)
-            let num_tags = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
-            offset += 2;
-
-            // Extract each tag
-            let mut tags = Vec::with_capacity(num_tags);
-            for _ in 0..num_tags {
-                // Check if there's enough data for tag length (2 bytes)
-                if offset + 2 > slice.len() {
-                    return Err(LmdbError::DeserializationError(
-                        "Unexpected end of data while reading tag length".to_string(),
-                    ));
-                }
-
-                // Extract tag length (2 bytes)
-                let tag_len = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
-                offset += 2;
-
-                // Check if there's enough data for tag
-                if offset + tag_len > slice.len() {
-                    return Err(LmdbError::DeserializationError(
-                        "Unexpected end of data while reading tag".to_string(),
-                    ));
-                }
-
-                // Extract tag as a string
-                let tag = match std::str::from_utf8(&slice[offset..offset + tag_len]) {
-                    Ok(s) => s.to_string(),
-                    Err(_) => {
+            match kind {
+                0 => {
+                    // Inline: data_len u16 + data bytes
+                    if offset + 2 > slice.len() {
                         return Err(LmdbError::DeserializationError(
-                            "Invalid UTF-8 sequence in tag".to_string(),
+                            "Unexpected end of data while reading data length".to_string(),
                         ));
                     }
-                };
-                offset += tag_len;
+                    let data_len = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
+                    offset += 2;
+                    if offset + data_len > slice.len() {
+                        return Err(LmdbError::DeserializationError(
+                            "Unexpected end of data while reading data".to_string(),
+                        ));
+                    }
+                    let data = slice[offset..offset + data_len].to_vec();
+                    offset += data_len;
 
-                tags.push(tag);
+                    // num tags
+                    if offset + 2 > slice.len() {
+                        return Err(LmdbError::DeserializationError(
+                            "Unexpected end of data while reading number of tags".to_string(),
+                        ));
+                    }
+                    let num_tags = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
+                    offset += 2;
+                    let mut tags = Vec::with_capacity(num_tags);
+                    for _ in 0..num_tags {
+                        if offset + 2 > slice.len() {
+                            return Err(LmdbError::DeserializationError(
+                                "Unexpected end of data while reading tag length".to_string(),
+                            ));
+                        }
+                        let tag_len = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
+                        offset += 2;
+                        if offset + tag_len > slice.len() {
+                            return Err(LmdbError::DeserializationError(
+                                "Unexpected end of data while reading tag".to_string(),
+                            ));
+                        }
+                        let tag = match std::str::from_utf8(&slice[offset..offset + tag_len]) {
+                            Ok(s) => s.to_string(),
+                            Err(_) => {
+                                return Err(LmdbError::DeserializationError(
+                                    "Invalid UTF-8 sequence in tag".to_string(),
+                                ));
+                            }
+                        };
+                        offset += tag_len;
+                        tags.push(tag);
+                    }
+
+                    values.push(EventValue::Inline(EventRecord { event_type, data, tags }));
+                }
+                1 => {
+                    // Overflow: data_len u64 + tags + root_id
+                    if offset + 8 > slice.len() {
+                        return Err(LmdbError::DeserializationError(
+                            "Unexpected end of data while reading overflow data_len".to_string(),
+                        ));
+                    }
+                    let data_len = u64::from_le_bytes([
+                        slice[offset],
+                        slice[offset + 1],
+                        slice[offset + 2],
+                        slice[offset + 3],
+                        slice[offset + 4],
+                        slice[offset + 5],
+                        slice[offset + 6],
+                        slice[offset + 7],
+                    ]);
+                    offset += 8;
+
+                    if offset + 2 > slice.len() {
+                        return Err(LmdbError::DeserializationError(
+                            "Unexpected end of data while reading number of tags".to_string(),
+                        ));
+                    }
+                    let num_tags = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
+                    offset += 2;
+                    let mut tags = Vec::with_capacity(num_tags);
+                    for _ in 0..num_tags {
+                        if offset + 2 > slice.len() {
+                            return Err(LmdbError::DeserializationError(
+                                "Unexpected end of data while reading tag length".to_string(),
+                            ));
+                        }
+                        let tag_len = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
+                        offset += 2;
+                        if offset + tag_len > slice.len() {
+                            return Err(LmdbError::DeserializationError(
+                                "Unexpected end of data while reading tag".to_string(),
+                            ));
+                        }
+                        let tag = match std::str::from_utf8(&slice[offset..offset + tag_len]) {
+                            Ok(s) => s.to_string(),
+                            Err(_) => {
+                                return Err(LmdbError::DeserializationError(
+                                    "Invalid UTF-8 sequence in tag".to_string(),
+                                ));
+                            }
+                        };
+                        offset += tag_len;
+                        tags.push(tag);
+                    }
+                    if offset + 8 > slice.len() {
+                        return Err(LmdbError::DeserializationError(
+                            "Unexpected end of data while reading overflow root_id".to_string(),
+                        ));
+                    }
+                    let root_id = PageID(u64::from_le_bytes([
+                        slice[offset],
+                        slice[offset + 1],
+                        slice[offset + 2],
+                        slice[offset + 3],
+                        slice[offset + 4],
+                        slice[offset + 5],
+                        slice[offset + 6],
+                        slice[offset + 7],
+                    ]));
+                    offset += 8;
+
+                    values.push(EventValue::Overflow { event_type, data_len, tags, root_id });
+                }
+                _ => {
+                    return Err(LmdbError::DeserializationError(
+                        "Invalid event value kind".to_string(),
+                    ));
+                }
             }
-
-            values.push(EventRecord {
-                event_type,
-                data,
-                tags,
-            });
         }
 
         Ok(EventLeafNode { keys, values })
     }
 
-    pub fn pop_last_key_and_value(&mut self) -> Result<(Position, EventRecord)> {
+    pub fn pop_last_key_and_value(&mut self) -> Result<(Position, EventValue)> {
         let last_key = self.keys.pop().unwrap();
         let last_value = self.values.pop().unwrap();
         Ok((last_key, last_value))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventOverflowNode {
+    pub next: PageID, // PageID(0) indicates end of chain
+    pub data: Vec<u8>,
+}
+
+impl EventOverflowNode {
+    pub fn calc_serialized_size(&self) -> usize {
+        // 8 bytes for next + data bytes
+        8 + self.data.len()
+    }
+
+    pub fn serialize(&self) -> Result<Vec<u8>> {
+        let mut result = Vec::with_capacity(self.calc_serialized_size());
+        result.extend_from_slice(&self.next.0.to_le_bytes());
+        result.extend_from_slice(&self.data);
+        Ok(result)
+    }
+
+    pub fn from_slice(slice: &[u8]) -> Result<Self> {
+        if slice.len() < 8 {
+            return Err(LmdbError::DeserializationError(
+                "Overflow node too small".to_string(),
+            ));
+        }
+        let next = PageID(u64::from_le_bytes([
+            slice[0], slice[1], slice[2], slice[3], slice[4], slice[5], slice[6], slice[7],
+        ]));
+        let data = slice[8..].to_vec();
+        Ok(Self { next, data })
     }
 }
 
@@ -436,12 +592,12 @@ mod tests {
         let leaf_node = EventLeafNode {
             keys: vec![Position(1000), Position(2000), Position(3000)],
             values: vec![
-                EventRecord {
+                EventValue::Inline(EventRecord {
                     event_type: "event_type_1".to_string(),
                     data: vec![1, 0, 0, 0], // 100 as little-endian bytes
                     tags: vec!["tag1".to_string(), "tag2".to_string(), "tag3".to_string()],
-                },
-                EventRecord {
+                }),
+                EventValue::Inline(EventRecord {
                     event_type: "event_type_2".to_string(),
                     data: vec![2, 0, 0, 0], // 200 as little-endian bytes
                     tags: vec![
@@ -450,12 +606,12 @@ mod tests {
                         "tag6".to_string(),
                         "tag7".to_string(),
                     ],
-                },
-                EventRecord {
+                }),
+                EventValue::Inline(EventRecord {
                     event_type: "event_type_3".to_string(),
                     data: vec![3, 0, 0, 0], // 300 as little-endian bytes
                     tags: vec!["tag8".to_string(), "tag9".to_string()],
-                },
+                }),
             ],
         };
 
@@ -482,32 +638,47 @@ mod tests {
         assert_eq!(Position(3000), deserialized.keys[2]);
 
         // Check first value
-        assert_eq!("event_type_1", deserialized.values[0].event_type);
-        assert_eq!(vec![1, 0, 0, 0], deserialized.values[0].data);
-        assert_eq!(
-            vec!["tag1".to_string(), "tag2".to_string(), "tag3".to_string()],
-            deserialized.values[0].tags
-        );
+        match &deserialized.values[0] {
+            EventValue::Inline(v) => {
+                assert_eq!("event_type_1", v.event_type);
+                assert_eq!(vec![1, 0, 0, 0], v.data);
+                assert_eq!(
+                    vec!["tag1".to_string(), "tag2".to_string(), "tag3".to_string()],
+                    v.tags
+                );
+            }
+            _ => panic!("Expected Inline for first value"),
+        }
 
         // Check second value
-        assert_eq!("event_type_2", deserialized.values[1].event_type);
-        assert_eq!(vec![2, 0, 0, 0], deserialized.values[1].data);
-        assert_eq!(
-            vec![
-                "tag4".to_string(),
-                "tag5".to_string(),
-                "tag6".to_string(),
-                "tag7".to_string()
-            ],
-            deserialized.values[1].tags
-        );
+        match &deserialized.values[1] {
+            EventValue::Inline(v) => {
+                assert_eq!("event_type_2", v.event_type);
+                assert_eq!(vec![2, 0, 0, 0], v.data);
+                assert_eq!(
+                    vec![
+                        "tag4".to_string(),
+                        "tag5".to_string(),
+                        "tag6".to_string(),
+                        "tag7".to_string()
+                    ],
+                    v.tags
+                );
+            }
+            _ => panic!("Expected Inline for second value"),
+        }
 
         // Check third value
-        assert_eq!("event_type_3", deserialized.values[2].event_type);
-        assert_eq!(vec![3, 0, 0, 0], deserialized.values[2].data);
-        assert_eq!(
-            vec!["tag8".to_string(), "tag9".to_string()],
-            deserialized.values[2].tags
-        );
+        match &deserialized.values[2] {
+            EventValue::Inline(v) => {
+                assert_eq!("event_type_3", v.event_type);
+                assert_eq!(vec![3, 0, 0, 0], v.data);
+                assert_eq!(
+                    vec!["tag8".to_string(), "tag9".to_string()],
+                    v.tags
+                );
+            }
+            _ => panic!("Expected Inline for third value"),
+        }
     }
 }

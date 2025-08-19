@@ -15,7 +15,7 @@ const PAGE_TYPE_TAGS_LEAF: u8 = b'6';
 const PAGE_TYPE_TAGS_INTERNAL: u8 = b'7';
 const PAGE_TYPE_TAG_LEAF: u8 = b'8';
 const PAGE_TYPE_TAG_INTERNAL: u8 = b'9';
-const PAGE_TYPE_EVENT_OVERFLOW: u8 = b'O';
+const PAGE_TYPE_EVENT_OVERFLOW: u8 = b'a';
 
 // Enum to represent different node types
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -119,61 +119,129 @@ pub fn tags_tree_insert(db: &Db, writer: &mut Writer, tag: TagHash, pos: Positio
                 } else { return Err(LmdbError::DatabaseCorrupted("Expected TagsLeaf node".to_string())); }
             }
         }
-        // Now push position into per-tag leaf
+        // Now insert into the per-tag subtree (handles TagLeaf and TagInternal roots)
         {
-            let mut split_last_pos: Option<Position> = None;
+            use crate::mvcc_node_tags::TagInternalNode as PTInternal;
+            use crate::mvcc_node_tags::TagLeafNode as PTLeaf;
+
+            // Traverse down to a leaf
+            let mut current_page_id = tag_root_id;
+            let mut stack: Vec<(PageID, usize)> = Vec::new();
+            loop {
+                let page_ref = writer.get_page_ref(db, current_page_id)?;
+                match &page_ref.node {
+                    Node::TagInternal(internal) => {
+                        let child_idx = match internal.keys.binary_search(&pos) {
+                            Ok(i) => i + 1,
+                            Err(i) => i,
+                        };
+                        stack.push((current_page_id, child_idx));
+                        current_page_id = internal.child_ids[child_idx];
+                    }
+                    Node::TagLeaf(_) => break,
+                    _ => return Err(LmdbError::DatabaseCorrupted("Expected per-tag TagInternal/TagLeaf".to_string())),
+                }
+            }
+
+            // Make the leaf dirty and note replacement if COW
+            let dirty_leaf_id = writer.get_dirty_page_id(current_page_id)?;
+            let mut replacement_info: Option<(PageID, PageID)> = None;
+            if dirty_leaf_id != current_page_id {
+                replacement_info = Some((current_page_id, dirty_leaf_id));
+            }
+
+            // Insert into leaf and check overflow
+            let mut split_info: Option<(Position, PageID)> = None; // (promoted_key, new_right_page_id)
             {
-                let tag_page = writer.get_mut_dirty(tag_root_id)?;
-                match &mut tag_page.node {
+                let leaf_page = writer.get_mut_dirty(dirty_leaf_id)?;
+                match &mut leaf_page.node {
                     Node::TagLeaf(tleaf) => {
-                        // Append and check if we need to split the per-tag leaf page
                         tleaf.positions.push(pos);
-                        // Compute size without borrowing tag_page immutably while holding mutable borrow
                         let page_bytes = crate::mvcc_page::PAGE_HEADER_SIZE + tleaf.calc_serialized_size();
                         if page_bytes > db.page_size {
-                            // Defer split until after we drop the borrow of tag_page
-                            let last_pos = tleaf
-                                .pop_last_position()
-                                .map_err(|e| LmdbError::DatabaseCorrupted(format!("{}", e)))?;
-                            split_last_pos = Some(last_pos);
+                            // Move last pos to a new right leaf
+                            let last_pos = tleaf.pop_last_position().map_err(|e| LmdbError::DatabaseCorrupted(format!("{}", e)))?;
+                            let right_id = {
+                                let id = writer.alloc_page_id();
+                                let page = Page::new(id, Node::TagLeaf(PTLeaf { positions: vec![last_pos] }));
+                                writer.insert_dirty(page)?;
+                                id
+                            };
+                            split_info = Some((last_pos, right_id));
                         }
                     }
-                    Node::TagInternal(_) => {
-                        return Err(LmdbError::DatabaseCorrupted("Per-tag internal subtree not implemented".to_string()));
-                    }
-                    _ => {
-                        return Err(LmdbError::DatabaseCorrupted("Expected TagLeaf/TagInternal node for per-tag positions".to_string()));
-                    }
+                    _ => return Err(LmdbError::DatabaseCorrupted("Expected TagLeaf at per-tag insert".to_string())),
                 }
             }
-            if let Some(last_pos) = split_last_pos.take() {
-                // Left is the current dirty tag page (tag_root_id)
-                let left_id = tag_root_id;
-                // Create right leaf with the last position only
-                let right_id = {
-                    let right_leaf = TagLeafNode { positions: vec![last_pos] };
-                    let id = writer.alloc_page_id();
-                    let right_page = Page::new(id, Node::TagLeaf(right_leaf));
-                    writer.insert_dirty(right_page)?;
-                    id
-                };
-                // Create internal root over left and right
-                let internal_id = {
-                    let internal = TagInternalNode { keys: vec![last_pos], child_ids: vec![left_id, right_id] };
-                    let id = writer.alloc_page_id();
-                    let page = Page::new(id, Node::TagInternal(internal));
-                    writer.insert_dirty(page)?;
-                    id
-                };
-                // Update the TagsLeafValue.root_id to point to the new internal
-                let leaf_page = writer.get_mut_dirty(dirty_leaf_page_id)?;
-                if let Node::TagsLeaf(leaf) = &mut leaf_page.node {
-                    let idx = leaf.keys.binary_search(&tag).map_err(|_| LmdbError::DatabaseCorrupted("Tag key not found after per-tag split".to_string()))?;
-                    leaf.values[idx].root_id = internal_id;
-                } else {
-                    return Err(LmdbError::DatabaseCorrupted("Expected TagsLeaf node".to_string()));
+
+            // Propagate replacements and splits up the per-tag subtree
+            while let Some((parent_id, child_idx)) = stack.pop() {
+                // COW parent if needed
+                let dirty_parent_id = writer.get_dirty_page_id(parent_id)?;
+                let parent_replacement_info = if dirty_parent_id != parent_id { Some((parent_id, dirty_parent_id)) } else { None };
+
+                // Apply child replacement if any
+                if let Some((old_id, new_id)) = replacement_info.take() {
+                    let parent_page = writer.get_mut_dirty(dirty_parent_id)?;
+                    if let Node::TagInternal(internal) = &mut parent_page.node {
+                        if internal.child_ids[child_idx] == old_id {
+                            internal.child_ids[child_idx] = new_id;
+                        } else {
+                            return Err(LmdbError::DatabaseCorrupted("Per-tag parent did not contain expected child id".to_string()));
+                        }
+                    } else { return Err(LmdbError::DatabaseCorrupted("Expected TagInternal".to_string())); }
                 }
+
+                // Apply promoted split from below if any
+                if let Some((promoted_key, new_child_id)) = split_info.take() {
+                    let parent_page = writer.get_mut_dirty(dirty_parent_id)?;
+                    if let Node::TagInternal(internal) = &mut parent_page.node {
+                        internal.keys.insert(child_idx, promoted_key);
+                        internal.child_ids.insert(child_idx + 1, new_child_id);
+                    } else { return Err(LmdbError::DatabaseCorrupted("Expected TagInternal".to_string())); }
+                }
+
+                // Now check for internal overflow and split if needed
+                let parent_page = writer.get_mut_dirty(dirty_parent_id)?;
+                let needs_split = parent_page.calc_serialized_size() > db.page_size;
+                if needs_split {
+                    if let Node::TagInternal(internal) = &mut parent_page.node {
+                        if internal.keys.len() < 3 || internal.child_ids.len() < 4 {
+                            return Err(LmdbError::DatabaseCorrupted("Cannot split per-tag internal with too few keys/children".to_string()));
+                        }
+                        let (promote_up, new_keys, new_child_ids) = internal.split_off()?;
+                        let new_internal = PTInternal { keys: new_keys, child_ids: new_child_ids };
+                        let new_internal_id = writer.alloc_page_id();
+                        let new_internal_page = Page::new(new_internal_id, Node::TagInternal(new_internal));
+                        writer.insert_dirty(new_internal_page)?;
+                        split_info = Some((promote_up, new_internal_id));
+                    } else { return Err(LmdbError::DatabaseCorrupted("Expected TagInternal".to_string())); }
+                }
+
+                // Prepare replacement info for upper level if parent was COWed
+                replacement_info = parent_replacement_info;
             }
+
+            // Apply root replacement for the per-tag root if needed
+            if let Some((old_id, new_id)) = replacement_info.take() {
+                if tag_root_id == old_id { tag_root_id = new_id; } else { return Err(LmdbError::RootIDMismatch(old_id, new_id)); }
+            }
+
+            // If we still have a split to propagate, create a new per-tag internal root
+            if let Some((promoted_key, promoted_page_id)) = split_info.take() {
+                let new_root_id = writer.alloc_page_id();
+                let new_root = PTInternal { keys: vec![promoted_key], child_ids: vec![tag_root_id, promoted_page_id] };
+                let new_root_page = Page::new(new_root_id, Node::TagInternal(new_root));
+                writer.insert_dirty(new_root_page)?;
+                tag_root_id = new_root_id;
+            }
+
+            // Update the TagsLeafValue.root_id to the latest per-tag root id
+            let leaf_page = writer.get_mut_dirty(dirty_leaf_page_id)?;
+            if let Node::TagsLeaf(leaf) = &mut leaf_page.node {
+                let idx = leaf.keys.binary_search(&tag).map_err(|_| LmdbError::DatabaseCorrupted("Tag key not found after per-tag insert".to_string()))?;
+                leaf.values[idx].root_id = tag_root_id;
+            } else { return Err(LmdbError::DatabaseCorrupted("Expected TagsLeaf node".to_string())); }
         }
     }
 
@@ -467,7 +535,28 @@ impl<'a> Iterator for TagsTreeIterator<'a> {
                                             match self.db.read_page(val.root_id) {
                                                 Ok(p) => match p.node {
                                                     Node::TagLeaf(tleaf) => break tleaf.positions.clone(),
-                                                    // Per-tag internal subtree not yet implemented
+                                                    Node::TagInternal(internal) => {
+                                                        // Traverse per-tag internal subtree in-order to collect all positions
+                                                        let mut positions: Vec<Position> = Vec::new();
+                                                        let mut stack: Vec<PageID> = internal.child_ids.iter().rev().cloned().collect();
+                                                        while let Some(pid) = stack.pop() {
+                                                            if let Ok(child_page) = self.db.read_page(pid) {
+                                                                match child_page.node {
+                                                                    Node::TagLeaf(tleaf) => {
+                                                                        positions.extend_from_slice(&tleaf.positions);
+                                                                    }
+                                                                    Node::TagInternal(child_internal) => {
+                                                                        // push children in reverse to process left-to-right
+                                                                        for cid in child_internal.child_ids.iter().rev() {
+                                                                            stack.push(*cid);
+                                                                        }
+                                                                    }
+                                                                    _ => {}
+                                                                }
+                                                            }
+                                                        }
+                                                        break positions;
+                                                    }
                                                     _ => break Vec::new(),
                                                 },
                                                 Err(_) => break Vec::new(),
@@ -957,6 +1046,60 @@ mod tests {
     }
 
     #[test]
+    fn test_per_tag_taginternal_split_creates_second_level_internal() {
+        // Use small page size to force multiple splits within the per-tag subtree
+        let (_tmp, db) = construct_db(256);
+        let mut writer = db.writer().unwrap();
+        let tag = th(999);
+
+        // First, drive migration (inline -> TagLeaf) and the first per-tag leaf split to create a TagInternal root
+        for _ in 0..31 { // 30 to migrate, +1 to split TagLeaf
+            let p = writer.issue_position();
+            tags_tree_insert(&db, &mut writer, tag, p).unwrap();
+        }
+
+        // Now keep inserting until the per-tag TagInternal root itself splits (i.e., its child is TagInternal)
+        let mut safety = 5000; // ample room
+        loop {
+            // Inspect per-tag root
+            let root_page = writer.dirty.get(&writer.tags_tree_root_id).unwrap();
+            let per_tag_root_id = match &root_page.node {
+                Node::TagsLeaf(leaf) => {
+                    let idx = leaf.keys.binary_search(&tag).unwrap();
+                    leaf.values[idx].root_id
+                }
+                other => panic!("Expected TagsLeaf root, got {:?}", other),
+            };
+            assert_ne!(per_tag_root_id, PageID(0), "Expected per-tag root to be initialized");
+            let per_tag_root = writer.dirty.get(&per_tag_root_id).unwrap();
+            match &per_tag_root.node {
+                Node::TagInternal(root_internal) => {
+                    if !root_internal.child_ids.is_empty() {
+                        let first_child_id = root_internal.child_ids[0];
+                        if let Some(child_page) = writer.dirty.get(&first_child_id) {
+                            if matches!(child_page.node, Node::TagInternal(_)) {
+                                // Success: per-tag internal has split creating a second level
+                                break;
+                            }
+                        }
+                    }
+                }
+                Node::TagLeaf(_) => {
+                    // Not yet split to internal; continue inserting
+                }
+                other => panic!("Expected per-tag TagInternal/TagLeaf, got {:?}", other),
+            }
+
+            // Insert another position and continue
+            let p = writer.issue_position();
+            tags_tree_insert(&db, &mut writer, tag, p).unwrap();
+
+            safety -= 1;
+            if safety == 0 { panic!("Exceeded safety limit without causing per-tag internal split"); }
+        }
+    }
+
+    #[test]
     fn test_tags_tree_iter_collects_inserted_positions() {
         let (_tmp, db) = construct_db(1024);
         let mut writer = db.writer().unwrap();
@@ -1037,3 +1180,5 @@ mod tests {
         }
     }
 }
+
+

@@ -575,3 +575,27 @@ mod tests {
         assert_eq!(node, de);
     }
 }
+
+
+impl TagInternalNode {
+    pub(crate) fn split_off(&mut self) -> Result<(Position, Vec<Position>, Vec<PageID>)> {
+        // Split by moving half of the child_ids to a new node.
+        // Promote the separator key which is the minimum key of the new right subtree.
+        let total_children = self.child_ids.len();
+        if total_children < 4 || self.keys.len() + 1 != total_children {
+            return Err(LmdbError::DatabaseCorrupted(
+                "Cannot split internal node with insufficient arity".to_string(),
+            ));
+        }
+        let mid = total_children / 2; // number of children to keep on the left
+        // The promoted key is the minimum key in the new right subtree, which is keys[mid - 1]
+        let promoted_key = self.keys[mid - 1];
+        // Right side keys: those corresponding to the right children (excluding the promoted key)
+        let new_keys = self.keys.split_off(mid);
+        // Now truncate left keys to exclude the promoted key and any moved to the right
+        self.keys.truncate(mid - 1);
+        // Split child IDs: move right half to the new node
+        let new_child_ids = self.child_ids.split_off(mid);
+        Ok((promoted_key, new_keys, new_child_ids))
+    }
+}

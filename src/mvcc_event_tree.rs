@@ -1225,7 +1225,7 @@ mod tests {
         // Ensure overflow in leaf
         let (_hdr_id, header) = db.get_latest_header().unwrap();
         let root = db.read_page(header.event_tree_root_id).unwrap();
-        let mut check_leaf = |leaf: &EventLeafNode| match &leaf.values[0] {
+        let check_leaf = |leaf: &EventLeafNode| match &leaf.values[0] {
             EventValue::Overflow { data_len, .. } => assert_eq!(*data_len as usize, data.len()),
             _ => panic!("Expected Overflow for very large event"),
         };

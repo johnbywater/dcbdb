@@ -1139,7 +1139,7 @@ mod tests {
     }
 
     #[test]
-    fn benchmark_insert_and_lookup_varied_sizes() {
+    fn benchmark_insert_and_lookup_varied_sizes_one_tag_one_position() {
         // Benchmark-like test; prints durations for different sizes. Run with:
         // cargo test --lib mvcc_tags_tree::tests::benchmark_insert_and_lookup_varied_sizes -- --nocapture
         let sizes: [usize; 8] = [1, 1, 10, 100, 1_000, 5_000, 10_000, 50_000];
@@ -1175,7 +1175,47 @@ mod tests {
             let lookup_avg_us = (lookup_elapsed.as_secs_f64() * 1_000_000.0) / (size as f64);
 
             println!(
-                "mvcc_tags_tree benchmark: size={size}, insert_us_per_call={insert_avg_us:.3}, commit_us={commit_avg_us:.3}, lookup_us_per_call={lookup_avg_us:.3}"
+                "mvcc_tags_tree benchmark one tag one position: size={size}, insert_us_per_call={insert_avg_us:.3}, commit_us={commit_avg_us:.3}, lookup_us_per_call={lookup_avg_us:.3}"
+            );
+        }
+    }
+    
+    #[test]
+    fn benchmark_insert_and_lookup_varied_one_tag_many_positions() {
+        // Benchmark-like test; prints durations for different sizes. Run with:
+        // cargo test --lib mvcc_tags_tree::tests::benchmark_insert_and_lookup_varied_sizes -- --nocapture
+        let sizes: [usize; 9] = [1, 1, 10, 100, 1_000, 5_000, 10_000, 50_000, 500_000];
+        for &size in &sizes {
+            let (_tmp, db) = construct_db(4096);
+
+            // Insert phase
+            let mut writer = db.writer().unwrap();
+            let tag = th(size.try_into().unwrap());
+            hint::black_box(tag);
+            let start_insert = Instant::now();
+            for _ in 0..(size as u64) {
+                let pos = writer.issue_position();
+                hint::black_box(pos);
+                tags_tree_insert(&db, &mut writer, tag, pos).unwrap();
+            }
+            let insert_elapsed = start_insert.elapsed();
+            let start_commit = Instant::now();
+            db.commit(&mut writer).unwrap();
+            let commit_elapsed = start_commit.elapsed();
+
+            // Lookup phase
+            let reader = db.reader().unwrap();
+            let start_lookup = Instant::now();
+            let res = tags_tree_lookup(&db, &reader, tag).unwrap();
+            hint::black_box(&res);
+            let lookup_elapsed = start_lookup.elapsed();
+
+            let insert_avg_us = (insert_elapsed.as_secs_f64() * 1_000_000.0) / (size as f64);
+            let commit_avg_us = commit_elapsed.as_secs_f64() * 1_000_000.0;
+            let lookup_avg_us = (lookup_elapsed.as_secs_f64() * 1_000_000.0) / (size as f64);
+
+            println!(
+                "mvcc_tags_tree one tag many positions benchmark: size={size}, insert_us_per_call={insert_avg_us:.3}, commit_us={commit_avg_us:.3}, lookup_us_per_call={lookup_avg_us:.3}"
             );
         }
     }

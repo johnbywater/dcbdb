@@ -1166,6 +1166,81 @@ mod tests {
     }
 
     #[test]
+    #[serial]
+    fn test_large_event_data_exact_page_size() {
+        let (_tmp, db) = construct_db(512);
+        // Append one large event with data exactly equal to page size
+        let mut writer = db.writer().unwrap();
+        let pos = writer.issue_position();
+        let data = vec![0xAB; 512];
+        let event = EventRecord { event_type: "Big".into(), data: data.clone(), tags: vec![] };
+        event_tree_append(&db, &mut writer, event.clone(), pos).unwrap();
+        db.commit(&mut writer).unwrap();
+
+        // Lookup should return identical payload
+        let reader = db.reader().unwrap();
+        let got = event_tree_lookup(&db, &reader, pos).unwrap();
+        assert_eq!(event, got);
+
+        // Ensure an overflow page is used for storage
+        let (_hdr_id, header) = db.get_latest_header().unwrap();
+        let root = db.read_page(header.event_tree_root_id).unwrap();
+        match root.node {
+            Node::EventInternal(internal) => {
+                // Our key should be in the last child
+                let leaf_id = *internal.child_ids.last().unwrap();
+                let leaf_page = db.read_page(leaf_id).unwrap();
+                match leaf_page.node {
+                    Node::EventLeaf(leaf) => match &leaf.values[0] {
+                        EventValue::Overflow { data_len, .. } => assert_eq!(*data_len as usize, data.len()),
+                        _ => panic!("Expected Overflow for large event"),
+                    },
+                    _ => panic!("Expected EventLeaf child"),
+                }
+            }
+            Node::EventLeaf(leaf) => match &leaf.values[0] {
+                EventValue::Overflow { data_len, .. } => assert_eq!(*data_len as usize, data.len()),
+                _ => panic!("Expected Overflow for large event"),
+            },
+            _ => panic!("Unexpected root node type"),
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_large_event_data_four_times_page_size() {
+        let (_tmp, db) = construct_db(512);
+        let mut writer = db.writer().unwrap();
+        let pos = writer.issue_position();
+        let data = vec![0xCD; 512 * 4];
+        let event = EventRecord { event_type: "Bigger".into(), data: data.clone(), tags: vec![] };
+        event_tree_append(&db, &mut writer, event.clone(), pos).unwrap();
+        db.commit(&mut writer).unwrap();
+
+        // Lookup
+        let reader = db.reader().unwrap();
+        let got = event_tree_lookup(&db, &reader, pos).unwrap();
+        assert_eq!(event, got);
+
+        // Ensure overflow in leaf
+        let (_hdr_id, header) = db.get_latest_header().unwrap();
+        let root = db.read_page(header.event_tree_root_id).unwrap();
+        let mut check_leaf = |leaf: &EventLeafNode| match &leaf.values[0] {
+            EventValue::Overflow { data_len, .. } => assert_eq!(*data_len as usize, data.len()),
+            _ => panic!("Expected Overflow for very large event"),
+        };
+        match root.node {
+            Node::EventInternal(internal) => {
+                let leaf_id = *internal.child_ids.last().unwrap();
+                let leaf_page = db.read_page(leaf_id).unwrap();
+                match leaf_page.node { Node::EventLeaf(leaf) => check_leaf(&leaf), _ => panic!("Expected leaf") }
+            }
+            Node::EventLeaf(leaf) => check_leaf(&leaf),
+            _ => panic!("Unexpected root node type"),
+        }
+    }
+
+    #[test]
     fn benchmark_append_and_lookup_varied_sizes() {
         // Benchmark-like test; prints durations for different sizes. Run with:
         // cargo test --lib mvcc_event_tree::tests::benchmark_append_and_lookup_varied_sizes -- --nocapture

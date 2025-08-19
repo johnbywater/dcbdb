@@ -515,4 +515,63 @@ mod tests {
         let de = TagsInternalNode::from_slice(&ser).unwrap();
         assert_eq!(node, de);
     }
+
+    #[test]
+    fn test_tag_leaf_node_empty_positions_roundtrip() {
+        let leaf = TagLeafNode { positions: vec![] };
+        let ser = leaf.serialize().unwrap();
+        let de = TagLeafNode::from_slice(&ser).unwrap();
+        assert_eq!(leaf, de);
+    }
+
+    #[test]
+    fn test_tag_internal_node_empty_keys_one_child_roundtrip() {
+        let node = TagInternalNode {
+            keys: vec![],
+            child_ids: vec![PageID(42)],
+        };
+        let ser = node.serialize().unwrap();
+        let de = TagInternalNode::from_slice(&ser).unwrap();
+        assert_eq!(node, de);
+    }
+
+    #[test]
+    fn test_tag_leaf_node_from_slice_too_short_err() {
+        // Less than 2 bytes should error
+        assert!(TagLeafNode::from_slice(&[]).is_err());
+        assert!(TagLeafNode::from_slice(&[0u8]).is_err());
+    }
+
+    #[test]
+    fn test_tag_internal_node_from_slice_missing_children_err() {
+        // keys_len = 1, provide one key but no child ids -> should error
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&(1u16).to_le_bytes()); // keys_len = 1
+        buf.extend_from_slice(&0u64.to_le_bytes()); // one key
+        // missing the two child ids (keys_len + 1 = 2)
+        assert!(TagInternalNode::from_slice(&buf).is_err());
+    }
+
+    #[test]
+    fn test_tag_leaf_node_non_empty_positions_roundtrip_and_size() {
+        let leaf = TagLeafNode {
+            positions: vec![Position(7), Position(9), Position(11)],
+        };
+        let ser = leaf.serialize().unwrap();
+        assert_eq!(ser.len(), leaf.calc_serialized_size());
+        let de = TagLeafNode::from_slice(&ser).unwrap();
+        assert_eq!(leaf, de);
+    }
+
+    #[test]
+    fn test_tag_internal_node_non_empty_roundtrip_and_size() {
+        let node = TagInternalNode {
+            keys: vec![Position(1), Position(2), Position(3)],
+            child_ids: vec![PageID(10), PageID(20), PageID(30), PageID(40)],
+        };
+        let ser = node.serialize().unwrap();
+        assert_eq!(ser.len(), node.calc_serialized_size());
+        let de = TagInternalNode::from_slice(&ser).unwrap();
+        assert_eq!(node, de);
+    }
 }

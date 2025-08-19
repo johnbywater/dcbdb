@@ -1,6 +1,6 @@
 use crate::mvcc_db::{Db, Reader, Writer, Result};
 use crate::mvcc_common::{LmdbError, PageID, Position};
-use crate::mvcc_node_tags::{TagHash, TagsInternalNode, TagsLeafNode, TagsLeafValue, TagLeafNode};
+use crate::mvcc_node_tags::{TagHash, TagsInternalNode, TagsLeafNode, TagsLeafValue, TagLeafNode, TagInternalNode};
 use crate::mvcc_nodes::Node;
 use crate::mvcc_page::Page;
 
@@ -121,19 +121,57 @@ pub fn tags_tree_insert(db: &Db, writer: &mut Writer, tag: TagHash, pos: Positio
         }
         // Now push position into per-tag leaf
         {
-            let tag_page = writer.get_mut_dirty(tag_root_id)?;
-            match &mut tag_page.node {
-                Node::TagLeaf(tleaf) => {
-                    tleaf.positions.push(pos);
-                    if tag_page.calc_serialized_size() > db.page_size {
-                        return Err(LmdbError::DatabaseCorrupted("Per-tag subtree split not implemented".to_string()));
+            let mut split_last_pos: Option<Position> = None;
+            {
+                let tag_page = writer.get_mut_dirty(tag_root_id)?;
+                match &mut tag_page.node {
+                    Node::TagLeaf(tleaf) => {
+                        // Append and check if we need to split the per-tag leaf page
+                        tleaf.positions.push(pos);
+                        // Compute size without borrowing tag_page immutably while holding mutable borrow
+                        let page_bytes = crate::mvcc_page::PAGE_HEADER_SIZE + tleaf.calc_serialized_size();
+                        if page_bytes > db.page_size {
+                            // Defer split until after we drop the borrow of tag_page
+                            let last_pos = tleaf
+                                .pop_last_position()
+                                .map_err(|e| LmdbError::DatabaseCorrupted(format!("{}", e)))?;
+                            split_last_pos = Some(last_pos);
+                        }
+                    }
+                    Node::TagInternal(_) => {
+                        return Err(LmdbError::DatabaseCorrupted("Per-tag internal subtree not implemented".to_string()));
+                    }
+                    _ => {
+                        return Err(LmdbError::DatabaseCorrupted("Expected TagLeaf/TagInternal node for per-tag positions".to_string()));
                     }
                 }
-                Node::TagInternal(_) => {
-                    return Err(LmdbError::DatabaseCorrupted("Per-tag internal subtree not implemented".to_string()));
-                }
-                _ => {
-                    return Err(LmdbError::DatabaseCorrupted("Expected TagLeaf/TagInternal node for per-tag positions".to_string()));
+            }
+            if let Some(last_pos) = split_last_pos.take() {
+                // Left is the current dirty tag page (tag_root_id)
+                let left_id = tag_root_id;
+                // Create right leaf with the last position only
+                let right_id = {
+                    let right_leaf = TagLeafNode { positions: vec![last_pos] };
+                    let id = writer.alloc_page_id();
+                    let right_page = Page::new(id, Node::TagLeaf(right_leaf));
+                    writer.insert_dirty(right_page)?;
+                    id
+                };
+                // Create internal root over left and right
+                let internal_id = {
+                    let internal = TagInternalNode { keys: vec![last_pos], child_ids: vec![left_id, right_id] };
+                    let id = writer.alloc_page_id();
+                    let page = Page::new(id, Node::TagInternal(internal));
+                    writer.insert_dirty(page)?;
+                    id
+                };
+                // Update the TagsLeafValue.root_id to point to the new internal
+                let leaf_page = writer.get_mut_dirty(dirty_leaf_page_id)?;
+                if let Node::TagsLeaf(leaf) = &mut leaf_page.node {
+                    let idx = leaf.keys.binary_search(&tag).map_err(|_| LmdbError::DatabaseCorrupted("Tag key not found after per-tag split".to_string()))?;
+                    leaf.values[idx].root_id = internal_id;
+                } else {
+                    return Err(LmdbError::DatabaseCorrupted("Expected TagsLeaf node".to_string()));
                 }
             }
         }
@@ -151,21 +189,48 @@ pub fn tags_tree_insert(db: &Db, writer: &mut Writer, tag: TagHash, pos: Positio
                     std::mem::take(&mut leaf.values[i].positions)
                 } else { return Err(LmdbError::DatabaseCorrupted("Expected TagsLeaf node".to_string())); }
             };
-            // Create per-tag page
-            let tag_leaf_id = {
-                let tag_leaf = TagLeafNode { positions };
-                let tag_leaf_id = writer.alloc_page_id();
-                let tag_leaf_page = Page::new(tag_leaf_id, Node::TagLeaf(tag_leaf));
-                if tag_leaf_page.calc_serialized_size() > db.page_size {
-                    return Err(LmdbError::DatabaseCorrupted("Per-tag leaf overflow not implemented".to_string()));
+            // Create per-tag page or split into an internal if needed
+            let new_root_id = {
+                let mut pos_vec = positions;
+                let page_bytes = crate::mvcc_page::PAGE_HEADER_SIZE + TagLeafNode { positions: pos_vec.clone() }.calc_serialized_size();
+                if page_bytes <= db.page_size {
+                    let tag_leaf_id = writer.alloc_page_id();
+                    let tag_leaf_page = Page::new(tag_leaf_id, Node::TagLeaf(TagLeafNode { positions: pos_vec }));
+                    writer.insert_dirty(tag_leaf_page)?;
+                    tag_leaf_id
+                } else {
+                    // Split: move the last position to the right leaf and create an internal root
+                    let last_pos = pos_vec.pop().ok_or_else(|| LmdbError::DatabaseCorrupted("No positions to split".to_string()))?;
+                    let left_bytes = crate::mvcc_page::PAGE_HEADER_SIZE + TagLeafNode { positions: pos_vec.clone() }.calc_serialized_size();
+                    if left_bytes > db.page_size {
+                        return Err(LmdbError::DatabaseCorrupted("Recursive per-tag split not implemented".to_string()));
+                    }
+                    let left_id = {
+                        let id = writer.alloc_page_id();
+                        let page = Page::new(id, Node::TagLeaf(TagLeafNode { positions: pos_vec }));
+                        writer.insert_dirty(page)?;
+                        id
+                    };
+                    let right_id = {
+                        let id = writer.alloc_page_id();
+                        let page = Page::new(id, Node::TagLeaf(TagLeafNode { positions: vec![last_pos] }));
+                        writer.insert_dirty(page)?;
+                        id
+                    };
+                    let internal_id = {
+                        let internal = TagInternalNode { keys: vec![last_pos], child_ids: vec![left_id, right_id] };
+                        let id = writer.alloc_page_id();
+                        let page = Page::new(id, Node::TagInternal(internal));
+                        writer.insert_dirty(page)?;
+                        id
+                    };
+                    internal_id
                 }
-                writer.insert_dirty(tag_leaf_page)?;
-                tag_leaf_id
             };
             // Update root_id in the leaf
             let leaf_page = writer.get_mut_dirty(dirty_leaf_page_id)?;
             if let Node::TagsLeaf(leaf) = &mut leaf_page.node {
-                leaf.values[i].root_id = tag_leaf_id;
+                leaf.values[i].root_id = new_root_id;
             } else { return Err(LmdbError::DatabaseCorrupted("Expected TagsLeaf node".to_string())); }
         }
     }
@@ -836,6 +901,55 @@ mod tests {
                         assert_eq!(tleaf.positions, inserted);
                     }
                     other => panic!("Expected TagLeaf node, got {:?}", other),
+                }
+            }
+            other => panic!("Expected TagsLeaf root, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_per_tag_tagleaf_split_creates_internal_node() {
+        // Use small page size to force per-tag TagLeaf split after migration
+        let (_tmp, db) = construct_db(256);
+        let mut writer = db.writer().unwrap();
+        let tag = th(888);
+        let mut inserted: Vec<Position> = Vec::new();
+        // First, insert enough to migrate inline -> per-tag TagLeaf (30 triggers migration at page size 256)
+        for _ in 0..30 {
+            let p = writer.issue_position();
+            tags_tree_insert(&db, &mut writer, tag, p).unwrap();
+            inserted.push(p);
+        }
+        // Next insert should cause per-tag TagLeaf overflow and split to TagInternal
+        let last = writer.issue_position();
+        tags_tree_insert(&db, &mut writer, tag, last).unwrap();
+        inserted.push(last);
+
+        // Inspect structure in-memory
+        let root_page = writer.dirty.get(&writer.tags_tree_root_id).unwrap();
+        match &root_page.node {
+            Node::TagsLeaf(leaf) => {
+                let idx = leaf.keys.binary_search(&tag).unwrap();
+                let val = &leaf.values[idx];
+                assert_ne!(val.root_id, PageID(0), "Expected per-tag root_id to be non-zero after split");
+                // Should now point to a TagInternal node
+                let int_page = writer.dirty.get(&val.root_id).expect("Per-tag internal page should be dirty");
+                match &int_page.node {
+                    Node::TagInternal(internal) => {
+                        assert_eq!(internal.keys.len(), 1);
+                        assert_eq!(internal.child_ids.len(), 2);
+                        assert_eq!(internal.keys[0], last, "Promoted key should be the last position moved to right leaf");
+                        let left_page = writer.dirty.get(&internal.child_ids[0]).unwrap();
+                        let right_page = writer.dirty.get(&internal.child_ids[1]).unwrap();
+                        match (&left_page.node, &right_page.node) {
+                            (Node::TagLeaf(left_leaf), Node::TagLeaf(right_leaf)) => {
+                                assert_eq!(left_leaf.positions, inserted[..inserted.len()-1].to_vec());
+                                assert_eq!(right_leaf.positions, vec![last]);
+                            }
+                            other => panic!("Expected left/right TagLeaf nodes, got {:?}", other),
+                        }
+                    }
+                    other => panic!("Expected TagInternal node, got {:?}", other),
                 }
             }
             other => panic!("Expected TagsLeaf root, got {:?}", other),

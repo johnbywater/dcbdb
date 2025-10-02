@@ -1,4 +1,4 @@
-use crate::mvcc_db::{Db, Reader, Writer, Result};
+use crate::db::{Db, Reader, Writer, Result};
 use crate::mvcc_common::{LmdbError, PageID, Position};
 use crate::mvcc_node_tags::{TagHash, TagsInternalNode, TagsLeafNode, TagsLeafValue, TagLeafNode, TagInternalNode};
 use crate::mvcc_nodes::Node;
@@ -600,7 +600,7 @@ pub fn tags_tree_iter<'a>(db: &'a Db, reader: &'a Reader, tag: TagHash, after: P
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mvcc_db::Db;
+    use crate::db::Db;
     use tempfile::{tempdir, TempDir};
     use std::time::Instant;
     use std::hint;

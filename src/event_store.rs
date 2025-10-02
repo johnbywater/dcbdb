@@ -4,7 +4,7 @@ use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 
 use crate::api::{DCBAppendCondition, DCBEvent, DCBEventStoreAPI, DCBQuery, DCBSequencedEvent, DCBReadResponse, EventStoreError, Result as ApiResult};
-use crate::mvcc_db::{Db, Result as MvccResult};
+use crate::db::{Db, Result as MvccResult};
 use crate::mvcc_event_tree::{event_tree_append, event_tree_lookup, EventIterator};
 use crate::mvcc_node_event::EventRecord;
 use crate::mvcc_node_tags::TagHash;

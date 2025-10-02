@@ -1,4 +1,4 @@
-use crate::mvcc_db;
+use crate::db;
 use crate::mvcc_common::{LmdbError, PageID};
 use crate::mvcc_nodes::Node;
 use crc32fast::Hasher;
@@ -24,7 +24,7 @@ impl Page {
         PAGE_HEADER_SIZE + self.node.calc_serialized_size()
     }
 
-    pub fn serialize(&self) -> mvcc_db::Result<Vec<u8>> {
+    pub fn serialize(&self) -> db::Result<Vec<u8>> {
         // Serialize the node
         let data = self.node.serialize()?;
 
@@ -41,7 +41,7 @@ impl Page {
         Ok(serialized)
     }
 
-    pub fn deserialize(page_id: PageID, page_data: &[u8]) -> mvcc_db::Result<Self> {
+    pub fn deserialize(page_id: PageID, page_data: &[u8]) -> db::Result<Self> {
         if page_data.len() < PAGE_HEADER_SIZE {
             return Err(LmdbError::DatabaseCorrupted(
                 "Page data too short".to_string(),

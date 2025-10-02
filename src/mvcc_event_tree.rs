@@ -1,4 +1,4 @@
-use crate::mvcc_db::{Db, Writer, Result};
+use crate::db::{Db, Writer, Result};
 use crate::mvcc_common::Position;
 use crate::mvcc_common::{LmdbError, PageID};
 use crate::mvcc_node_event::{EventInternalNode, EventLeafNode, EventRecord, EventValue, EventOverflowNode};

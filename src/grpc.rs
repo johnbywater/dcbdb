@@ -10,7 +10,7 @@ use crate::api::{
     DCBAppendCondition, DCBEvent, DCBEventStoreAPI, DCBQuery, DCBQueryItem, DCBSequencedEvent,
     EventStoreError, Result as DCBResult,
 };
-use crate::mvcc_api::EventStore;
+use crate::event_store::EventStore;
 
 // Include the generated proto code
 pub mod dcbdb {

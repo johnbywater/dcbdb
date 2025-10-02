@@ -5,7 +5,7 @@
 
 pub mod api;
 pub mod grpc;
-pub mod mvcc_api;
+pub mod event_store;
 mod mvcc_db;
 mod mvcc_common;
 mod mvcc_event_tree;

@@ -11,6 +11,8 @@ use crate::mvcc_node_tags::TagHash;
 use crate::mvcc_tags_tree::{tags_tree_insert, tags_tree_iter};
 use crate::mvcc_common::Position as MvccPosition;
 
+static DEFAULT_PAGE_SIZE: usize = 4096;
+
 // Map MVCC errors to API errors
 fn map_mvcc_err<E: std::fmt::Display>(e: E) -> EventStoreError {
     EventStoreError::Corruption(format!("{}", e))
@@ -27,7 +29,7 @@ impl EventStore {
     pub fn new<P: AsRef<Path>>(path: P) -> ApiResult<Self> {
         let p = path.as_ref();
         let file_path = if p.is_dir() { p.join("mvcc.db") } else { p.to_path_buf() };
-        let db = Db::new(&file_path, 512, false).map_err(map_mvcc_err)?;
+        let db = Db::new(&file_path, DEFAULT_PAGE_SIZE, false).map_err(map_mvcc_err)?;
         Ok(Self { db })
     }
 }
@@ -401,7 +403,7 @@ mod tests {
     fn setup_db_with_standard_events() -> (tempfile::TempDir, Db, Vec<DCBEvent>) {
         let temp_dir = tempdir().unwrap();
         let db_path = temp_dir.path().join("mvcc-api-test.db");
-        let db = open_db(&db_path, 512, VERBOSE).unwrap();
+        let db = open_db(&db_path, DEFAULT_PAGE_SIZE, VERBOSE).unwrap();
         let input = standard_events();
         let last = unconditional_append(&db, input.clone()).unwrap();
         // Verify last equals committed head
@@ -511,7 +513,7 @@ mod tests {
     fn fallback_types_only_after_and_limit() {
         let temp_dir = tempdir().unwrap();
         let db_path = temp_dir.path().join("mvcc-fallback-types-only.db");
-        let mut db = open_db(&db_path, 512, VERBOSE).unwrap();
+        let mut db = open_db(&db_path, DEFAULT_PAGE_SIZE, VERBOSE).unwrap();
 
         // Use a smaller custom set to make counts obvious
         let events = vec![

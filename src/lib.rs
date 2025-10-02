@@ -54,11 +54,3 @@ mod mvcc_page;
 mod mvcc_pager;
 mod mvcc_node_tags;
 mod mvcc_tags_tree;
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert!(true);
-    }
-}

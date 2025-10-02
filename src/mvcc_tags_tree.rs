@@ -474,12 +474,6 @@ pub fn tags_tree_insert(db: &Db, writer: &mut Writer, tag: TagHash, pos: Positio
     Ok(())
 }
 
-pub fn tags_tree_lookup(db: &Db, reader: &Reader, tag: TagHash) -> Result<Vec<Position>> {
-    // Reuse the iterator to traverse and collect all positions for the tag
-    let iter = tags_tree_iter(db, reader, tag, Position(0))?;
-    Ok(iter.collect())
-}
-
 // Iterator over positions for a given tag in the tags tree
 pub struct TagsTreeIterator<'a> {
     db: &'a Db,
@@ -624,6 +618,13 @@ mod tests {
         // simple helper to generate an 8-byte TagHash from a number
         n.to_le_bytes()
     }
+
+    fn tags_tree_lookup(db: &Db, reader: &Reader, tag: TagHash) -> Result<Vec<Position>> {
+        // Reuse the iterator to traverse and collect all positions for the tag
+        let iter = tags_tree_iter(db, reader, tag, Position(0))?;
+        Ok(iter.collect())
+    }
+
 
     #[test]
     fn test_insert_position_into_empty_leaf_root() {

@@ -10,7 +10,7 @@ use crate::api::{
     DCBAppendCondition, DCBEvent, DCBEventStoreAPI, DCBQuery, DCBQueryItem, DCBSequencedEvent,
     EventStoreError, Result as DCBResult,
 };
-use crate::store::EventStore;
+use crate::mvcc_api::EventStore;
 
 // Include the generated proto code
 pub mod dcbdb {
@@ -100,12 +100,6 @@ enum EventStoreRequest {
     },
     #[allow(dead_code)]
     Shutdown,
-    FlushAndShutdown {
-        response_tx: oneshot::Sender<DCBResult<()>>,
-    },
-    FlushAndCheckpoint {
-        response_tx: oneshot::Sender<DCBResult<()>>,
-    },
 }
 
 // Thread-safe wrapper for EventStore
@@ -159,17 +153,6 @@ impl EventStoreHandle {
                         }
                         EventStoreRequest::Shutdown => {
                             break;
-                        }
-                        EventStoreRequest::FlushAndShutdown { response_tx } => {
-                            // Flush and checkpoint before shutting down
-                            let result = event_store.flush_and_checkpoint();
-                            let _ = response_tx.send(result);
-                            break;
-                        }
-                        EventStoreRequest::FlushAndCheckpoint { response_tx } => {
-                            // Flush and checkpoint but continue processing requests
-                            let result = event_store.flush_and_checkpoint();
-                            let _ = response_tx.send(result);
                         }
                     }
                 }
@@ -257,46 +240,6 @@ impl EventStoreHandle {
     #[allow(dead_code)]
     async fn shutdown(&self) {
         let _ = self.request_tx.send(EventStoreRequest::Shutdown).await;
-    }
-
-    /// Flushes all pending changes to disk, creates a checkpoint, and shuts down the EventStore
-    pub async fn flush_and_shutdown(&self) -> DCBResult<()> {
-        let (response_tx, response_rx) = oneshot::channel();
-
-        self.request_tx
-            .send(EventStoreRequest::FlushAndShutdown { response_tx })
-            .await
-            .map_err(|_| {
-                EventStoreError::Io(std::io::Error::other(
-                    "Failed to send flush_and_shutdown request to EventStore thread",
-                ))
-            })?;
-
-        response_rx.await.map_err(|_| {
-            EventStoreError::Io(std::io::Error::other(
-                "Failed to receive flush_and_shutdown response from EventStore thread",
-            ))
-        })?
-    }
-
-    /// Flushes all pending changes to disk and creates a checkpoint
-    pub async fn flush_and_checkpoint(&self) -> DCBResult<()> {
-        let (response_tx, response_rx) = oneshot::channel();
-
-        self.request_tx
-            .send(EventStoreRequest::FlushAndCheckpoint { response_tx })
-            .await
-            .map_err(|_| {
-                EventStoreError::Io(std::io::Error::other(
-                    "Failed to send flush_and_checkpoint request to EventStore thread",
-                ))
-            })?;
-
-        response_rx.await.map_err(|_| {
-            EventStoreError::Io(std::io::Error::other(
-                "Failed to receive flush_and_checkpoint response from EventStore thread",
-            ))
-        })?
     }
 }
 
@@ -752,54 +695,12 @@ pub async fn start_grpc_server_with_shutdown<P: AsRef<Path> + Send + 'static>(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let addr = addr.parse()?;
     let server = GrpcEventStoreServer::new(path)?;
-    let event_store = server.event_store.clone();
-
     println!("gRPC server listening on {addr}");
-
-    // Create a channel to signal the background task to stop
-    let (flush_stop_tx, flush_stop_rx) = tokio::sync::watch::channel(false);
-
-    // Spawn a background task that calls flush_and_checkpoint every 100ms
-    let flush_event_store = event_store.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(250));
-        let mut flush_stop_rx = flush_stop_rx;
-
-        loop {
-            tokio::select! {
-                _ = interval.tick() => {
-                    // Call flush_and_checkpoint
-                    if let Err(e) = flush_event_store.flush_and_checkpoint().await {
-                        eprintln!("Error during periodic flush_and_checkpoint: {e:?}");
-                    }
-                }
-                _ = flush_stop_rx.changed() => {
-                    // Stop the background task if the stop signal is received
-                    if *flush_stop_rx.borrow() {
-                        println!("Stopping periodic flush task");
-                        break;
-                    }
-                }
-            }
-        }
-    });
 
     Server::builder()
         .add_service(server.into_service())
         .serve_with_shutdown(addr, async {
             shutdown_rx.await.ok();
-            println!("gRPC server shutting down, flushing data to disk...");
-
-            // Signal the background task to stop
-            flush_stop_tx.send(true).ok();
-
-            // Flush and checkpoint before shutting down
-            if let Err(e) = event_store.flush_and_shutdown().await {
-                eprintln!("Error during flush_and_shutdown: {e:?}");
-            } else {
-                println!("Data flushed successfully");
-            }
-
             println!("gRPC server shutdown complete");
         })
         .await?;

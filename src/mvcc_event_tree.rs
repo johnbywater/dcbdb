@@ -1,4 +1,4 @@
-use crate::mvcc_db::{Db, Reader, Writer, Result};
+use crate::mvcc_db::{Db, Writer, Result};
 use crate::mvcc_common::Position;
 use crate::mvcc_common::{LmdbError, PageID};
 use crate::mvcc_node_event::{EventInternalNode, EventLeafNode, EventRecord, EventValue, EventOverflowNode};
@@ -364,8 +364,8 @@ pub fn event_tree_append(
     Ok(())
 }
 
-pub fn event_tree_lookup(db: &Db, reader: &Reader, position: Position) -> Result<EventRecord> {
-    let mut current_page_id: PageID = reader.event_tree_root_id;
+pub fn event_tree_lookup(db: &Db, event_tree_root_id: PageID, position: Position) -> Result<EventRecord> {
+    let mut current_page_id: PageID = event_tree_root_id;
     loop {
         let page = db.read_page(current_page_id)?;
         match &page.node {
@@ -407,19 +407,17 @@ pub fn event_tree_lookup(db: &Db, reader: &Reader, position: Position) -> Result
 
 pub struct EventIterator<'a> {
     pub db: &'a Db,
-    pub reader: Reader,
     pub stack: Vec<(PageID, usize)>,
     pub page_cache: HashMap<PageID, Page>,
     pub after: Position,
 }
 
 impl<'a> EventIterator<'a> {
-    pub fn new(db: &'a Db, reader: Reader, after: Option<Position>) -> Self {
-        let next_position = (reader.event_tree_root_id, 0);
+    pub fn new(db: &'a Db, event_tree_root_id: PageID, after: Option<Position>) -> Self {
+        let next_position = (event_tree_root_id, 0);
         let after = after.unwrap_or(Position(0));
         Self {
             db,
-            reader,
             stack: vec![next_position],
             page_cache: HashMap::new(),
             after,
@@ -988,16 +986,17 @@ mod tests {
 
         // Start a reader
         let reader = db.reader().unwrap();
+        let event_tree_root_id = reader.event_tree_root_id;
+        let reader_tsn = reader.tsn;
 
-        let mut events_iterator = EventIterator::new(&db, reader, None);
+        let mut events_iterator = EventIterator::new(&db, event_tree_root_id, None);
 
         // Ensure the reader's tsn is registered while the iterator is alive
-        let reader_tsn = events_iterator.reader.tsn;
         {
             let map = db.reader_tsns.lock().unwrap();
             assert!(
                 map.values().any(|&tsn| tsn == reader_tsn),
-                "reader_tsn should be registered while EventIterator is alive"
+                "TSN should remain registered until reader is dropped"
             );
         }
 
@@ -1014,7 +1013,7 @@ mod tests {
             let map = db.reader_tsns.lock().unwrap();
             assert!(
                 map.values().any(|&tsn| tsn == reader_tsn),
-                "reader_tsn should remain registered during iteration"
+                "TSN should remain registered until reader is dropped"
             );
         }
 
@@ -1026,7 +1025,7 @@ mod tests {
 
         // Additionally, validate lookup_event for each appended position using the existing reader in the iterator
         for (pos, expected_rec) in copy_inserted.iter() {
-            let found = event_tree_lookup(&db, &events_iterator.reader, *pos).unwrap();
+            let found = event_tree_lookup(&db, event_tree_root_id, *pos).unwrap();
             assert_eq!(expected_rec, &found);
         }
 
@@ -1041,17 +1040,17 @@ mod tests {
             let map = db.reader_tsns.lock().unwrap();
             assert!(
                 map.values().any(|&tsn| tsn == reader_tsn),
-                "reader_tsn should remain registered until iterator is dropped"
+                "TSN should remain registered until reader is dropped"
             );
         }
 
-        // Drop the iterator and ensure the reader tsn is removed
-        drop(events_iterator);
+        // Drop the reader and ensure the reader tsn is removed
+        drop(reader);
         {
             let map = db.reader_tsns.lock().unwrap();
             assert!(
                 map.values().all(|&tsn| tsn != reader_tsn),
-                "reader_tsn should be removed after EventIterator is dropped"
+                "TSN should be removed after reader is dropped"
             );
             assert_eq!(0, map.len());
         }
@@ -1111,15 +1110,16 @@ mod tests {
 
         // Start a reader
         let reader = db.reader().unwrap();
-        let mut events_iterator = EventIterator::new(&db, reader, Some(after_pos));
+        let event_tree_root_id = reader.event_tree_root_id;
+        let reader_tsn = reader.tsn;
+        let mut events_iterator = EventIterator::new(&db, event_tree_root_id, Some(after_pos));
 
         // Ensure the reader's tsn is registered while the iterator is alive
-        let reader_tsn = events_iterator.reader.tsn;
         {
             let map = db.reader_tsns.lock().unwrap();
             assert!(
                 map.values().any(|&tsn| tsn == reader_tsn),
-                "reader_tsn should be registered while EventIterator is alive"
+                "TSN should remain registered until reader is dropped"
             );
         }
 
@@ -1136,7 +1136,7 @@ mod tests {
             let map = db.reader_tsns.lock().unwrap();
             assert!(
                 map.values().any(|&tsn| tsn == reader_tsn),
-                "reader_tsn should remain registered during iteration"
+                "TSN should remain registered until reader is dropped"
             );
         }
 
@@ -1154,13 +1154,13 @@ mod tests {
             "EventIterator page_cache should be empty after filtered scan"
         );
 
-        // Drop the iterator and ensure the reader tsn is removed
-        drop(events_iterator);
+        // Drop the reader and ensure the reader tsn is removed
+        drop(reader);
         {
             let map = db.reader_tsns.lock().unwrap();
             assert!(
                 map.values().all(|&tsn| tsn != reader_tsn),
-                "reader_tsn should be removed after EventIterator is dropped"
+                "TSN should be removed after reader is dropped"
             );
         }
     }
@@ -1179,7 +1179,7 @@ mod tests {
 
         // Lookup should return identical payload
         let reader = db.reader().unwrap();
-        let got = event_tree_lookup(&db, &reader, pos).unwrap();
+        let got = event_tree_lookup(&db, reader.event_tree_root_id, pos).unwrap();
         assert_eq!(event, got);
 
         // Ensure an overflow page is used for storage
@@ -1219,7 +1219,7 @@ mod tests {
 
         // Lookup
         let reader = db.reader().unwrap();
-        let got = event_tree_lookup(&db, &reader, pos).unwrap();
+        let got = event_tree_lookup(&db, reader.event_tree_root_id, pos).unwrap();
         assert_eq!(event, got);
 
         // Ensure overflow in leaf
@@ -1274,7 +1274,7 @@ mod tests {
             let reader = db.reader().unwrap();
             let start_lookup = std::time::Instant::now();
             for &pos in &positions {
-                let rec = event_tree_lookup(&db, &reader, pos).unwrap();
+                let rec = event_tree_lookup(&db, reader.event_tree_root_id, pos).unwrap();
                 std::hint::black_box(&rec);
             }
             let lookup_elapsed = start_lookup.elapsed();

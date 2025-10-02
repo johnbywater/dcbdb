@@ -2,10 +2,10 @@ use dcbdb::api::{
     DCBAppendCondition, DCBEvent, DCBEventStoreAPI, DCBQuery, DCBQueryItem, EventStoreError,
 };
 use dcbdb::grpc::GrpcEventStoreClient;
-use dcbdb::store::EventStore;
-use dcbdb::mvcc_api::EventStore as MVCCEventStore;
+// use dcbdb::store::EventStore;
 use std::thread;
 use std::time::Duration;
+use dcbdb::mvcc_api::EventStore;
 use tempfile::tempdir;
 use uuid::Uuid;
 // Import the EventStore and related types from the main crate
@@ -13,16 +13,16 @@ use uuid::Uuid;
 #[test]
 fn test_mvcc_event_store() {
     let temp_dir = tempdir().unwrap();
-    let event_store = MVCCEventStore::new(temp_dir.path()).unwrap();
-    run_event_store_test(&event_store);
-}
-
-#[test]
-fn test_direct_event_store() {
-    let temp_dir = tempdir().unwrap();
     let event_store = EventStore::new(temp_dir.path()).unwrap();
     run_event_store_test(&event_store);
 }
+
+// #[test]
+// fn test_direct_event_store() {
+//     let temp_dir = tempdir().unwrap();
+//     let event_store = EventStore::new(temp_dir.path()).unwrap();
+//     run_event_store_test(&event_store);
+// }
 
 #[test]
 fn test_grpc_event_store() {

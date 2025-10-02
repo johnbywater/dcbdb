@@ -125,7 +125,7 @@ pub fn read_conditional(db: &Db, query: DCBQuery, after: MvccPosition, limit: Op
     // If no items, return all events with after/limit respected via sequential scan
     if query.items.is_empty() {
         let reader = db.reader()?;
-        let mut iter = EventIterator::new(&db, reader, Some(after));
+        let mut iter = EventIterator::new(&db, reader.event_tree_root_id, Some(after));
         let mut out: Vec<DCBSequencedEvent> = Vec::new();
         'outer_all: loop {
             let batch = iter.next_batch(64)?;
@@ -146,7 +146,7 @@ pub fn read_conditional(db: &Db, query: DCBQuery, after: MvccPosition, limit: Op
     if !all_items_have_tags {
         // Fallback: sequentially scan all events and apply the same matching logic
         let reader = db.reader()?;
-        let mut iter = EventIterator::new(&db, reader, Some(after));
+        let mut iter = EventIterator::new(&db, reader.event_tree_root_id, Some(after));
         let mut out: Vec<DCBSequencedEvent> = Vec::new();
         let matches_item = |rec: &EventRecord| -> bool {
             for item in &query.items {
@@ -285,7 +285,7 @@ pub fn read_conditional(db: &Db, query: DCBQuery, after: MvccPosition, limit: Op
         if matching_qiis.is_empty() { continue; }
 
         // Lookup the event record at position
-        let rec = event_tree_lookup(&db, &reader2, pos)?;
+        let rec = event_tree_lookup(&db, reader2.event_tree_root_id, pos)?;
 
         // Check type matching against any of the matching items
         let mut type_ok = false;

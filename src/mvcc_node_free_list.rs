@@ -1,5 +1,5 @@
-use crate::mvcc_common;
-use crate::mvcc_common::{LmdbError, PageID, Tsn};
+use crate::common;
+use crate::common::{LmdbError, PageID, Tsn};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FreeListLeafValue {
@@ -44,7 +44,7 @@ impl FreeListLeafNode {
     ///
     /// # Returns
     /// * `Result<Vec<u8>, LmdbError>` - The serialized data or an error
-    pub fn serialize(&self) -> mvcc_common::Result<Vec<u8>> {
+    pub fn serialize(&self) -> common::Result<Vec<u8>> {
         let total_size = self.calc_serialized_size();
         let mut result = Vec::with_capacity(total_size);
 
@@ -80,7 +80,7 @@ impl FreeListLeafNode {
     ///
     /// # Returns
     /// * `Result<Self>` - The deserialized FreeListLeafNode or an error
-    pub fn from_slice(slice: &[u8]) -> mvcc_common::Result<Self> {
+    pub fn from_slice(slice: &[u8]) -> common::Result<Self> {
         // Check if the slice has at least 2 bytes for keys_len
         if slice.len() < 2 {
             return Err(LmdbError::DeserializationError(format!(
@@ -184,7 +184,7 @@ impl FreeListLeafNode {
         Ok(FreeListLeafNode { keys, values })
     }
 
-    pub fn insert_or_append(&mut self, tsn: Tsn, page_id: PageID) -> mvcc_common::Result<()> {
+    pub fn insert_or_append(&mut self, tsn: Tsn, page_id: PageID) -> common::Result<()> {
         // Find the place to insert the value
         let leaf_idx = self.keys.iter().position(|&k| k == tsn);
 
@@ -217,7 +217,7 @@ impl FreeListLeafNode {
         Ok(())
     }
 
-    pub fn pop_last_key_and_value(&mut self) -> mvcc_common::Result<(Tsn, FreeListLeafValue)> {
+    pub fn pop_last_key_and_value(&mut self) -> common::Result<(Tsn, FreeListLeafValue)> {
         let last_key = self.keys.pop().unwrap();
         let last_value = self.values.pop().unwrap();
         Ok((last_key, last_value))
@@ -255,7 +255,7 @@ impl FreeListInternalNode {
     ///
     /// # Returns
     /// * `Result<Vec<u8>, LmdbError>` - The serialized data or an error
-    pub fn serialize(&self) -> mvcc_common::Result<Vec<u8>> {
+    pub fn serialize(&self) -> common::Result<Vec<u8>> {
         let total_size = self.calc_serialized_size();
         let mut result = Vec::with_capacity(total_size);
 
@@ -285,7 +285,7 @@ impl FreeListInternalNode {
     ///
     /// # Returns
     /// * `Result<Self>` - The deserialized FreeListInternalNode or an error
-    pub fn from_slice(slice: &[u8]) -> mvcc_common::Result<Self> {
+    pub fn from_slice(slice: &[u8]) -> common::Result<Self> {
         // Check if the slice has at least 2 bytes for keys_len
         if slice.len() < 2 {
             return Err(LmdbError::DeserializationError(format!(
@@ -368,7 +368,7 @@ impl FreeListInternalNode {
         &mut self,
         old_id: PageID,
         new_id: PageID,
-    ) -> mvcc_common::Result<()> {
+    ) -> common::Result<()> {
         // Replace the last child ID.
         let last_idx = self.child_ids.len() - 1;
         if self.child_ids[last_idx] == old_id {
@@ -385,13 +385,13 @@ impl FreeListInternalNode {
         &mut self,
         promoted_key: Tsn,
         promoted_page_id: PageID,
-    ) -> mvcc_common::Result<()> {
+    ) -> common::Result<()> {
         self.keys.push(promoted_key);
         self.child_ids.push(promoted_page_id);
         Ok(())
     }
 
-    pub(crate) fn split_off(&mut self) -> mvcc_common::Result<(Tsn, Vec<Tsn>, Vec<PageID>)> {
+    pub(crate) fn split_off(&mut self) -> common::Result<(Tsn, Vec<Tsn>, Vec<PageID>)> {
         let middle_idx = self.keys.len() - 2;
         let promoted_key = self.keys.remove(middle_idx);
         let new_keys = self.keys.split_off(middle_idx);
@@ -402,7 +402,7 @@ impl FreeListInternalNode {
 
 #[cfg(test)]
 mod tests {
-    use crate::mvcc_common::{PageID, Tsn};
+    use crate::common::{PageID, Tsn};
     use crate::mvcc_node_free_list::{FreeListInternalNode, FreeListLeafNode, FreeListLeafValue};
 
     #[test]

@@ -1,4 +1,4 @@
-use crate::mvcc_common::{LmdbError, PageID, Position, Result};
+use crate::common::{LmdbError, PageID, Position, Result};
 
 /// Length in bytes of the hashed tag key used in tag index leaf/internal nodes
 pub const TAG_HASH_LEN: usize = 8;
@@ -442,7 +442,7 @@ mod tests {
         Position, TAG_HASH_LEN, TagInternalNode, TagLeafNode, TagsInternalNode, TagsLeafNode,
         TagsLeafValue,
     };
-    use crate::mvcc_common::PageID;
+    use crate::common::PageID;
 
     #[test]
     fn test_tag_leaf_node_serialize_roundtrip() {

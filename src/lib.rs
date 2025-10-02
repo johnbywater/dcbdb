@@ -7,7 +7,7 @@ pub mod api;
 pub mod grpc;
 pub mod event_store;
 mod db;
-mod mvcc_common;
+mod common;
 mod mvcc_event_tree;
 mod mvcc_node_event;
 mod mvcc_node_free_list;

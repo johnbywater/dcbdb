@@ -1,6 +1,6 @@
 use crate::db::{Db, Writer, Result};
-use crate::mvcc_common::Position;
-use crate::mvcc_common::{LmdbError, PageID};
+use crate::common::Position;
+use crate::common::{LmdbError, PageID};
 use crate::mvcc_node_event::{EventInternalNode, EventLeafNode, EventRecord, EventValue, EventOverflowNode};
 use crate::mvcc_nodes::Node;
 use crate::mvcc_page::{Page, PAGE_HEADER_SIZE};

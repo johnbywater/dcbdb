@@ -9,7 +9,7 @@ use crate::mvcc_event_tree::{event_tree_append, event_tree_lookup, EventIterator
 use crate::mvcc_node_event::EventRecord;
 use crate::mvcc_node_tags::TagHash;
 use crate::mvcc_tags_tree::{tags_tree_insert, tags_tree_iter};
-use crate::mvcc_common::Position as MvccPosition;
+use crate::common::Position as MvccPosition;
 
 static DEFAULT_PAGE_SIZE: usize = 4096;
 

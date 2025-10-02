@@ -1,5 +1,5 @@
-use crate::mvcc_common;
-use crate::mvcc_common::LmdbError;
+use crate::common;
+use crate::common::LmdbError;
 use crate::mvcc_node_event::{EventInternalNode, EventLeafNode, EventOverflowNode};
 use crate::mvcc_node_free_list::{FreeListInternalNode, FreeListLeafNode};
 use crate::mvcc_node_header::HeaderNode;
@@ -63,7 +63,7 @@ impl Node {
         }
     }
 
-    pub fn serialize(&self) -> mvcc_common::Result<Vec<u8>> {
+    pub fn serialize(&self) -> common::Result<Vec<u8>> {
         match self {
             Node::Header(node) => Ok(node.serialize()),
             Node::FreeListLeaf(node) => node.serialize(),
@@ -78,7 +78,7 @@ impl Node {
         }
     }
 
-    pub fn deserialize(node_type: u8, data: &[u8]) -> mvcc_common::Result<Self> {
+    pub fn deserialize(node_type: u8, data: &[u8]) -> common::Result<Self> {
         match node_type {
             PAGE_TYPE_HEADER => {
                 let node = HeaderNode::from_slice(data)?;

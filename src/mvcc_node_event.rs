@@ -1,7 +1,7 @@
-use crate::mvcc_common::LmdbError;
-use crate::mvcc_common::PageID;
-use crate::mvcc_common::Position;
-use crate::mvcc_common::Result;
+use crate::common::LmdbError;
+use crate::common::PageID;
+use crate::common::Position;
+use crate::common::Result;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EventRecord {

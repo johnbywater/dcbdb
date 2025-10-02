@@ -1,5 +1,5 @@
 use crate::db;
-use crate::mvcc_common::{LmdbError, PageID};
+use crate::common::{LmdbError, PageID};
 use crate::mvcc_nodes::Node;
 use crc32fast::Hasher;
 
@@ -88,8 +88,8 @@ pub fn calc_crc(data: &[u8]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mvcc_common::Position;
-    use crate::mvcc_common::{PageID, Tsn};
+    use crate::common::Position;
+    use crate::common::{PageID, Tsn};
     use crate::mvcc_node_header::HeaderNode;
 
     #[test]

@@ -1,6 +1,6 @@
-use crate::mvcc_common;
-use crate::mvcc_common::Position;
-use crate::mvcc_common::{LmdbError, PageID, Tsn};
+use crate::common;
+use crate::common::Position;
+use crate::common::{LmdbError, PageID, Tsn};
 
 // Node type definitions
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,7 +45,7 @@ impl HeaderNode {
     ///
     /// # Returns
     /// * `Result<Self>` - The deserialized HeaderNode or an error
-    pub fn from_slice(slice: &[u8]) -> mvcc_common::Result<Self> {
+    pub fn from_slice(slice: &[u8]) -> common::Result<Self> {
         if slice.len() != 48 {
             return Err(LmdbError::DeserializationError(format!(
                 "Expected 48 bytes, got {}",

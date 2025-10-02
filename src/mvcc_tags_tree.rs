@@ -106,6 +106,8 @@ pub fn tags_tree_insert(db: &Db, writer: &mut Writer, tag: TagHash, pos: Positio
         // Ensure tag page is dirty (copy-on-write)
         let dirty_tag_id = {
             // No outstanding borrows of writer here
+            // Make sure the page is present in this writer's cache before COW
+            let _ = writer.get_page_ref(db, tag_root_id)?;
             writer.get_dirty_page_id(tag_root_id)?
         };
         if dirty_tag_id != tag_root_id {
@@ -121,9 +123,6 @@ pub fn tags_tree_insert(db: &Db, writer: &mut Writer, tag: TagHash, pos: Positio
         }
         // Now insert into the per-tag subtree (handles TagLeaf and TagInternal roots)
         {
-            use crate::mvcc_node_tags::TagInternalNode as PTInternal;
-            use crate::mvcc_node_tags::TagLeafNode as PTLeaf;
-
             // Traverse down to a leaf
             let mut current_page_id = tag_root_id;
             let mut stack: Vec<(PageID, usize)> = Vec::new();
@@ -163,7 +162,7 @@ pub fn tags_tree_insert(db: &Db, writer: &mut Writer, tag: TagHash, pos: Positio
                             let last_pos = tleaf.pop_last_position().map_err(|e| LmdbError::DatabaseCorrupted(format!("{}", e)))?;
                             let right_id = {
                                 let id = writer.alloc_page_id();
-                                let page = Page::new(id, Node::TagLeaf(PTLeaf { positions: vec![last_pos] }));
+                                let page = Page::new(id, Node::TagLeaf(TagLeafNode { positions: vec![last_pos] }));
                                 writer.insert_dirty(page)?;
                                 id
                             };
@@ -210,7 +209,7 @@ pub fn tags_tree_insert(db: &Db, writer: &mut Writer, tag: TagHash, pos: Positio
                             return Err(LmdbError::DatabaseCorrupted("Cannot split per-tag internal with too few keys/children".to_string()));
                         }
                         let (promote_up, new_keys, new_child_ids) = internal.split_off()?;
-                        let new_internal = PTInternal { keys: new_keys, child_ids: new_child_ids };
+                        let new_internal = TagInternalNode { keys: new_keys, child_ids: new_child_ids };
                         let new_internal_id = writer.alloc_page_id();
                         let new_internal_page = Page::new(new_internal_id, Node::TagInternal(new_internal));
                         writer.insert_dirty(new_internal_page)?;
@@ -230,7 +229,7 @@ pub fn tags_tree_insert(db: &Db, writer: &mut Writer, tag: TagHash, pos: Positio
             // If we still have a split to propagate, create a new per-tag internal root
             if let Some((promoted_key, promoted_page_id)) = split_info.take() {
                 let new_root_id = writer.alloc_page_id();
-                let new_root = PTInternal { keys: vec![promoted_key], child_ids: vec![tag_root_id, promoted_page_id] };
+                let new_root = TagInternalNode { keys: vec![promoted_key], child_ids: vec![tag_root_id, promoted_page_id] };
                 let new_root_page = Page::new(new_root_id, Node::TagInternal(new_root));
                 writer.insert_dirty(new_root_page)?;
                 tag_root_id = new_root_id;
@@ -963,7 +962,7 @@ mod tests {
     }
 
     #[test]
-    fn test_per_tag_positions_overflow_migrates_to_tag_leaf() {
+    fn test_overflow_tag_positions_to_tag_leaf_node_one_writer() {
         // Use small page size to force overflow with inline positions
         let (_tmp, db) = construct_db(256);
         let mut writer = db.writer().unwrap();
@@ -997,7 +996,43 @@ mod tests {
     }
 
     #[test]
-    fn test_per_tag_tagleaf_split_creates_internal_node() {
+    fn test_overflow_tag_positions_to_tag_leaf_node_many_writers() {
+        // Use small page size to force overflow with inline positions
+        let (_tmp, db) = construct_db(256);
+        let tag = th(777);
+        let mut inserted: Vec<Position> = Vec::new();
+        // 30 positions will exceed: header(9) + node(20 + 8P) > 256 when P >= 29
+        for _ in 0..30 {
+            let mut writer = db.writer().unwrap();
+            let p = writer.issue_position();
+            tags_tree_insert(&db, &mut writer, tag, p).unwrap();
+            db.commit(&mut writer).unwrap();
+            inserted.push(p);
+        }
+        // Root should still be a TagsLeaf containing the tag key
+        let writer = db.writer().unwrap();
+        let root_page = db.read_page(writer.tags_tree_root_id).unwrap();
+        match &root_page.node {
+            Node::TagsLeaf(leaf) => {
+                let idx = leaf.keys.binary_search(&tag).unwrap();
+                let val = &leaf.values[idx];
+                assert_ne!(val.root_id, PageID(0), "Expected per-tag root_id to be non-zero after overflow migration");
+                assert!(val.positions.is_empty(), "Inline positions should have been migrated to per-tag page");
+                // The per-tag page should exist and be a TagLeaf containing all inserted positions
+                let tag_page = db.read_page(val.root_id).expect("Per-tag page should exist");
+                match &tag_page.node {
+                    Node::TagLeaf(tleaf) => {
+                        assert_eq!(tleaf.positions, inserted);
+                    }
+                    other => panic!("Expected TagLeaf node, got {:?}", other),
+                }
+            }
+            other => panic!("Expected TagsLeaf root, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_split_tag_leaf_node_one_writer() {
         // Use small page size to force per-tag TagLeaf split after migration
         let (_tmp, db) = construct_db(256);
         let mut writer = db.writer().unwrap();
@@ -1046,7 +1081,60 @@ mod tests {
     }
 
     #[test]
-    fn test_per_tag_taginternal_split_creates_second_level_internal() {
+    fn test_split_tag_leaf_node_many_writers() {
+        // Use small page size to force per-tag TagLeaf split after migration
+        let (_tmp, db) = construct_db(256);
+        let tag = th(888);
+        let mut inserted: Vec<Position> = Vec::new();
+        // First, insert enough to migrate inline -> per-tag TagLeaf (30 triggers migration at page size 256)
+        for _ in 0..30 {
+            let mut writer = db.writer().unwrap();
+            let p = writer.issue_position();
+            tags_tree_insert(&db, &mut writer, tag, p).unwrap();
+            db.commit(&mut writer).unwrap();
+            inserted.push(p);
+        }
+        // Next insert should cause per-tag TagLeaf overflow and split to TagInternal
+        let mut writer = db.writer().unwrap();
+        let last = writer.issue_position();
+        tags_tree_insert(&db, &mut writer, tag, last).unwrap();
+        inserted.push(last);
+        db.commit(&mut writer).unwrap();
+
+        // Inspect structure from file.
+        let writer = db.writer().unwrap();
+        let root_page = db.read_page(writer.tags_tree_root_id).unwrap();
+        match &root_page.node {
+            Node::TagsLeaf(leaf) => {
+                let idx = leaf.keys.binary_search(&tag).unwrap();
+                let val = &leaf.values[idx];
+                assert_ne!(val.root_id, PageID(0), "Expected per-tag root_id to be non-zero after split");
+                // Should now point to a TagInternal node
+                let int_page = db.read_page(val.root_id).expect("Per-tag internal page should be dirty");
+                match &int_page.node {
+                    Node::TagInternal(internal) => {
+                        assert_eq!(internal.keys.len(), 1);
+                        assert_eq!(internal.child_ids.len(), 2);
+                        assert_eq!(internal.keys[0], last, "Promoted key should be the last position moved to right leaf");
+                        let left_page = db.read_page(internal.child_ids[0]).unwrap();
+                        let right_page = db.read_page(internal.child_ids[1]).unwrap();
+                        match (&left_page.node, &right_page.node) {
+                            (Node::TagLeaf(left_leaf), Node::TagLeaf(right_leaf)) => {
+                                assert_eq!(left_leaf.positions, inserted[..inserted.len()-1].to_vec());
+                                assert_eq!(right_leaf.positions, vec![last]);
+                            }
+                            other => panic!("Expected left/right TagLeaf nodes, got {:?}", other),
+                        }
+                    }
+                    other => panic!("Expected TagInternal node, got {:?}", other),
+                }
+            }
+            other => panic!("Expected TagsLeaf root, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_split_tag_internal_node_one_writer() {
         // Use small page size to force multiple splits within the per-tag subtree
         let (_tmp, db) = construct_db(256);
         let mut writer = db.writer().unwrap();
@@ -1093,6 +1181,63 @@ mod tests {
             // Insert another position and continue
             let p = writer.issue_position();
             tags_tree_insert(&db, &mut writer, tag, p).unwrap();
+
+            safety -= 1;
+            if safety == 0 { panic!("Exceeded safety limit without causing per-tag internal split"); }
+        }
+    }
+
+
+    #[test]
+    fn test_split_tag_internal_node_many_writers() {
+        // Use small page size to force multiple splits within the per-tag subtree
+        let (_tmp, db) = construct_db(256);
+        let tag = th(999);
+
+        // First, drive migration (inline -> TagLeaf) and the first per-tag leaf split to create a TagInternal root
+        for _ in 0..31 { // 30 to migrate, +1 to split TagLeaf
+            let mut writer = db.writer().unwrap();
+            let p = writer.issue_position();
+            tags_tree_insert(&db, &mut writer, tag, p).unwrap();
+            db.commit(&mut writer).unwrap();
+        }
+
+        // Now keep inserting until the per-tag TagInternal root itself splits (i.e., its child is TagInternal)
+        let mut safety = 5000; // ample room
+        loop {
+            // Inspect per-tag root
+            let mut writer = db.writer().unwrap();
+            let root_page = db.read_page(writer.tags_tree_root_id).unwrap();
+            let per_tag_root_id = match &root_page.node {
+                Node::TagsLeaf(leaf) => {
+                    let idx = leaf.keys.binary_search(&tag).unwrap();
+                    leaf.values[idx].root_id
+                }
+                other => panic!("Expected TagsLeaf root, got {:?}", other),
+            };
+            assert_ne!(per_tag_root_id, PageID(0), "Expected per-tag root to be initialized");
+            let per_tag_root = db.read_page(per_tag_root_id).unwrap();
+            match &per_tag_root.node {
+                Node::TagInternal(root_internal) => {
+                    if !root_internal.child_ids.is_empty() {
+                        let first_child_id = root_internal.child_ids[0];
+                        let child_page = db.read_page(first_child_id).unwrap();
+                        if matches!(child_page.node, Node::TagInternal(_)) {
+                            // Success: per-tag internal has split creating a second level
+                            break;
+                        }
+                    }
+                }
+                Node::TagLeaf(_) => {
+                    // Not yet split to internal; continue inserting
+                }
+                other => panic!("Expected per-tag TagInternal/TagLeaf, got {:?}", other),
+            }
+
+            // Insert another position and continue
+            let p = writer.issue_position();
+            tags_tree_insert(&db, &mut writer, tag, p).unwrap();
+            db.commit(&mut writer).unwrap();
 
             safety -= 1;
             if safety == 0 { panic!("Exceeded safety limit without causing per-tag internal split"); }

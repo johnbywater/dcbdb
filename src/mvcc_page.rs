@@ -1,7 +1,7 @@
-use crate::crc::calc_crc;
 use crate::mvcc_db;
 use crate::mvcc_common::{LmdbError, PageID};
 use crate::mvcc_nodes::Node;
+use crc32fast::Hasher;
 
 // Page structure
 #[derive(Debug, Clone)]
@@ -75,6 +75,14 @@ impl Page {
 
         Ok(Self { page_id, node })
     }
+}
+
+
+/// Calculate CRC32 checksum for data
+pub fn calc_crc(data: &[u8]) -> u32 {
+    let mut hasher = Hasher::new();
+    hasher.update(data);
+    hasher.finalize()
 }
 
 #[cfg(test)]

@@ -330,9 +330,7 @@ pub fn tags_tree_insert(
             .calc_serialized_size();
         if sz > lmdb.page_size {
             if verbose {
-                println!(
-                    "Migrating inline positions to per-tag TagLeafNode for index {i}",
-                );
+                println!("Migrating inline positions to per-tag TagLeafNode for index {i}",);
             }
             // Take positions out into a local var
             let positions = {

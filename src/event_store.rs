@@ -3,8 +3,8 @@ use std::path::Path;
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 
-use crate::dcbapi::{DCBAppendCondition, DCBEvent, DCBEventStore, DCBQuery, DCBSequencedEvent, DCBReadResponse, DCBError, DCBResult};
-use crate::lmdb::{Lmdb, LmdbResult};
+use crate::dcbapi::{DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBReadResponse, DCBResult, DCBSequencedEvent};
+use crate::lmdb::Lmdb;
 use crate::events_tree::{event_tree_append, event_tree_lookup, EventIterator};
 use crate::events_tree_nodes::EventRecord;
 use crate::tags_tree_nodes::TagHash;
@@ -85,7 +85,7 @@ fn tag_to_hash(tag: &str) -> TagHash {
 /// - append an EventRecord to the event tree
 /// - insert the position for each tag into the tags tree
 /// Finally, it commits the writer.
-pub fn unconditional_append(lmdb: &Lmdb, events: Vec<DCBEvent>) -> LmdbResult<u64> {
+pub fn unconditional_append(lmdb: &Lmdb, events: Vec<DCBEvent>) -> DCBResult<u64> {
     let mut writer = lmdb.writer()?;
     let mut last_pos_u64: u64 = 0;
 
@@ -113,7 +113,7 @@ pub fn unconditional_append(lmdb: &Lmdb, events: Vec<DCBEvent>) -> LmdbResult<u6
 
 /// Read events using the tags index by merging per-tag iterators, grouping by position,
 /// filtering by tag and type matches, and then looking up the event record.
-pub fn read_conditional(lmdb: &Lmdb, query: DCBQuery, after: Position, limit: Option<usize>) -> LmdbResult<Vec<DCBSequencedEvent>> {
+pub fn read_conditional(lmdb: &Lmdb, query: DCBQuery, after: Position, limit: Option<usize>) -> DCBResult<Vec<DCBSequencedEvent>> {
     // Special case: explicit zero limit
     if let Some(0) = limit {
         return Ok(Vec::new());
@@ -368,7 +368,7 @@ mod tests {
     use super::*;
     use serial_test::serial;
     use tempfile::tempdir;
-    use crate::dcbapi::{DCBQuery, DCBQueryItem, DCBAppendCondition, DCBError};
+    use crate::dcbapi::{DCBAppendCondition, DCBError, DCBQuery, DCBQueryItem};
 
     static VERBOSE: bool = false;
 

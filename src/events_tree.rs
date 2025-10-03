@@ -1,17 +1,18 @@
-use crate::lmdb::{Lmdb, Writer, LmdbResult};
+use crate::lmdb::{Lmdb, Writer};
 use crate::common::Position;
-use crate::common::{LmdbError, PageID};
-use crate::events_tree_nodes::{EventInternalNode, EventLeafNode, EventRecord, EventValue, EventOverflowNode};
+use crate::common::PageID;
+use crate::events_tree_nodes::{EventInternalNode, EventLeafNode, EventOverflowNode, EventRecord, EventValue};
 use crate::node::Node;
 use crate::page::{Page, PAGE_HEADER_SIZE};
 use std::collections::HashMap;
+use crate::dcbapi::{DCBError, DCBResult};
 
 // Helpers for storing large event data across overflow pages
-fn write_overflow_chain(lmdb: &Lmdb, writer: &mut Writer, data: &[u8]) -> LmdbResult<PageID> {
+fn write_overflow_chain(lmdb: &Lmdb, writer: &mut Writer, data: &[u8]) -> DCBResult<PageID> {
     // Maximum payload per overflow page: page_size - header - next pointer (8 bytes)
     let payload_cap = lmdb.page_size.saturating_sub(PAGE_HEADER_SIZE + 8);
     if payload_cap == 0 {
-        return Err(LmdbError::DatabaseCorrupted(
+        return Err(DCBError::DatabaseCorrupted(
             "Page size too small to store overflow data".to_string(),
         ));
     }
@@ -42,7 +43,7 @@ fn write_overflow_chain(lmdb: &Lmdb, writer: &mut Writer, data: &[u8]) -> LmdbRe
     Ok(next_id)
 }
 
-fn read_overflow_chain(lmdb: &Lmdb, mut page_id: PageID) -> LmdbResult<Vec<u8>> {
+fn read_overflow_chain(lmdb: &Lmdb, mut page_id: PageID) -> DCBResult<Vec<u8>> {
     let mut out: Vec<u8> = Vec::new();
     while page_id.0 != 0 {
         let page = lmdb.read_page(page_id)?;
@@ -52,7 +53,7 @@ fn read_overflow_chain(lmdb: &Lmdb, mut page_id: PageID) -> LmdbResult<Vec<u8>> 
                 page_id = node.next;
             }
             _ => {
-                return Err(LmdbError::DatabaseCorrupted(
+                return Err(DCBError::DatabaseCorrupted(
                     "Expected EventOverflow node".to_string(),
                 ));
             }
@@ -61,13 +62,13 @@ fn read_overflow_chain(lmdb: &Lmdb, mut page_id: PageID) -> LmdbResult<Vec<u8>> 
     Ok(out)
 }
 
-fn materialize_event_value(lmdb: &Lmdb, value: &EventValue) -> LmdbResult<EventRecord> {
+fn materialize_event_value(lmdb: &Lmdb, value: &EventValue) -> DCBResult<EventRecord> {
     match value {
         EventValue::Inline(rec) => Ok(rec.clone()),
         EventValue::Overflow { event_type, data_len, tags, root_id } => {
             let data = read_overflow_chain(lmdb, *root_id)?;
             if (data.len() as u64) != *data_len {
-                return Err(LmdbError::DatabaseCorrupted(
+                return Err(DCBError::DatabaseCorrupted(
                     "Overflow data length mismatch".to_string(),
                 ));
             }
@@ -86,7 +87,7 @@ pub fn event_tree_append(
     writer: &mut Writer,
     event: EventRecord,
     position: Position,
-) -> LmdbResult<()> {
+) -> DCBResult<()> {
     let verbose = lmdb.verbose;
     if verbose {
         println!("Appending event: {position:?} {event:?}");
@@ -109,7 +110,7 @@ pub fn event_tree_append(
             stack.push(current_page_id);
             current_page_id = *internal_node.child_ids.last().unwrap();
         } else {
-            return Err(LmdbError::DatabaseCorrupted(
+            return Err(DCBError::DatabaseCorrupted(
                 "Expected EventInternal node".to_string(),
             ));
         }
@@ -166,14 +167,14 @@ pub fn event_tree_append(
                         }
                         popped = Some((last_key, last_value));
                     } else {
-                        return Err(LmdbError::DatabaseCorrupted(
+                        return Err(DCBError::DatabaseCorrupted(
                             "Expected EventLeaf node".to_string(),
                         ));
                     }
                 }
             }
             _ => {
-                return Err(LmdbError::DatabaseCorrupted(
+                return Err(DCBError::DatabaseCorrupted(
                     "Expected EventLeaf node at event tree root".to_string(),
                 ));
             }
@@ -203,7 +204,7 @@ pub fn event_tree_append(
                 serialized_size = new_leaf_page.calc_serialized_size();
             }
             if serialized_size > lmdb.page_size {
-                return Err(LmdbError::DatabaseCorrupted(format!(
+                return Err(DCBError::DatabaseCorrupted(format!(
                     "Event too large even after overflow conversion (size: {serialized_size}, max: {})",
                     lmdb.page_size
                 )));
@@ -247,7 +248,7 @@ pub fn event_tree_append(
                 println!("Nothing to replace in {dirty_page_id:?}")
             }
         } else {
-            return Err(LmdbError::DatabaseCorrupted(
+            return Err(DCBError::DatabaseCorrupted(
                 "Expected EventInternal node".to_string(),
             ));
         }
@@ -264,7 +265,7 @@ pub fn event_tree_append(
                     );
                 }
             } else {
-                return Err(LmdbError::DatabaseCorrupted(
+                return Err(DCBError::DatabaseCorrupted(
                     "Expected EventInternal node".to_string(),
                 ));
             }
@@ -280,7 +281,7 @@ pub fn event_tree_append(
                 // Split the internal node
                 // Ensure we have at least 3 keys and 4 child IDs before splitting
                 if dirty_internal_node.keys.len() < 3 || dirty_internal_node.child_ids.len() < 4 {
-                    return Err(LmdbError::DatabaseCorrupted(
+                    return Err(DCBError::DatabaseCorrupted(
                         "Cannot split internal node with too few keys/children".to_string(),
                     ));
                 }
@@ -320,7 +321,7 @@ pub fn event_tree_append(
 
                 split_info = Some((promoted_key, new_internal_page_id));
             } else {
-                return Err(LmdbError::DatabaseCorrupted(
+                return Err(DCBError::DatabaseCorrupted(
                     "Expected EventInternal node".to_string(),
                 ));
             }
@@ -337,7 +338,7 @@ pub fn event_tree_append(
                 println!("Replaced root {old_id:?} with {new_id:?}");
             }
         } else {
-            return Err(LmdbError::RootIDMismatch(old_id, new_id));
+            return Err(DCBError::RootIDMismatch(old_id, new_id));
         }
     }
 
@@ -364,7 +365,7 @@ pub fn event_tree_append(
     Ok(())
 }
 
-pub fn event_tree_lookup(lmdb: &Lmdb, event_tree_root_id: PageID, position: Position) -> LmdbResult<EventRecord> {
+pub fn event_tree_lookup(lmdb: &Lmdb, event_tree_root_id: PageID, position: Position) -> DCBResult<EventRecord> {
     let mut current_page_id: PageID = event_tree_root_id;
     loop {
         let page = lmdb.read_page(current_page_id)?;
@@ -376,7 +377,7 @@ pub fn event_tree_lookup(lmdb: &Lmdb, event_tree_root_id: PageID, position: Posi
                     Err(i) => i,
                 };
                 if idx >= internal.child_ids.len() {
-                    return Err(LmdbError::DatabaseCorrupted(
+                    return Err(DCBError::DatabaseCorrupted(
                         "Child index out of bounds in event tree".to_string(),
                     ));
                 }
@@ -389,7 +390,7 @@ pub fn event_tree_lookup(lmdb: &Lmdb, event_tree_root_id: PageID, position: Posi
                         return Ok(rec);
                     }
                     Err(_) => {
-                        return Err(LmdbError::DatabaseCorrupted(format!(
+                        return Err(DCBError::DatabaseCorrupted(format!(
                             "Event at position {:?} not found",
                             position
                         )));
@@ -397,7 +398,7 @@ pub fn event_tree_lookup(lmdb: &Lmdb, event_tree_root_id: PageID, position: Posi
                 }
             }
             _ => {
-                return Err(LmdbError::DatabaseCorrupted(
+                return Err(DCBError::DatabaseCorrupted(
                     "Expected EventInternal or EventLeaf node in event tree".to_string(),
                 ));
             }
@@ -424,7 +425,7 @@ impl<'a> EventIterator<'a> {
         }
     }
 
-    pub fn next_batch(&mut self, batch_size: usize) -> LmdbResult<Vec<(Position, EventRecord)>> {
+    pub fn next_batch(&mut self, batch_size: usize) -> DCBResult<Vec<(Position, EventRecord)>> {
         let mut result: Vec<(Position, EventRecord)> = Vec::with_capacity(batch_size);
         if batch_size == 0 {
             return Ok(result);
@@ -513,7 +514,7 @@ impl<'a> EventIterator<'a> {
                         }
                     }
                     _ => {
-                        return Err(LmdbError::DatabaseCorrupted(
+                        return Err(DCBError::DatabaseCorrupted(
                             "Expected EventInternal or EventLeaf node in event tree".to_string(),
                         ));
                     }

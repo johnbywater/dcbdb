@@ -1,4 +1,4 @@
-use crate::common::{LmdbError, LmdbResult};
+use crate::dcbapi::{DCBError, DCBResult};
 use crate::events_tree_nodes::{EventInternalNode, EventLeafNode, EventOverflowNode};
 use crate::free_lists_tree_nodes::{FreeListInternalNode, FreeListLeafNode};
 use crate::header_node::HeaderNode;
@@ -62,7 +62,7 @@ impl Node {
         }
     }
 
-    pub fn serialize(&self) -> LmdbResult<Vec<u8>> {
+    pub fn serialize(&self) -> DCBResult<Vec<u8>> {
         match self {
             Node::Header(node) => Ok(node.serialize()),
             Node::FreeListLeaf(node) => node.serialize(),
@@ -77,7 +77,7 @@ impl Node {
         }
     }
 
-    pub fn deserialize(node_type: u8, data: &[u8]) -> LmdbResult<Self> {
+    pub fn deserialize(node_type: u8, data: &[u8]) -> DCBResult<Self> {
         match node_type {
             PAGE_TYPE_HEADER => {
                 let node = HeaderNode::from_slice(data)?;
@@ -119,7 +119,7 @@ impl Node {
                 let node = TagInternalNode::from_slice(data)?;
                 Ok(Node::TagInternal(node))
             }
-            _ => Err(LmdbError::DatabaseCorrupted(format!(
+            _ => Err(DCBError::DatabaseCorrupted(format!(
                 "Invalid node type: {node_type}"
             ))),
         }

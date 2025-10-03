@@ -1,4 +1,5 @@
-use crate::common::{LmdbError, PageID, Position, LmdbResult};
+use crate::common::{PageID, Position};
+use crate::dcbapi::{DCBError, DCBResult};
 
 /// Length in bytes of the hashed tag key used in tag index leaf/internal nodes
 pub const TAG_HASH_LEN: usize = 8;
@@ -35,7 +36,7 @@ impl TagsLeafNode {
         total
     }
 
-    pub fn serialize(&self) -> LmdbResult<Vec<u8>> {
+    pub fn serialize(&self) -> DCBResult<Vec<u8>> {
         let mut out = Vec::with_capacity(self.calc_serialized_size());
 
         // keys_len
@@ -61,9 +62,9 @@ impl TagsLeafNode {
         Ok(out)
     }
 
-    pub fn from_slice(slice: &[u8]) -> LmdbResult<Self> {
+    pub fn from_slice(slice: &[u8]) -> DCBResult<Self> {
         if slice.len() < 2 {
-            return Err(LmdbError::DeserializationError(format!(
+            return Err(DCBError::DeserializationError(format!(
                 "Expected at least 2 bytes, got {}",
                 slice.len()
             )));
@@ -75,7 +76,7 @@ impl TagsLeafNode {
         // keys
         let keys_bytes = 2 + keys_len * TAG_HASH_LEN;
         if slice.len() < keys_bytes {
-            return Err(LmdbError::DeserializationError(format!(
+            return Err(DCBError::DeserializationError(format!(
                 "Expected at least {} bytes for keys, got {}",
                 keys_bytes,
                 slice.len()
@@ -95,7 +96,7 @@ impl TagsLeafNode {
         let mut offset = keys_bytes;
         for _ in 0..keys_len {
             if offset + 10 > slice.len() {
-                return Err(LmdbError::DeserializationError(
+                return Err(DCBError::DeserializationError(
                     "Unexpected end of data while reading value header".to_string(),
                 ));
             }
@@ -119,7 +120,7 @@ impl TagsLeafNode {
             // positions
             let need = positions_len * 8;
             if offset + need > slice.len() {
-                return Err(LmdbError::DeserializationError(
+                return Err(DCBError::DeserializationError(
                     "Unexpected end of data while reading positions".to_string(),
                 ));
             }
@@ -146,15 +147,15 @@ impl TagsLeafNode {
         Ok(TagsLeafNode { keys, values })
     }
 
-    pub fn pop_last_key_and_value(&mut self) -> LmdbResult<(TagHash, TagsLeafValue)> {
+    pub fn pop_last_key_and_value(&mut self) -> DCBResult<(TagHash, TagsLeafValue)> {
         let last_key = self
             .keys
             .pop()
-            .ok_or_else(|| LmdbError::DeserializationError("No keys to pop".to_string()))?;
+            .ok_or_else(|| DCBError::DeserializationError("No keys to pop".to_string()))?;
         let last_value = self
             .values
             .pop()
-            .ok_or_else(|| LmdbError::DeserializationError("No values to pop".to_string()))?;
+            .ok_or_else(|| DCBError::DeserializationError("No values to pop".to_string()))?;
         Ok((last_key, last_value))
     }
 }
@@ -171,7 +172,7 @@ impl TagsInternalNode {
         2 + (self.keys.len() * TAG_HASH_LEN) + (self.child_ids.len() * 8)
     }
 
-    pub fn serialize(&self) -> LmdbResult<Vec<u8>> {
+    pub fn serialize(&self) -> DCBResult<Vec<u8>> {
         let mut out = Vec::with_capacity(self.calc_serialized_size());
         // keys_len
         out.extend_from_slice(&(self.keys.len() as u16).to_le_bytes());
@@ -186,9 +187,9 @@ impl TagsInternalNode {
         Ok(out)
     }
 
-    pub fn from_slice(slice: &[u8]) -> LmdbResult<Self> {
+    pub fn from_slice(slice: &[u8]) -> DCBResult<Self> {
         if slice.len() < 2 {
-            return Err(LmdbError::DeserializationError(format!(
+            return Err(DCBError::DeserializationError(format!(
                 "Expected at least 2 bytes, got {}",
                 slice.len()
             )));
@@ -196,7 +197,7 @@ impl TagsInternalNode {
         let keys_len = u16::from_le_bytes([slice[0], slice[1]]) as usize;
         let keys_bytes = 2 + keys_len * TAG_HASH_LEN;
         if slice.len() < keys_bytes {
-            return Err(LmdbError::DeserializationError(format!(
+            return Err(DCBError::DeserializationError(format!(
                 "Expected at least {} bytes for keys, got {}",
                 keys_bytes,
                 slice.len()
@@ -213,7 +214,7 @@ impl TagsInternalNode {
         let child_ids_len = keys_len + 1;
         let need = child_ids_len * 8;
         if slice.len() < keys_bytes + need {
-            return Err(LmdbError::DeserializationError(format!(
+            return Err(DCBError::DeserializationError(format!(
                 "Expected at least {} bytes for child_ids, got {}",
                 keys_bytes + need,
                 slice.len()
@@ -238,13 +239,13 @@ impl TagsInternalNode {
         Ok(TagsInternalNode { keys, child_ids })
     }
 
-    pub fn replace_last_child_id(&mut self, old_id: PageID, new_id: PageID) -> LmdbResult<()> {
+    pub fn replace_last_child_id(&mut self, old_id: PageID, new_id: PageID) -> DCBResult<()> {
         let last_idx = self.child_ids.len() - 1;
         if self.child_ids[last_idx] == old_id {
             self.child_ids[last_idx] = new_id;
             Ok(())
         } else {
-            Err(LmdbError::DatabaseCorrupted(
+            Err(DCBError::DatabaseCorrupted(
                 "Child ID mismatch".to_string(),
             ))
         }
@@ -254,18 +255,18 @@ impl TagsInternalNode {
         &mut self,
         promoted_key: TagHash,
         promoted_page_id: PageID,
-    ) -> LmdbResult<()> {
+    ) -> DCBResult<()> {
         self.keys.push(promoted_key);
         self.child_ids.push(promoted_page_id);
         Ok(())
     }
 
-    pub(crate) fn split_off(&mut self) -> LmdbResult<(TagHash, Vec<TagHash>, Vec<PageID>)> {
+    pub(crate) fn split_off(&mut self) -> DCBResult<(TagHash, Vec<TagHash>, Vec<PageID>)> {
         // Split by moving half of the child_ids to a new node.
         // Promote the separator key which is the minimum key of the new right subtree.
         let total_children = self.child_ids.len();
         if total_children < 4 || self.keys.len() + 1 != total_children {
-            return Err(LmdbError::DatabaseCorrupted(
+            return Err(DCBError::DatabaseCorrupted(
                 "Cannot split internal node with insufficient arity".to_string(),
             ));
         }
@@ -295,7 +296,7 @@ impl TagLeafNode {
         2 + (self.positions.len() * 8)
     }
 
-    pub fn serialize(&self) -> LmdbResult<Vec<u8>> {
+    pub fn serialize(&self) -> DCBResult<Vec<u8>> {
         let mut out = Vec::with_capacity(self.calc_serialized_size());
         // positions length
         out.extend_from_slice(&(self.positions.len() as u16).to_le_bytes());
@@ -306,9 +307,9 @@ impl TagLeafNode {
         Ok(out)
     }
 
-    pub fn from_slice(slice: &[u8]) -> LmdbResult<Self> {
+    pub fn from_slice(slice: &[u8]) -> DCBResult<Self> {
         if slice.len() < 2 {
-            return Err(LmdbError::DeserializationError(format!(
+            return Err(DCBError::DeserializationError(format!(
                 "Expected at least 2 bytes, got {}",
                 slice.len()
             )));
@@ -317,7 +318,7 @@ impl TagLeafNode {
         let positions_len = u16::from_le_bytes([slice[0], slice[1]]) as usize;
         let need = positions_len * 8;
         if slice.len() < 2 + need {
-            return Err(LmdbError::DeserializationError(format!(
+            return Err(DCBError::DeserializationError(format!(
                 "Expected at least {} bytes for positions, got {}",
                 2 + need,
                 slice.len()
@@ -341,10 +342,10 @@ impl TagLeafNode {
         Ok(TagLeafNode { positions })
     }
 
-    pub fn pop_last_position(&mut self) -> LmdbResult<Position> {
+    pub fn pop_last_position(&mut self) -> DCBResult<Position> {
         self.positions
             .pop()
-            .ok_or_else(|| LmdbError::DeserializationError("No positions to pop".to_string()))
+            .ok_or_else(|| DCBError::DeserializationError("No positions to pop".to_string()))
     }
 }
 
@@ -360,7 +361,7 @@ impl TagInternalNode {
         2 + (self.keys.len() * 8) + (self.child_ids.len() * 8)
     }
 
-    pub fn serialize(&self) -> LmdbResult<Vec<u8>> {
+    pub fn serialize(&self) -> DCBResult<Vec<u8>> {
         let mut out = Vec::with_capacity(self.calc_serialized_size());
         // keys_len
         out.extend_from_slice(&(self.keys.len() as u16).to_le_bytes());
@@ -375,9 +376,9 @@ impl TagInternalNode {
         Ok(out)
     }
 
-    pub fn from_slice(slice: &[u8]) -> LmdbResult<Self> {
+    pub fn from_slice(slice: &[u8]) -> DCBResult<Self> {
         if slice.len() < 2 {
-            return Err(LmdbError::DeserializationError(format!(
+            return Err(DCBError::DeserializationError(format!(
                 "Expected at least 2 bytes, got {}",
                 slice.len()
             )));
@@ -385,7 +386,7 @@ impl TagInternalNode {
         let keys_len = u16::from_le_bytes([slice[0], slice[1]]) as usize;
         let keys_bytes = 2 + keys_len * 8;
         if slice.len() < keys_bytes {
-            return Err(LmdbError::DeserializationError(format!(
+            return Err(DCBError::DeserializationError(format!(
                 "Expected at least {} bytes for keys, got {}",
                 keys_bytes,
                 slice.len()
@@ -410,7 +411,7 @@ impl TagInternalNode {
         let child_ids_len = keys_len + 1;
         let need = child_ids_len * 8;
         if slice.len() < keys_bytes + need {
-            return Err(LmdbError::DeserializationError(format!(
+            return Err(DCBError::DeserializationError(format!(
                 "Expected at least {} bytes for child_ids, got {}",
                 keys_bytes + need,
                 slice.len()
@@ -439,8 +440,8 @@ impl TagInternalNode {
 #[cfg(test)]
 mod tests {
     use super::{
-        Position, TAG_HASH_LEN, TagInternalNode, TagLeafNode, TagsInternalNode, TagsLeafNode,
-        TagsLeafValue,
+        Position, TagInternalNode, TagLeafNode, TagsInternalNode, TagsLeafNode, TagsLeafValue,
+        TAG_HASH_LEN,
     };
     use crate::common::PageID;
 
@@ -578,12 +579,12 @@ mod tests {
 
 
 impl TagInternalNode {
-    pub(crate) fn split_off(&mut self) -> LmdbResult<(Position, Vec<Position>, Vec<PageID>)> {
+    pub(crate) fn split_off(&mut self) -> DCBResult<(Position, Vec<Position>, Vec<PageID>)> {
         // Split by moving half of the child_ids to a new node.
         // Promote the separator key which is the minimum key of the new right subtree.
         let total_children = self.child_ids.len();
         if total_children < 4 || self.keys.len() + 1 != total_children {
-            return Err(LmdbError::DatabaseCorrupted(
+            return Err(DCBError::DatabaseCorrupted(
                 "Cannot split internal node with insufficient arity".to_string(),
             ));
         }

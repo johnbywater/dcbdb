@@ -136,6 +136,8 @@ pub enum DCBError {
     PageAlreadyDirty(PageID),
 }
 
+pub type DCBResult<T> = Result<T, DCBError>;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,5 +229,3 @@ mod tests {
         assert!(response.next().is_none());
     }
 }
-
-pub type DCBResult<T> = Result<T, DCBError>;

@@ -1,6 +1,7 @@
-use crate::lmdb::{Lmdb, Reader, Writer, LmdbResult};
-use crate::common::{LmdbError, PageID, Position};
-use crate::tags_tree_nodes::{TagHash, TagsInternalNode, TagsLeafNode, TagsLeafValue, TagLeafNode, TagInternalNode};
+use crate::lmdb::{Lmdb, Reader, Writer};
+use crate::common::{PageID, Position};
+use crate::dcbapi::{DCBError, DCBResult};
+use crate::tags_tree_nodes::{TagHash, TagInternalNode, TagLeafNode, TagsInternalNode, TagsLeafNode, TagsLeafValue};
 use crate::node::Node;
 use crate::page::Page;
 
@@ -12,7 +13,7 @@ use crate::page::Page;
 /// subtree (root_id == PageID(0)), the Position is appended to the positions
 /// vector. Otherwise a new key/value pair is inserted at the correct sorted
 /// index.
-pub fn tags_tree_insert(lmdb: &Lmdb, writer: &mut Writer, tag: TagHash, pos: Position) -> LmdbResult<()> {
+pub fn tags_tree_insert(lmdb: &Lmdb, writer: &mut Writer, tag: TagHash, pos: Position) -> DCBResult<()> {
     let verbose = lmdb.verbose;
     if verbose {
         println!("Inserting position {pos:?} for tag {:?}", tag);
@@ -43,7 +44,7 @@ pub fn tags_tree_insert(lmdb: &Lmdb, writer: &mut Writer, tag: TagHash, pos: Pos
                 current_page_id = internal_node.child_ids[child_idx];
             }
             _ => {
-                return Err(LmdbError::DatabaseCorrupted(
+                return Err(DCBError::DatabaseCorrupted(
                     "Invalid node type in tags tree (expected TagsInternal/TagsLeaf)".to_string(),
                 ));
             }
@@ -96,7 +97,7 @@ pub fn tags_tree_insert(lmdb: &Lmdb, writer: &mut Writer, tag: TagHash, pos: Pos
                 }
             }
             _ => {
-                return Err(LmdbError::DatabaseCorrupted("Expected TagsLeaf node".to_string()));
+                return Err(DCBError::DatabaseCorrupted("Expected TagsLeaf node".to_string()));
             }
         }
     }
@@ -116,9 +117,9 @@ pub fn tags_tree_insert(lmdb: &Lmdb, writer: &mut Writer, tag: TagHash, pos: Pos
             {
                 let leaf_page = writer.get_mut_dirty(dirty_leaf_page_id)?;
                 if let Node::TagsLeaf(leaf) = &mut leaf_page.node {
-                    let idx = leaf.keys.binary_search(&tag).map_err(|_| LmdbError::DatabaseCorrupted("Tag key not found after COW".to_string()))?;
+                    let idx = leaf.keys.binary_search(&tag).map_err(|_| DCBError::DatabaseCorrupted("Tag key not found after COW".to_string()))?;
                     leaf.values[idx].root_id = tag_root_id;
-                } else { return Err(LmdbError::DatabaseCorrupted("Expected TagsLeaf node".to_string())); }
+                } else { return Err(DCBError::DatabaseCorrupted("Expected TagsLeaf node".to_string())); }
             }
         }
         // Now insert into the per-tag subtree (handles TagLeaf and TagInternal roots)
@@ -138,7 +139,7 @@ pub fn tags_tree_insert(lmdb: &Lmdb, writer: &mut Writer, tag: TagHash, pos: Pos
                         current_page_id = internal.child_ids[child_idx];
                     }
                     Node::TagLeaf(_) => break,
-                    _ => return Err(LmdbError::DatabaseCorrupted("Expected per-tag TagInternal/TagLeaf".to_string())),
+                    _ => return Err(DCBError::DatabaseCorrupted("Expected per-tag TagInternal/TagLeaf".to_string())),
                 }
             }
 
@@ -159,7 +160,7 @@ pub fn tags_tree_insert(lmdb: &Lmdb, writer: &mut Writer, tag: TagHash, pos: Pos
                         let page_bytes = crate::page::PAGE_HEADER_SIZE + tleaf.calc_serialized_size();
                         if page_bytes > lmdb.page_size {
                             // Move last pos to a new right leaf
-                            let last_pos = tleaf.pop_last_position().map_err(|e| LmdbError::DatabaseCorrupted(format!("{}", e)))?;
+                            let last_pos = tleaf.pop_last_position().map_err(|e| DCBError::DatabaseCorrupted(format!("{}", e)))?;
                             let right_id = {
                                 let id = writer.alloc_page_id();
                                 let page = Page::new(id, Node::TagLeaf(TagLeafNode { positions: vec![last_pos] }));
@@ -169,7 +170,7 @@ pub fn tags_tree_insert(lmdb: &Lmdb, writer: &mut Writer, tag: TagHash, pos: Pos
                             split_info = Some((last_pos, right_id));
                         }
                     }
-                    _ => return Err(LmdbError::DatabaseCorrupted("Expected TagLeaf at per-tag insert".to_string())),
+                    _ => return Err(DCBError::DatabaseCorrupted("Expected TagLeaf at per-tag insert".to_string())),
                 }
             }
 
@@ -186,9 +187,9 @@ pub fn tags_tree_insert(lmdb: &Lmdb, writer: &mut Writer, tag: TagHash, pos: Pos
                         if internal.child_ids[child_idx] == old_id {
                             internal.child_ids[child_idx] = new_id;
                         } else {
-                            return Err(LmdbError::DatabaseCorrupted("Per-tag parent did not contain expected child id".to_string()));
+                            return Err(DCBError::DatabaseCorrupted("Per-tag parent did not contain expected child id".to_string()));
                         }
-                    } else { return Err(LmdbError::DatabaseCorrupted("Expected TagInternal".to_string())); }
+                    } else { return Err(DCBError::DatabaseCorrupted("Expected TagInternal".to_string())); }
                 }
 
                 // Apply promoted split from below if any
@@ -197,7 +198,7 @@ pub fn tags_tree_insert(lmdb: &Lmdb, writer: &mut Writer, tag: TagHash, pos: Pos
                     if let Node::TagInternal(internal) = &mut parent_page.node {
                         internal.keys.insert(child_idx, promoted_key);
                         internal.child_ids.insert(child_idx + 1, new_child_id);
-                    } else { return Err(LmdbError::DatabaseCorrupted("Expected TagInternal".to_string())); }
+                    } else { return Err(DCBError::DatabaseCorrupted("Expected TagInternal".to_string())); }
                 }
 
                 // Now check for internal overflow and split if needed
@@ -206,7 +207,7 @@ pub fn tags_tree_insert(lmdb: &Lmdb, writer: &mut Writer, tag: TagHash, pos: Pos
                 if needs_split {
                     if let Node::TagInternal(internal) = &mut parent_page.node {
                         if internal.keys.len() < 3 || internal.child_ids.len() < 4 {
-                            return Err(LmdbError::DatabaseCorrupted("Cannot split per-tag internal with too few keys/children".to_string()));
+                            return Err(DCBError::DatabaseCorrupted("Cannot split per-tag internal with too few keys/children".to_string()));
                         }
                         let (promote_up, new_keys, new_child_ids) = internal.split_off()?;
                         let new_internal = TagInternalNode { keys: new_keys, child_ids: new_child_ids };
@@ -214,7 +215,7 @@ pub fn tags_tree_insert(lmdb: &Lmdb, writer: &mut Writer, tag: TagHash, pos: Pos
                         let new_internal_page = Page::new(new_internal_id, Node::TagInternal(new_internal));
                         writer.insert_dirty(new_internal_page)?;
                         split_info = Some((promote_up, new_internal_id));
-                    } else { return Err(LmdbError::DatabaseCorrupted("Expected TagInternal".to_string())); }
+                    } else { return Err(DCBError::DatabaseCorrupted("Expected TagInternal".to_string())); }
                 }
 
                 // Prepare replacement info for upper level if parent was COWed
@@ -223,7 +224,7 @@ pub fn tags_tree_insert(lmdb: &Lmdb, writer: &mut Writer, tag: TagHash, pos: Pos
 
             // Apply root replacement for the per-tag root if needed
             if let Some((old_id, new_id)) = replacement_info.take() {
-                if tag_root_id == old_id { tag_root_id = new_id; } else { return Err(LmdbError::RootIDMismatch(old_id, new_id)); }
+                if tag_root_id == old_id { tag_root_id = new_id; } else { return Err(DCBError::RootIDMismatch(old_id, new_id)); }
             }
 
             // If we still have a split to propagate, create a new per-tag internal root
@@ -238,9 +239,9 @@ pub fn tags_tree_insert(lmdb: &Lmdb, writer: &mut Writer, tag: TagHash, pos: Pos
             // Update the TagsLeafValue.root_id to the latest per-tag root id
             let leaf_page = writer.get_mut_dirty(dirty_leaf_page_id)?;
             if let Node::TagsLeaf(leaf) = &mut leaf_page.node {
-                let idx = leaf.keys.binary_search(&tag).map_err(|_| LmdbError::DatabaseCorrupted("Tag key not found after per-tag insert".to_string()))?;
+                let idx = leaf.keys.binary_search(&tag).map_err(|_| DCBError::DatabaseCorrupted("Tag key not found after per-tag insert".to_string()))?;
                 leaf.values[idx].root_id = tag_root_id;
-            } else { return Err(LmdbError::DatabaseCorrupted("Expected TagsLeaf node".to_string())); }
+            } else { return Err(DCBError::DatabaseCorrupted("Expected TagsLeaf node".to_string())); }
         }
     }
 
@@ -254,7 +255,7 @@ pub fn tags_tree_insert(lmdb: &Lmdb, writer: &mut Writer, tag: TagHash, pos: Pos
                 let leaf_page = writer.get_mut_dirty(dirty_leaf_page_id)?;
                 if let Node::TagsLeaf(leaf) = &mut leaf_page.node {
                     std::mem::take(&mut leaf.values[i].positions)
-                } else { return Err(LmdbError::DatabaseCorrupted("Expected TagsLeaf node".to_string())); }
+                } else { return Err(DCBError::DatabaseCorrupted("Expected TagsLeaf node".to_string())); }
             };
             // Create per-tag page or split into an internal if needed
             let new_root_id = {
@@ -267,10 +268,10 @@ pub fn tags_tree_insert(lmdb: &Lmdb, writer: &mut Writer, tag: TagHash, pos: Pos
                     tag_leaf_id
                 } else {
                     // Split: move the last position to the right leaf and create an internal root
-                    let last_pos = pos_vec.pop().ok_or_else(|| LmdbError::DatabaseCorrupted("No positions to split".to_string()))?;
+                    let last_pos = pos_vec.pop().ok_or_else(|| DCBError::DatabaseCorrupted("No positions to split".to_string()))?;
                     let left_bytes = crate::page::PAGE_HEADER_SIZE + TagLeafNode { positions: pos_vec.clone() }.calc_serialized_size();
                     if left_bytes > lmdb.page_size {
-                        return Err(LmdbError::DatabaseCorrupted("Recursive per-tag split not implemented".to_string()));
+                        return Err(DCBError::DatabaseCorrupted("Recursive per-tag split not implemented".to_string()));
                     }
                     let left_id = {
                         let id = writer.alloc_page_id();
@@ -298,7 +299,7 @@ pub fn tags_tree_insert(lmdb: &Lmdb, writer: &mut Writer, tag: TagHash, pos: Pos
             let leaf_page = writer.get_mut_dirty(dirty_leaf_page_id)?;
             if let Node::TagsLeaf(leaf) = &mut leaf_page.node {
                 leaf.values[i].root_id = new_root_id;
-            } else { return Err(LmdbError::DatabaseCorrupted("Expected TagsLeaf node".to_string())); }
+            } else { return Err(DCBError::DatabaseCorrupted("Expected TagsLeaf node".to_string())); }
         }
     }
 
@@ -336,7 +337,7 @@ pub fn tags_tree_insert(lmdb: &Lmdb, writer: &mut Writer, tag: TagHash, pos: Pos
             // Check new page size sanity
             let sz = new_leaf_page.calc_serialized_size();
             if sz > lmdb.page_size {
-                return Err(LmdbError::DatabaseCorrupted(
+                return Err(DCBError::DatabaseCorrupted(
                     "Overflow tag positions to subtree not implemented".to_string(),
                 ));
             }
@@ -372,7 +373,7 @@ pub fn tags_tree_insert(lmdb: &Lmdb, writer: &mut Writer, tag: TagHash, pos: Pos
                         );
                     }
                 } else {
-                    return Err(LmdbError::DatabaseCorrupted(
+                    return Err(DCBError::DatabaseCorrupted(
                         "Parent did not contain expected child id".to_string(),
                     ));
                 }
@@ -380,7 +381,7 @@ pub fn tags_tree_insert(lmdb: &Lmdb, writer: &mut Writer, tag: TagHash, pos: Pos
                 println!("No child replacement needed in {:?}", dirty_parent_page_id);
             }
         } else {
-            return Err(LmdbError::DatabaseCorrupted(
+            return Err(DCBError::DatabaseCorrupted(
                 "Expected TagsInternal node".to_string(),
             ));
         }
@@ -399,7 +400,7 @@ pub fn tags_tree_insert(lmdb: &Lmdb, writer: &mut Writer, tag: TagHash, pos: Pos
                     );
                 }
             } else {
-                return Err(LmdbError::DatabaseCorrupted(
+                return Err(DCBError::DatabaseCorrupted(
                     "Expected TagsInternal node".to_string(),
                 ));
             }
@@ -413,7 +414,7 @@ pub fn tags_tree_insert(lmdb: &Lmdb, writer: &mut Writer, tag: TagHash, pos: Pos
                     println!("Splitting TagsInternal {:?}...", dirty_parent_page_id);
                 }
                 if internal.keys.len() < 3 || internal.child_ids.len() < 4 {
-                    return Err(LmdbError::DatabaseCorrupted(
+                    return Err(DCBError::DatabaseCorrupted(
                         "Cannot split internal node with too few keys/children".to_string(),
                     ));
                 }
@@ -429,7 +430,7 @@ pub fn tags_tree_insert(lmdb: &Lmdb, writer: &mut Writer, tag: TagHash, pos: Pos
                 writer.insert_dirty(new_internal_page)?;
                 split_info = Some((promote_up, new_internal_id));
             } else {
-                return Err(LmdbError::DatabaseCorrupted(
+                return Err(DCBError::DatabaseCorrupted(
                     "Expected TagsInternal node".to_string(),
                 ));
             }
@@ -449,7 +450,7 @@ pub fn tags_tree_insert(lmdb: &Lmdb, writer: &mut Writer, tag: TagHash, pos: Pos
                 println!("Replaced Tags root {:?} -> {:?}", old_id, new_id);
             }
         } else {
-            return Err(LmdbError::RootIDMismatch(old_id, new_id));
+            return Err(DCBError::RootIDMismatch(old_id, new_id));
         }
     }
 
@@ -593,7 +594,7 @@ impl<'a> Iterator for TagsTreeIterator<'a> {
 }
 
 // Create an iterator over positions that have been inserted for the given tag
-pub fn tags_tree_iter<'a>(db: &'a Lmdb, reader: &'a Reader, tag: TagHash, after: Position) -> LmdbResult<TagsTreeIterator<'a>> {
+pub fn tags_tree_iter<'a>(db: &'a Lmdb, reader: &'a Reader, tag: TagHash, after: Position) -> DCBResult<TagsTreeIterator<'a>> {
     Ok(TagsTreeIterator::new(db, reader, tag, after))
 }
 
@@ -619,7 +620,7 @@ mod tests {
         n.to_le_bytes()
     }
 
-    fn tags_tree_lookup(lmdb: &Lmdb, reader: &Reader, tag: TagHash) -> LmdbResult<Vec<Position>> {
+    fn tags_tree_lookup(lmdb: &Lmdb, reader: &Reader, tag: TagHash) -> DCBResult<Vec<Position>> {
         // Reuse the iterator to traverse and collect all positions for the tag
         let iter = tags_tree_iter(lmdb, reader, tag, Position(0))?;
         Ok(iter.collect())

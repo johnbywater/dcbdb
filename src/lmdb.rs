@@ -1,5 +1,5 @@
 use crate::common::Position;
-use crate::common::{LmdbError, PageID, Tsn};
+use crate::common::{PageID, Tsn};
 use crate::events_tree_nodes::EventLeafNode;
 use crate::free_lists_tree_nodes::{FreeListInternalNode, FreeListLeafNode};
 use crate::header_node::HeaderNode;
@@ -11,9 +11,7 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::Mutex;
-
-// Result type alias
-pub type LmdbResult<T> = Result<T, LmdbError>;
+use crate::dcbapi::{DCBError, DCBResult};
 
 // Reader transaction
 pub struct Reader {
@@ -69,7 +67,7 @@ pub struct Lmdb {
 }
 
 impl Lmdb {
-    pub fn new(path: &Path, page_size: usize, verbose: bool) -> LmdbResult<Self> {
+    pub fn new(path: &Path, page_size: usize, verbose: bool) -> DCBResult<Self> {
         let pager = Pager::new(path, page_size)?;
         let header_page_id0 = PageID(0);
         let header_page_id1 = PageID(1);
@@ -138,7 +136,7 @@ impl Lmdb {
         Ok(lmdb)
     }
 
-    pub fn get_latest_header(&self) -> LmdbResult<(PageID, HeaderNode)> {
+    pub fn get_latest_header(&self) -> DCBResult<(PageID, HeaderNode)> {
         let header0 = self.read_header(self.header_page_id0)?;
         let header1 = self.read_header(self.header_page_id1)?;
 
@@ -149,12 +147,12 @@ impl Lmdb {
         }
     }
 
-    pub fn read_header(&self, page_id: PageID) -> LmdbResult<HeaderNode> {
+    pub fn read_header(&self, page_id: PageID) -> DCBResult<HeaderNode> {
         let header = self.read_page(page_id)?;
         let header_node = match header.node {
             Node::Header(node) => node,
             _ => {
-                return Err(LmdbError::DatabaseCorrupted(
+                return Err(DCBError::DatabaseCorrupted(
                     "Invalid header node type".to_string(),
                 ));
             }
@@ -162,7 +160,7 @@ impl Lmdb {
         Ok(header_node)
     }
 
-    pub fn read_page(&self, page_id: PageID) -> LmdbResult<Page> {
+    pub fn read_page(&self, page_id: PageID) -> DCBResult<Page> {
         let page_data = self.pager.read_page(page_id)?;
         if self.verbose {
             println!("Read {page_id:?} from file, deserializing...");
@@ -170,7 +168,7 @@ impl Lmdb {
         Page::deserialize(page_id, &page_data)
     }
 
-    pub fn write_page(&self, page: &Page) -> LmdbResult<()> {
+    pub fn write_page(&self, page: &Page) -> DCBResult<()> {
         let serialized = &page.serialize()?;
         self.pager.write_page(page.page_id, serialized)?;
         if self.verbose {
@@ -179,12 +177,12 @@ impl Lmdb {
         Ok(())
     }
 
-    pub fn flush(&self) -> LmdbResult<()> {
+    pub fn flush(&self) -> DCBResult<()> {
         self.pager.flush()?;
         Ok(())
     }
 
-    pub fn reader(&self) -> LmdbResult<Reader> {
+    pub fn reader(&self) -> DCBResult<Reader> {
         let (header_page_id, header_node) = self.get_latest_header()?;
 
         // Generate a unique ID for this reader using the counter
@@ -213,7 +211,7 @@ impl Lmdb {
         Ok(reader)
     }
 
-    pub fn writer(&self) -> LmdbResult<Writer> {
+    pub fn writer(&self) -> DCBResult<Writer> {
         if self.verbose {
             println!();
             println!("Constructing writer...");
@@ -244,7 +242,7 @@ impl Lmdb {
         Ok(writer)
     }
 
-    pub fn commit(&self, writer: &mut Writer) -> LmdbResult<()> {
+    pub fn commit(&self, writer: &mut Writer) -> DCBResult<()> {
         // Process reused and freed page IDs
         if self.verbose {
             println!();
@@ -341,7 +339,7 @@ impl Writer {
         pos
     }
 
-    pub fn get_page_ref(&mut self, lmdb: &Lmdb, page_id: PageID) -> LmdbResult<&Page> {
+    pub fn get_page_ref(&mut self, lmdb: &Lmdb, page_id: PageID) -> DCBResult<&Page> {
         // Check the dirty pages first
         if self.dirty.contains_key(&page_id) {
             return Ok(self.dirty.get(&page_id).unwrap());
@@ -360,11 +358,11 @@ impl Writer {
         Ok(self.deserialized.get(&page_id).unwrap())
     }
 
-    pub fn get_mut_dirty(&mut self, page_id: PageID) -> LmdbResult<&mut Page> {
+    pub fn get_mut_dirty(&mut self, page_id: PageID) -> DCBResult<&mut Page> {
         if let Some(page) = self.dirty.get_mut(&page_id) {
             Ok(page)
         } else {
-            Err(LmdbError::DirtyPageNotFound(page_id))
+            Err(DCBError::DirtyPageNotFound(page_id))
         }
     }
 
@@ -372,12 +370,12 @@ impl Writer {
         self.deserialized.insert(page.page_id, page);
     }
 
-    pub fn insert_dirty(&mut self, page: Page) -> LmdbResult<()> {
+    pub fn insert_dirty(&mut self, page: Page) -> DCBResult<()> {
         if self.freed_page_ids.contains(&page.page_id) {
-            return Err(LmdbError::PageAlreadyFreed(page.page_id));
+            return Err(DCBError::PageAlreadyFreed(page.page_id));
         }
         if self.dirty.contains_key(&page.page_id) {
-            return Err(LmdbError::PageAlreadyDirty(page.page_id));
+            return Err(DCBError::PageAlreadyDirty(page.page_id));
         }
         self.dirty.insert(page.page_id, page);
         Ok(())
@@ -394,7 +392,7 @@ impl Writer {
         next_page_id
     }
 
-    pub fn get_dirty_page_id(&mut self, page_id: PageID) -> LmdbResult<PageID> {
+    pub fn get_dirty_page_id(&mut self, page_id: PageID) -> DCBResult<PageID> {
         let mut dirty_page_id = page_id;
         if !self.freed_page_ids.iter().any(|&id| id == page_id) {
             if !self.dirty.contains_key(&page_id) {
@@ -420,7 +418,7 @@ impl Writer {
                 println!("{page_id:?} is already dirty");
             }
         } else {
-            return Err(LmdbError::PageAlreadyFreed(page_id));
+            return Err(DCBError::PageAlreadyFreed(page_id));
         }
         Ok(dirty_page_id)
     }
@@ -444,7 +442,7 @@ impl Writer {
         }
     }
 
-    pub fn find_reusable_page_ids(&mut self, lmdb: &Lmdb) -> LmdbResult<()> {
+    pub fn find_reusable_page_ids(&mut self, lmdb: &Lmdb) -> DCBResult<()> {
         let verbose = self.verbose;
         let mut reusable_page_ids: VecDeque<(PageID, Tsn)> = VecDeque::new();
         // Get free page IDs
@@ -501,14 +499,14 @@ impl Writer {
                             }
                         } else {
                             // TODO: Traverse into free list subtree
-                            return Err(LmdbError::DatabaseCorrupted(
+                            return Err(DCBError::DatabaseCorrupted(
                                 "Free list subtree not implemented".to_string(),
                             ));
                         }
                     }
                 }
                 _ => {
-                    return Err(LmdbError::DatabaseCorrupted(
+                    return Err(DCBError::DatabaseCorrupted(
                         "Invalid node type in free list tree".to_string(),
                     ));
                 }
@@ -528,7 +526,7 @@ impl Writer {
         lmdb: &Lmdb,
         tsn: Tsn,
         freed_page_id: PageID,
-    ) -> LmdbResult<()> {
+    ) -> DCBResult<()> {
         let verbose = self.verbose;
         if verbose {
             println!("Inserting {freed_page_id:?} for {tsn:?}");
@@ -551,7 +549,7 @@ impl Writer {
                 stack.push(current_page_id);
                 current_page_id = *internal_node.child_ids.last().unwrap();
             } else {
-                return Err(LmdbError::DatabaseCorrupted(
+                return Err(DCBError::DatabaseCorrupted(
                     "Expected FreeListInternal node".to_string(),
                 ));
             }
@@ -580,7 +578,7 @@ impl Writer {
                 );
             }
         } else {
-            return Err(LmdbError::DatabaseCorrupted(
+            return Err(DCBError::DatabaseCorrupted(
                 "Expected FreeListLeaf node".to_string(),
             ));
         }
@@ -612,7 +610,7 @@ impl Writer {
 
                 let serialized_size = new_leaf_page.calc_serialized_size();
                 if serialized_size > lmdb.page_size {
-                    return Err(LmdbError::DatabaseCorrupted(
+                    return Err(DCBError::DatabaseCorrupted(
                         "Overflow freed page IDs for TSN to subtree not implemented".to_string(),
                     ));
                 }
@@ -631,7 +629,7 @@ impl Writer {
                 }
                 split_info = Some((last_key, new_leaf_page_id));
             } else {
-                return Err(LmdbError::DatabaseCorrupted(
+                return Err(DCBError::DatabaseCorrupted(
                     "Expected FreeListLeaf node".to_string(),
                 ));
             }
@@ -663,7 +661,7 @@ impl Writer {
                     println!("Nothing to replace in {dirty_page_id:?}")
                 }
             } else {
-                return Err(LmdbError::DatabaseCorrupted(
+                return Err(DCBError::DatabaseCorrupted(
                     "Expected FreeListInternal node".to_string(),
                 ));
             }
@@ -680,7 +678,7 @@ impl Writer {
                         );
                     }
                 } else {
-                    return Err(LmdbError::DatabaseCorrupted(
+                    return Err(DCBError::DatabaseCorrupted(
                         "Expected FreeListInternal node".to_string(),
                     ));
                 }
@@ -697,7 +695,7 @@ impl Writer {
                     // Ensure we have at least 3 keys and 4 child IDs before splitting
                     if dirty_internal_node.keys.len() < 3 || dirty_internal_node.child_ids.len() < 4
                     {
-                        return Err(LmdbError::DatabaseCorrupted(
+                        return Err(DCBError::DatabaseCorrupted(
                             "Cannot split internal node with too few keys/children".to_string(),
                         ));
                     }
@@ -739,7 +737,7 @@ impl Writer {
 
                     split_info = Some((promoted_key, new_internal_page_id));
                 } else {
-                    return Err(LmdbError::DatabaseCorrupted(
+                    return Err(DCBError::DatabaseCorrupted(
                         "Expected FreeListInternal node".to_string(),
                     ));
                 }
@@ -756,7 +754,7 @@ impl Writer {
                     println!("Replaced root {old_id:?} with {new_id:?}");
                 }
             } else {
-                return Err(LmdbError::RootIDMismatch(old_id, new_id));
+                return Err(DCBError::RootIDMismatch(old_id, new_id));
             }
         }
 
@@ -789,7 +787,7 @@ impl Writer {
         lmdb: &Lmdb,
         tsn: Tsn,
         used_page_id: PageID,
-    ) -> LmdbResult<()> {
+    ) -> DCBResult<()> {
         let verbose = self.verbose;
         if verbose {
             println!();
@@ -815,7 +813,7 @@ impl Writer {
                 stack.push(current_page_id);
                 current_page_id = *internal_node.child_ids.first().unwrap();
             } else {
-                return Err(LmdbError::DatabaseCorrupted(
+                return Err(DCBError::DatabaseCorrupted(
                     "Expected FreeListInternal node".to_string(),
                 ));
             }
@@ -842,7 +840,7 @@ impl Writer {
         if let Node::FreeListLeaf(dirty_leaf_node) = &mut dirty_leaf_page.node {
             // Assume we are exhausting page IDs from the lowest TSNs first
             if dirty_leaf_node.keys.is_empty() || dirty_leaf_node.keys[0] != tsn {
-                return Err(LmdbError::DatabaseCorrupted(format!(
+                return Err(DCBError::DatabaseCorrupted(format!(
                     "Expected TSN {} not found: {:?}",
                     tsn.0, dirty_leaf_node
                 )));
@@ -851,7 +849,7 @@ impl Writer {
             let leaf_value = &mut dirty_leaf_node.values[0];
 
             if leaf_value.root_id != PageID(0) {
-                return Err(LmdbError::DatabaseCorrupted(
+                return Err(DCBError::DatabaseCorrupted(
                     "Free list subtree not implemented".to_string(),
                 ));
             } else {
@@ -863,7 +861,7 @@ impl Writer {
                 {
                     leaf_value.page_ids.remove(pos);
                 } else {
-                    return Err(LmdbError::DatabaseCorrupted(format!(
+                    return Err(DCBError::DatabaseCorrupted(format!(
                         "{used_page_id:?} not found in {tsn:?}"
                     )));
                 }
@@ -892,7 +890,7 @@ impl Writer {
                 }
             }
         } else {
-            return Err(LmdbError::DatabaseCorrupted(
+            return Err(DCBError::DatabaseCorrupted(
                 "Expected FreeListLeaf node".to_string(),
             ));
         }
@@ -924,12 +922,12 @@ impl Writer {
                             );
                         }
                     } else {
-                        return Err(LmdbError::DatabaseCorrupted(
+                        return Err(DCBError::DatabaseCorrupted(
                             "Child ID mismatch".to_string(),
                         ));
                     }
                 } else {
-                    return Err(LmdbError::DatabaseCorrupted(
+                    return Err(DCBError::DatabaseCorrupted(
                         "Expected FreeListInternal node".to_string(),
                     ));
                 }
@@ -942,12 +940,12 @@ impl Writer {
                 if let Node::FreeListInternal(dirty_internal_node) = &mut dirty_internal_page.node {
                     // Remove the child ID and key
                     if dirty_internal_node.child_ids[0] != removed_page_id {
-                        return Err(LmdbError::DatabaseCorrupted(
+                        return Err(DCBError::DatabaseCorrupted(
                             "Child ID mismatch".to_string(),
                         ));
                     }
                     if dirty_internal_node.keys.is_empty() {
-                        return Err(LmdbError::DatabaseCorrupted(
+                        return Err(DCBError::DatabaseCorrupted(
                             "Empty internal node keys".to_string(),
                         ));
                     }
@@ -978,7 +976,7 @@ impl Writer {
                         }
                     }
                 } else {
-                    return Err(LmdbError::DatabaseCorrupted(
+                    return Err(DCBError::DatabaseCorrupted(
                         "Expected FreeListInternal node".to_string(),
                     ));
                 }
@@ -999,7 +997,7 @@ impl Writer {
                     println!("Replaced root {old_id:?} with {new_id:?}");
                 }
             } else {
-                return Err(LmdbError::RootIDMismatch(old_id, new_id));
+                return Err(DCBError::RootIDMismatch(old_id, new_id));
             }
         }
 

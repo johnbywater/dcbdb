@@ -5,6 +5,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
+use memmap2::MmapOptions;
 
 // Pager for file I/O
 pub struct Pager {
@@ -109,6 +110,28 @@ impl Pager {
         Ok(page)
     }
 
+    pub fn read_page_mmap(&self, page_id: PageID) -> io::Result<Vec<u8>> {
+        // Lock the file for consistent metadata and mapping lifetime
+        let file: MutexGuard<File> = self.file.lock().unwrap();
+        let file_len = file.metadata()?.len();
+        let offset = page_id.0 * (self.page_size as u64);
+        let end = offset + (self.page_size as u64);
+        if end > file_len {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                format!("Page {page_id:?} not found"),
+            ));
+        }
+        // Map the entire file to avoid OS page-alignment issues with offsets.
+        // For large files, consider mapping a window aligned to the OS page size.
+        let mmap = unsafe { MmapOptions::new().map(&*file)? };
+        let start = offset as usize;
+        let stop = start + self.page_size;
+        let mut out = Vec::with_capacity(self.page_size);
+        out.extend_from_slice(&mmap[start..stop]);
+        Ok(out)
+    }
+
     pub fn flush(&self) -> io::Result<()> {
         let mut file: MutexGuard<File> = self.file.lock().unwrap();
         file.flush()?;
@@ -121,5 +144,58 @@ impl Pager {
             }
         }
         Ok(())
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::Pager;
+    use crate::common::PageID;
+    use tempfile::tempdir;
+    use std::path::PathBuf;
+
+    fn temp_file_path(name: &str) -> PathBuf {
+        let dir = tempdir().expect("tempdir");
+        dir.into_path().join(name)
+    }
+
+    #[test]
+    fn mmap_read_matches_normal_read() {
+        let page_size = 1024usize;
+        let path = temp_file_path("pager_mmap_test.db");
+        let pager = Pager::new(&path, page_size).expect("pager new");
+
+        let data1 = vec![1u8; 100];
+        let data2 = (0..page_size).map(|i| (i % 256) as u8).collect::<Vec<_>>();
+
+        pager.write_page(PageID(0), &data1).expect("write page 0");
+        pager.write_page(PageID(1), &data2).expect("write page 1");
+        pager.flush().expect("flush");
+
+        let r0 = pager.read_page(PageID(0)).expect("read0");
+        let r0m = pager.read_page_mmap(PageID(0)).expect("read0m");
+        assert_eq!(r0, r0m, "mmap read should match std read for page 0");
+        // padding zeros expected after data1 length
+        assert_eq!(&r0[..100], &data1[..]);
+        assert!(r0[100..].iter().all(|&b| b == 0));
+
+        let r1 = pager.read_page(PageID(1)).expect("read1");
+        let r1m = pager.read_page_mmap(PageID(1)).expect("read1m");
+        assert_eq!(r1, r1m, "mmap read should match std read for page 1");
+        assert_eq!(&r1[..], &data2[..]);
+    }
+
+    #[test]
+    fn mmap_read_out_of_bounds() {
+        let page_size = 512usize;
+        let path = temp_file_path("pager_mmap_oob.db");
+        let pager = Pager::new(&path, page_size).expect("pager new");
+
+        pager.write_page(PageID(0), &[42u8; 10]).expect("write p0");
+        pager.flush().expect("flush");
+
+        let err = pager.read_page_mmap(PageID(1)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
     }
 }

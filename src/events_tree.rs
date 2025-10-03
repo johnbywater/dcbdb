@@ -1,17 +1,17 @@
-use crate::db::{Db, Writer, Result};
+use crate::lmdb::{Lmdb, Writer, LmdbResult};
 use crate::common::Position;
-use crate::common::{DbError, PageID};
-use crate::events_btree_nodes::{EventInternalNode, EventLeafNode, EventRecord, EventValue, EventOverflowNode};
+use crate::common::{LmdbError, PageID};
+use crate::events_tree_nodes::{EventInternalNode, EventLeafNode, EventRecord, EventValue, EventOverflowNode};
 use crate::node::Node;
 use crate::page::{Page, PAGE_HEADER_SIZE};
 use std::collections::HashMap;
 
 // Helpers for storing large event data across overflow pages
-fn write_overflow_chain(db: &Db, writer: &mut Writer, data: &[u8]) -> Result<PageID> {
+fn write_overflow_chain(lmdb: &Lmdb, writer: &mut Writer, data: &[u8]) -> LmdbResult<PageID> {
     // Maximum payload per overflow page: page_size - header - next pointer (8 bytes)
-    let payload_cap = db.page_size.saturating_sub(PAGE_HEADER_SIZE + 8);
+    let payload_cap = lmdb.page_size.saturating_sub(PAGE_HEADER_SIZE + 8);
     if payload_cap == 0 {
-        return Err(DbError::DatabaseCorrupted(
+        return Err(LmdbError::DatabaseCorrupted(
             "Page size too small to store overflow data".to_string(),
         ));
     }
@@ -42,17 +42,17 @@ fn write_overflow_chain(db: &Db, writer: &mut Writer, data: &[u8]) -> Result<Pag
     Ok(next_id)
 }
 
-fn read_overflow_chain(db: &Db, mut page_id: PageID) -> Result<Vec<u8>> {
+fn read_overflow_chain(lmdb: &Lmdb, mut page_id: PageID) -> LmdbResult<Vec<u8>> {
     let mut out: Vec<u8> = Vec::new();
     while page_id.0 != 0 {
-        let page = db.read_page(page_id)?;
+        let page = lmdb.read_page(page_id)?;
         match page.node {
             Node::EventOverflow(node) => {
                 out.extend_from_slice(&node.data);
                 page_id = node.next;
             }
             _ => {
-                return Err(DbError::DatabaseCorrupted(
+                return Err(LmdbError::DatabaseCorrupted(
                     "Expected EventOverflow node".to_string(),
                 ));
             }
@@ -61,13 +61,13 @@ fn read_overflow_chain(db: &Db, mut page_id: PageID) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-fn materialize_event_value(db: &Db, value: &EventValue) -> Result<EventRecord> {
+fn materialize_event_value(lmdb: &Lmdb, value: &EventValue) -> LmdbResult<EventRecord> {
     match value {
         EventValue::Inline(rec) => Ok(rec.clone()),
         EventValue::Overflow { event_type, data_len, tags, root_id } => {
-            let data = read_overflow_chain(db, *root_id)?;
+            let data = read_overflow_chain(lmdb, *root_id)?;
             if (data.len() as u64) != *data_len {
-                return Err(DbError::DatabaseCorrupted(
+                return Err(LmdbError::DatabaseCorrupted(
                     "Overflow data length mismatch".to_string(),
                 ));
             }
@@ -82,23 +82,23 @@ fn materialize_event_value(db: &Db, value: &EventValue) -> Result<EventRecord> {
 /// leaf page (using copy-on-write if necessary) and appends the provided
 /// Position to the keys and the EventRecord to the values.
 pub fn event_tree_append(
-    db: &Db,
+    lmdb: &Lmdb,
     writer: &mut Writer,
     event: EventRecord,
     position: Position,
-) -> Result<()> {
-    let verbose = db.verbose;
+) -> LmdbResult<()> {
+    let verbose = lmdb.verbose;
     if verbose {
         println!("Appending event: {position:?} {event:?}");
-        println!("Root is {:?}", writer.event_tree_root_id);
+        println!("Root is {:?}", writer.events_tree_root_id);
     }
     // Get the current root page id for the event tree
-    let mut current_page_id: PageID = writer.event_tree_root_id;
+    let mut current_page_id: PageID = writer.events_tree_root_id;
 
     // Traverse the tree to find a leaf node
     let mut stack: Vec<PageID> = Vec::new();
     loop {
-        let current_page_ref = writer.get_page_ref(db, current_page_id)?;
+        let current_page_ref = writer.get_page_ref(lmdb, current_page_id)?;
         if matches!(current_page_ref.node, Node::EventLeaf(_)) {
             break;
         }
@@ -109,7 +109,7 @@ pub fn event_tree_append(
             stack.push(current_page_id);
             current_page_id = *internal_node.child_ids.last().unwrap();
         } else {
-            return Err(DbError::DatabaseCorrupted(
+            return Err(LmdbError::DatabaseCorrupted(
                 "Expected EventInternal node".to_string(),
             ));
         }
@@ -120,7 +120,7 @@ pub fn event_tree_append(
 
     // Decide inline vs overflow based on data length before mut-borrowing the page
     let pending_value = if event.data.len() > u16::MAX as usize {
-        let root_id = write_overflow_chain(db, writer, &event.data)?;
+        let root_id = write_overflow_chain(lmdb, writer, &event.data)?;
         EventValue::Overflow {
             event_type: event.event_type.clone(),
             data_len: event.data.len() as u64,
@@ -154,7 +154,7 @@ pub fn event_tree_append(
 
                 // Check if the leaf needs splitting by estimating the serialized size
                 let serialized_size = dirty_leaf_page.calc_serialized_size();
-                if serialized_size > db.page_size {
+                if serialized_size > lmdb.page_size {
                     if let Node::EventLeaf(dirty_leaf_node) = &mut dirty_leaf_page.node {
                         let (last_key, last_value) = dirty_leaf_node.pop_last_key_and_value()?;
                         if verbose {
@@ -166,14 +166,14 @@ pub fn event_tree_append(
                         }
                         popped = Some((last_key, last_value));
                     } else {
-                        return Err(DbError::DatabaseCorrupted(
+                        return Err(LmdbError::DatabaseCorrupted(
                             "Expected EventLeaf node".to_string(),
                         ));
                     }
                 }
             }
             _ => {
-                return Err(DbError::DatabaseCorrupted(
+                return Err(LmdbError::DatabaseCorrupted(
                     "Expected EventLeaf node at event tree root".to_string(),
                 ));
             }
@@ -189,9 +189,9 @@ pub fn event_tree_append(
         let mut new_leaf_node = EventLeafNode { keys: vec![last_key], values: vec![last_value.clone()] };
         let mut new_leaf_page = Page::new(new_leaf_page_id, Node::EventLeaf(new_leaf_node.clone()));
         let mut serialized_size = new_leaf_page.calc_serialized_size();
-        if serialized_size > db.page_size {
+        if serialized_size > lmdb.page_size {
             if let EventValue::Inline(rec) = last_value {
-                let root_id = write_overflow_chain(db, writer, &rec.data)?;
+                let root_id = write_overflow_chain(lmdb, writer, &rec.data)?;
                 last_value = EventValue::Overflow {
                     event_type: rec.event_type,
                     data_len: rec.data.len() as u64,
@@ -202,10 +202,10 @@ pub fn event_tree_append(
                 new_leaf_page = Page::new(new_leaf_page_id, Node::EventLeaf(new_leaf_node.clone()));
                 serialized_size = new_leaf_page.calc_serialized_size();
             }
-            if serialized_size > db.page_size {
-                return Err(DbError::DatabaseCorrupted(format!(
+            if serialized_size > lmdb.page_size {
+                return Err(LmdbError::DatabaseCorrupted(format!(
                     "Event too large even after overflow conversion (size: {serialized_size}, max: {})",
-                    db.page_size
+                    lmdb.page_size
                 )));
             }
         }
@@ -247,7 +247,7 @@ pub fn event_tree_append(
                 println!("Nothing to replace in {dirty_page_id:?}")
             }
         } else {
-            return Err(DbError::DatabaseCorrupted(
+            return Err(LmdbError::DatabaseCorrupted(
                 "Expected EventInternal node".to_string(),
             ));
         }
@@ -264,7 +264,7 @@ pub fn event_tree_append(
                     );
                 }
             } else {
-                return Err(DbError::DatabaseCorrupted(
+                return Err(LmdbError::DatabaseCorrupted(
                     "Expected EventInternal node".to_string(),
                 ));
             }
@@ -272,7 +272,7 @@ pub fn event_tree_append(
 
         // Check if the internal page needs splitting
 
-        if dirty_internal_page.calc_serialized_size() > db.page_size {
+        if dirty_internal_page.calc_serialized_size() > lmdb.page_size {
             if let Node::EventInternal(dirty_internal_node) = &mut dirty_internal_page.node {
                 if verbose {
                     println!("Splitting internal {dirty_page_id:?}...");
@@ -280,7 +280,7 @@ pub fn event_tree_append(
                 // Split the internal node
                 // Ensure we have at least 3 keys and 4 child IDs before splitting
                 if dirty_internal_node.keys.len() < 3 || dirty_internal_node.child_ids.len() < 4 {
-                    return Err(DbError::DatabaseCorrupted(
+                    return Err(LmdbError::DatabaseCorrupted(
                         "Cannot split internal node with too few keys/children".to_string(),
                     ));
                 }
@@ -320,7 +320,7 @@ pub fn event_tree_append(
 
                 split_info = Some((promoted_key, new_internal_page_id));
             } else {
-                return Err(DbError::DatabaseCorrupted(
+                return Err(LmdbError::DatabaseCorrupted(
                     "Expected EventInternal node".to_string(),
                 ));
             }
@@ -331,13 +331,13 @@ pub fn event_tree_append(
     }
 
     if let Some((old_id, new_id)) = current_replacement_info {
-        if writer.event_tree_root_id == old_id {
-            writer.event_tree_root_id = new_id;
+        if writer.events_tree_root_id == old_id {
+            writer.events_tree_root_id = new_id;
             if verbose {
                 println!("Replaced root {old_id:?} with {new_id:?}");
             }
         } else {
-            return Err(DbError::RootIDMismatch(old_id, new_id));
+            return Err(LmdbError::RootIDMismatch(old_id, new_id));
         }
     }
 
@@ -345,7 +345,7 @@ pub fn event_tree_append(
         // Create a new root
         let new_internal_node = EventInternalNode {
             keys: vec![promoted_key],
-            child_ids: vec![writer.event_tree_root_id, promoted_page_id],
+            child_ids: vec![writer.events_tree_root_id, promoted_page_id],
         };
 
         let new_root_page_id = writer.alloc_page_id();
@@ -358,16 +358,16 @@ pub fn event_tree_append(
         }
         writer.insert_dirty(new_root_page)?;
 
-        writer.event_tree_root_id = new_root_page_id;
+        writer.events_tree_root_id = new_root_page_id;
     }
 
     Ok(())
 }
 
-pub fn event_tree_lookup(db: &Db, event_tree_root_id: PageID, position: Position) -> Result<EventRecord> {
+pub fn event_tree_lookup(lmdb: &Lmdb, event_tree_root_id: PageID, position: Position) -> LmdbResult<EventRecord> {
     let mut current_page_id: PageID = event_tree_root_id;
     loop {
-        let page = db.read_page(current_page_id)?;
+        let page = lmdb.read_page(current_page_id)?;
         match &page.node {
             Node::EventInternal(internal) => {
                 // Choose child based on upper bound of position in separator keys
@@ -376,7 +376,7 @@ pub fn event_tree_lookup(db: &Db, event_tree_root_id: PageID, position: Position
                     Err(i) => i,
                 };
                 if idx >= internal.child_ids.len() {
-                    return Err(DbError::DatabaseCorrupted(
+                    return Err(LmdbError::DatabaseCorrupted(
                         "Child index out of bounds in event tree".to_string(),
                     ));
                 }
@@ -385,11 +385,11 @@ pub fn event_tree_lookup(db: &Db, event_tree_root_id: PageID, position: Position
             Node::EventLeaf(leaf) => {
                 match leaf.keys.binary_search(&position) {
                     Ok(i) => {
-                        let rec = materialize_event_value(db, &leaf.values[i])?;
+                        let rec = materialize_event_value(lmdb, &leaf.values[i])?;
                         return Ok(rec);
                     }
                     Err(_) => {
-                        return Err(DbError::DatabaseCorrupted(format!(
+                        return Err(LmdbError::DatabaseCorrupted(format!(
                             "Event at position {:?} not found",
                             position
                         )));
@@ -397,7 +397,7 @@ pub fn event_tree_lookup(db: &Db, event_tree_root_id: PageID, position: Position
                 }
             }
             _ => {
-                return Err(DbError::DatabaseCorrupted(
+                return Err(LmdbError::DatabaseCorrupted(
                     "Expected EventInternal or EventLeaf node in event tree".to_string(),
                 ));
             }
@@ -406,14 +406,14 @@ pub fn event_tree_lookup(db: &Db, event_tree_root_id: PageID, position: Position
 }
 
 pub struct EventIterator<'a> {
-    pub db: &'a Db,
+    pub db: &'a Lmdb,
     pub stack: Vec<(PageID, usize)>,
     pub page_cache: HashMap<PageID, Page>,
     pub after: Position,
 }
 
 impl<'a> EventIterator<'a> {
-    pub fn new(db: &'a Db, event_tree_root_id: PageID, after: Option<Position>) -> Self {
+    pub fn new(db: &'a Lmdb, event_tree_root_id: PageID, after: Option<Position>) -> Self {
         let next_position = (event_tree_root_id, 0);
         let after = after.unwrap_or(Position(0));
         Self {
@@ -424,7 +424,7 @@ impl<'a> EventIterator<'a> {
         }
     }
 
-    pub fn next_batch(&mut self, batch_size: usize) -> Result<Vec<(Position, EventRecord)>> {
+    pub fn next_batch(&mut self, batch_size: usize) -> LmdbResult<Vec<(Position, EventRecord)>> {
         let mut result: Vec<(Position, EventRecord)> = Vec::with_capacity(batch_size);
         if batch_size == 0 {
             return Ok(result);
@@ -513,7 +513,7 @@ impl<'a> EventIterator<'a> {
                         }
                     }
                     _ => {
-                        return Err(DbError::DatabaseCorrupted(
+                        return Err(LmdbError::DatabaseCorrupted(
                             "Expected EventInternal or EventLeaf node in event tree".to_string(),
                         ));
                     }
@@ -550,10 +550,10 @@ mod tests {
     static VERBOSE: bool = false;
 
     // Helper function to create a test database with a specified page size
-    fn construct_db(page_size: usize) -> (tempfile::TempDir, Db) {
+    fn construct_db(page_size: usize) -> (tempfile::TempDir, Lmdb) {
         let temp_dir = tempdir().unwrap();
         let db_path = temp_dir.path().join("lmdb-test.db");
-        let db = Db::new(&db_path, page_size, VERBOSE).unwrap();
+        let db = Lmdb::new(&db_path, page_size, VERBOSE).unwrap();
         (temp_dir, db)
     }
 
@@ -580,13 +580,13 @@ mod tests {
         event_tree_append(&db, &mut writer, record.clone(), position).unwrap();
 
         // Verify that the dirty root page contains the appended key/value
-        let new_root_id = writer.event_tree_root_id;
+        let new_root_id = writer.events_tree_root_id;
         assert!(writer.dirty.contains_key(&new_root_id));
         let page = writer.dirty.get(&new_root_id).unwrap();
         match &page.node {
             Node::EventLeaf(node) => {
                 assert_eq!(vec![position], node.keys);
-                assert_eq!(vec![crate::events_btree_nodes::EventValue::Inline(record.clone())], node.values);
+                assert_eq!(vec![crate::events_tree_nodes::EventValue::Inline(record.clone())], node.values);
             }
             _ => panic!("Expected EventLeaf node"),
         }
@@ -600,7 +600,7 @@ mod tests {
         match &persisted_page.node {
             Node::EventLeaf(node) => {
                 assert_eq!(vec![position], node.keys);
-                assert_eq!(vec![crate::events_btree_nodes::EventValue::Inline(record)], node.values);
+                assert_eq!(vec![crate::events_tree_nodes::EventValue::Inline(record)], node.values);
             }
             _ => panic!("Expected EventLeaf node after commit"),
         }
@@ -633,7 +633,7 @@ mod tests {
             event_tree_append(&db, &mut writer, record, position).unwrap();
 
             // Check if we've split the leaf
-            let root_page = writer.dirty.get(&writer.event_tree_root_id).unwrap();
+            let root_page = writer.dirty.get(&writer.events_tree_root_id).unwrap();
             match &root_page.node {
                 Node::EventInternal(_) => {
                     has_split_leaf = true;
@@ -646,7 +646,7 @@ mod tests {
         let mut copy_inserted = appended.clone();
 
         // Get the root node
-        let root_page = writer.dirty.get(&writer.event_tree_root_id).unwrap();
+        let root_page = writer.dirty.get(&writer.events_tree_root_id).unwrap();
         let root_node = match &root_page.node {
             Node::EventInternal(node) => node,
             _ => panic!("Expected EventInternal node"),
@@ -704,7 +704,7 @@ mod tests {
             event_tree_append(&db, &mut writer, record, position).unwrap();
 
             // Check if we've split the leaf
-            let root_page = writer.dirty.get(&writer.event_tree_root_id).unwrap();
+            let root_page = writer.dirty.get(&writer.events_tree_root_id).unwrap();
             match &root_page.node {
                 Node::EventInternal(_) => {
                     has_split_leaf = true;
@@ -722,7 +722,7 @@ mod tests {
         let writer = db.writer().unwrap();
 
         // Get the root node
-        let root_page = db.read_page(writer.event_tree_root_id).unwrap();
+        let root_page = db.read_page(writer.events_tree_root_id).unwrap();
         let root_node = match &root_page.node {
             Node::EventInternal(node) => node,
             _ => panic!("Expected EventInternal node"),
@@ -780,7 +780,7 @@ mod tests {
             event_tree_append(&db, &mut writer, record, position).unwrap();
 
             // Check if we've split an internal node
-            let root_page = writer.dirty.get(&writer.event_tree_root_id).unwrap();
+            let root_page = writer.dirty.get(&writer.events_tree_root_id).unwrap();
             match &root_page.node {
                 Node::EventInternal(root_node) => {
                     // Check if the first child is an internal node
@@ -804,7 +804,7 @@ mod tests {
         let mut copy_inserted = appended.clone();
 
         // Get the root node
-        let root_page = writer.dirty.get(&writer.event_tree_root_id).unwrap();
+        let root_page = writer.dirty.get(&writer.events_tree_root_id).unwrap();
         let root_node = match &root_page.node {
             Node::EventInternal(node) => node,
             _ => panic!("Expected EventInternal node"),
@@ -867,7 +867,7 @@ mod tests {
             event_tree_append(&db, &mut writer, record, position).unwrap();
 
             // Check if the root is an internal node
-            let root_page = writer.dirty.get(&writer.event_tree_root_id).unwrap();
+            let root_page = writer.dirty.get(&writer.events_tree_root_id).unwrap();
             match &root_page.node {
                 Node::EventInternal(root_node) => {
                     // Check if the first child is an internal node
@@ -895,7 +895,7 @@ mod tests {
         let writer = db.writer().unwrap();
 
         // Get the root node
-        let root_page = db.read_page(writer.event_tree_root_id).unwrap();
+        let root_page = db.read_page(writer.events_tree_root_id).unwrap();
         let root_node = match &root_page.node {
             Node::EventInternal(node) => node,
             _ => panic!("Expected EventInternal node"),
@@ -960,7 +960,7 @@ mod tests {
             event_tree_append(&db, &mut writer, record, position).unwrap();
 
             // Check if the root is an internal node
-            let root_page = writer.dirty.get(&writer.event_tree_root_id).unwrap();
+            let root_page = writer.dirty.get(&writer.events_tree_root_id).unwrap();
             match &root_page.node {
                 Node::EventInternal(root_node) => {
                     // Check if the first child is an internal node
@@ -1083,7 +1083,7 @@ mod tests {
             event_tree_append(&db, &mut writer, record, position).unwrap();
 
             // Check if the root is an internal node
-            let root_page = writer.dirty.get(&writer.event_tree_root_id).unwrap();
+            let root_page = writer.dirty.get(&writer.events_tree_root_id).unwrap();
             match &root_page.node {
                 Node::EventInternal(root_node) => {
                     // Check if the first child is an internal node

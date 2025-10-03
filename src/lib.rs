@@ -3,17 +3,17 @@
 //! This library provides an event store implementation with support for
 //! dynamic consistency boundaries.
 
-pub mod api;
+pub mod dcbapi;
 pub mod grpc;
-pub mod event_store;
-mod db;
+pub mod dcbdb;
+mod lmdb;
 mod common;
-mod events_btree;
-mod events_btree_nodes;
-mod free_list_nodes;
+mod events_tree;
+mod events_tree_nodes;
+mod free_lists_tree_nodes;
 mod header_node;
 mod node;
 mod page;
 mod pager;
-mod tags_btree_nodes;
-mod tags_btree;
+mod tags_tree_nodes;
+mod tags_tree;

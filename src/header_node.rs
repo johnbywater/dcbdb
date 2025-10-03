@@ -1,21 +1,25 @@
-use crate::common::{DbResult, Position};
-use crate::common::{DbError, PageID, Tsn};
+use crate::common::{LmdbResult, Position};
+use crate::common::{LmdbError, PageID, Tsn};
 
 // Node type definitions
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeaderNode {
     pub tsn: Tsn,
     pub next_page_id: PageID,
-    pub free_page_tree_root_id: PageID,
+    pub free_lists_tree_root_id: PageID,
     pub event_tree_root_id: PageID,
     pub tags_tree_root_id: PageID,
     pub next_position: Position,
 }
 
 impl HeaderNode {
-    /// Serializes the HeaderNode to a byte array with 48 bytes
-    /// 8 bytes for tsn, 8 bytes for next_page_id, 8 bytes for freetree_root_id, 8 bytes for position_root_id,
-    /// 8 bytes for root_tags_tree_id, and 8 bytes for next_position
+    /// Serializes the HeaderNode to a byte array with 48 bytes:
+    /// - 8 bytes for tsn
+    /// - 8 bytes for next_page_id
+    /// - 8 bytes for free_lists_tree_root_id
+    /// - 8 bytes for event_tree_root_id
+    /// - 8 bytes for tags_tree_root_id
+    /// - 8 bytes for next_position
     ///
     /// # Returns
     /// * `Vec<u8>` - The serialized data
@@ -23,7 +27,7 @@ impl HeaderNode {
         let mut result = Vec::with_capacity(48);
         result.extend_from_slice(&self.tsn.0.to_le_bytes());
         result.extend_from_slice(&self.next_page_id.0.to_le_bytes());
-        result.extend_from_slice(&self.free_page_tree_root_id.0.to_le_bytes());
+        result.extend_from_slice(&self.free_lists_tree_root_id.0.to_le_bytes());
         result.extend_from_slice(&self.event_tree_root_id.0.to_le_bytes());
         result.extend_from_slice(&self.tags_tree_root_id.0.to_le_bytes());
         result.extend_from_slice(&self.next_position.0.to_le_bytes());
@@ -34,9 +38,9 @@ impl HeaderNode {
     /// Expects a slice with 48 bytes:
     /// - 8 bytes for tsn
     /// - 8 bytes for next_page_id
-    /// - 8 bytes for freetree_root_id
-    /// - 8 bytes for position_root_id
-    /// - 8 bytes for root_tags_tree_id
+    /// - 8 bytes for free_lists_tree_root_id
+    /// - 8 bytes for event_tree_root_id
+    /// - 8 bytes for tags_tree_root_id
     /// - 8 bytes for next_position
     ///
     /// # Arguments
@@ -44,9 +48,9 @@ impl HeaderNode {
     ///
     /// # Returns
     /// * `Result<Self>` - The deserialized HeaderNode or an error
-    pub fn from_slice(slice: &[u8]) -> DbResult<Self> {
+    pub fn from_slice(slice: &[u8]) -> LmdbResult<Self> {
         if slice.len() != 48 {
-            return Err(DbError::DeserializationError(format!(
+            return Err(LmdbError::DeserializationError(format!(
                 "Expected 48 bytes, got {}",
                 slice.len()
             )));
@@ -74,7 +78,7 @@ impl HeaderNode {
         Ok(HeaderNode {
             tsn: Tsn(tsn),
             next_page_id: PageID(next_page_id),
-            free_page_tree_root_id: PageID(freetree_root_id),
+            free_lists_tree_root_id: PageID(freetree_root_id),
             event_tree_root_id: PageID(position_root_id),
             tags_tree_root_id: PageID(tags_root_id),
             next_position: Position(next_position),
@@ -91,7 +95,7 @@ mod tests {
         let header_node = HeaderNode {
             tsn: Tsn(42),
             next_page_id: PageID(123),
-            free_page_tree_root_id: PageID(456),
+            free_lists_tree_root_id: PageID(456),
             event_tree_root_id: PageID(789),
             tags_tree_root_id: PageID(321),
             next_position: Position(9876543210),
@@ -130,8 +134,8 @@ mod tests {
         assert_eq!(header_node.tsn, deserialized.tsn);
         assert_eq!(header_node.next_page_id, deserialized.next_page_id);
         assert_eq!(
-            header_node.free_page_tree_root_id,
-            deserialized.free_page_tree_root_id
+            header_node.free_lists_tree_root_id,
+            deserialized.free_lists_tree_root_id
         );
         assert_eq!(
             header_node.event_tree_root_id,

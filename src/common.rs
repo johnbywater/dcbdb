@@ -2,7 +2,7 @@ use std::{fmt, io};
 
 // Error types
 #[derive(Debug)]
-pub enum DbError {
+pub enum LmdbError {
     Io(io::Error),
     PageNotFound(PageID),
     DirtyPageNotFound(PageID),
@@ -14,40 +14,40 @@ pub enum DbError {
     PageAlreadyDirty(PageID),
 }
 
-impl From<io::Error> for DbError {
+impl From<io::Error> for LmdbError {
     fn from(err: io::Error) -> Self {
-        DbError::Io(err)
+        LmdbError::Io(err)
     }
 }
 
-impl fmt::Display for DbError {
+impl fmt::Display for LmdbError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            DbError::Io(err) => write!(f, "IO error: {err}"),
-            DbError::PageNotFound(page_id) => write!(f, "Page not found: {page_id:?}"),
-            DbError::DirtyPageNotFound(page_id) => {
+            LmdbError::Io(err) => write!(f, "IO error: {err}"),
+            LmdbError::PageNotFound(page_id) => write!(f, "Page not found: {page_id:?}"),
+            LmdbError::DirtyPageNotFound(page_id) => {
                 write!(f, "Dirty page not found: {page_id:?}")
             }
-            DbError::RootIDMismatch(old_id, new_id) => {
+            LmdbError::RootIDMismatch(old_id, new_id) => {
                 write!(f, "Root ID mismatched: old {old_id:?} new {new_id:?}")
             }
-            DbError::DatabaseCorrupted(msg) => write!(f, "Database corrupted: {msg}"),
-            DbError::SerializationError(msg) => write!(f, "Serialization error: {msg}"),
-            DbError::DeserializationError(msg) => write!(f, "Deserialization error: {msg}"),
-            DbError::PageAlreadyFreed(page_id) => {
+            LmdbError::DatabaseCorrupted(msg) => write!(f, "Database corrupted: {msg}"),
+            LmdbError::SerializationError(msg) => write!(f, "Serialization error: {msg}"),
+            LmdbError::DeserializationError(msg) => write!(f, "Deserialization error: {msg}"),
+            LmdbError::PageAlreadyFreed(page_id) => {
                 write!(f, "Page already freed: {page_id:?}")
             }
-            DbError::PageAlreadyDirty(page_id) => {
+            LmdbError::PageAlreadyDirty(page_id) => {
                 write!(f, "Page already dirty: {page_id:?}")
             }
         }
     }
 }
 
-impl std::error::Error for DbError {}
+impl std::error::Error for LmdbError {}
 
 // Result type alias
-pub type DbResult<T> = Result<T, DbError>;
+pub type LmdbResult<T> = Result<T, LmdbError>;
 
 // NewType definitions
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

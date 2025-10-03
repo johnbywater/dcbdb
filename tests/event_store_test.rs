@@ -1,11 +1,11 @@
-use dcbdb::api::{
+use dcbdb::dcbapi::{
     DCBAppendCondition, DCBEvent, DCBEventStoreAPI, DCBQuery, DCBQueryItem, EventStoreError,
 };
 use dcbdb::grpc::GrpcEventStoreClient;
 // use dcbdb::store::EventStore;
 use std::thread;
 use std::time::Duration;
-use dcbdb::event_store::EventStore;
+use dcbdb::dcbdb::EventStore;
 use tempfile::tempdir;
 use uuid::Uuid;
 // Import the EventStore and related types from the main crate

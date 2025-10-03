@@ -6,11 +6,11 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, transport::Server};
 
-use crate::api::{
+use crate::dcbapi::{
     DCBAppendCondition, DCBEvent, DCBEventStoreAPI, DCBQuery, DCBQueryItem, DCBSequencedEvent,
     EventStoreError, Result as DCBResult,
 };
-use crate::event_store::EventStore;
+use crate::dcbdb::EventStore;
 
 // Include the generated proto code
 pub mod dcbdb {
@@ -384,7 +384,7 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
         query: Option<DCBQuery>,
         after: Option<u64>,
         limit: Option<usize>,
-    ) -> DCBResult<Box<dyn crate::api::DCBReadResponse + '_>> {
+    ) -> DCBResult<Box<dyn crate::dcbapi::DCBReadResponse + '_>> {
         // Convert API types to proto types
         let query_proto = query.map(|q| QueryProto {
             items: q
@@ -419,7 +419,7 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
                     Ok(Box::new(GrpcReadResponse::new_with_current_runtime(
                         stream.into_inner(),
                     ))
-                        as Box<dyn crate::api::DCBReadResponse + '_>)
+                        as Box<dyn crate::dcbapi::DCBReadResponse + '_>)
                 }
                 Err(status) => Err(EventStoreError::Io(std::io::Error::other(format!(
                     "gRPC read error: {status}"
@@ -435,7 +435,7 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
                     // Create a GrpcReadResponse that implements DCBReadResponse
                     Ok(
                         Box::new(GrpcReadResponse::new_with_runtime(rt, stream.into_inner()))
-                            as Box<dyn crate::api::DCBReadResponse + '_>,
+                            as Box<dyn crate::dcbapi::DCBReadResponse + '_>,
                     )
                 }
                 Err(status) => Err(EventStoreError::Io(std::io::Error::other(format!(
@@ -640,7 +640,7 @@ impl Iterator for GrpcReadResponse {
     }
 }
 
-impl crate::api::DCBReadResponse for GrpcReadResponse {
+impl crate::dcbapi::DCBReadResponse for GrpcReadResponse {
     fn head(&self) -> Option<u64> {
         self.head
     }

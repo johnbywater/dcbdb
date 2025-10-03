@@ -1,8 +1,8 @@
-use crate::common::{DbError, DbResult};
-use crate::events_btree_nodes::{EventInternalNode, EventLeafNode, EventOverflowNode};
-use crate::free_list_nodes::{FreeListInternalNode, FreeListLeafNode};
+use crate::common::{LmdbError, LmdbResult};
+use crate::events_tree_nodes::{EventInternalNode, EventLeafNode, EventOverflowNode};
+use crate::free_lists_tree_nodes::{FreeListInternalNode, FreeListLeafNode};
 use crate::header_node::HeaderNode;
-use crate::tags_btree_nodes::{TagInternalNode, TagLeafNode, TagsInternalNode, TagsLeafNode};
+use crate::tags_tree_nodes::{TagInternalNode, TagLeafNode, TagsInternalNode, TagsLeafNode};
 
 // Constants for serialization
 const PAGE_TYPE_HEADER: u8 = b'1';
@@ -62,7 +62,7 @@ impl Node {
         }
     }
 
-    pub fn serialize(&self) -> DbResult<Vec<u8>> {
+    pub fn serialize(&self) -> LmdbResult<Vec<u8>> {
         match self {
             Node::Header(node) => Ok(node.serialize()),
             Node::FreeListLeaf(node) => node.serialize(),
@@ -77,7 +77,7 @@ impl Node {
         }
     }
 
-    pub fn deserialize(node_type: u8, data: &[u8]) -> DbResult<Self> {
+    pub fn deserialize(node_type: u8, data: &[u8]) -> LmdbResult<Self> {
         match node_type {
             PAGE_TYPE_HEADER => {
                 let node = HeaderNode::from_slice(data)?;
@@ -119,7 +119,7 @@ impl Node {
                 let node = TagInternalNode::from_slice(data)?;
                 Ok(Node::TagInternal(node))
             }
-            _ => Err(DbError::DatabaseCorrupted(format!(
+            _ => Err(LmdbError::DatabaseCorrupted(format!(
                 "Invalid node type: {node_type}"
             ))),
         }

@@ -419,8 +419,7 @@ pub fn event_tree_lookup(
                 }
                 Err(_) => {
                     return Err(DCBError::DatabaseCorrupted(format!(
-                        "Event at position {:?} not found",
-                        position
+                        "Event at position {position:?} not found",
                     )));
                 }
             },

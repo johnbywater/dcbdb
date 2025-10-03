@@ -23,7 +23,7 @@ pub fn tags_tree_insert(
 ) -> DCBResult<()> {
     let verbose = lmdb.verbose;
     if verbose {
-        println!("Inserting position {pos:?} for tag {:?}", tag);
+        println!("Inserting position {pos:?} for tag {tag:?}");
         println!("Tags root is {:?}", writer.tags_tree_root_id);
     }
 
@@ -59,7 +59,7 @@ pub fn tags_tree_insert(
     }
 
     if verbose {
-        println!("{:?} is TagsLeaf node", current_page_id);
+        println!("{current_page_id:?} is TagsLeaf node");
     }
 
     // Make the leaf page dirty (copy-on-write if needed)
@@ -87,7 +87,7 @@ pub fn tags_tree_insert(
                             leaf.values[i].positions.push(pos);
                             inline_appended_index = Some(i);
                             if verbose {
-                                println!("Appended position to existing tag at index {}", i);
+                                println!("Appended position to existing tag at index {i}");
                             }
                         } else {
                             // Defer per-tag append to after we drop the borrow
@@ -105,7 +105,7 @@ pub fn tags_tree_insert(
                             },
                         );
                         if verbose {
-                            println!("Inserted new tag at index {}", i);
+                            println!("Inserted new tag at index {i}");
                         }
                     }
                 }
@@ -189,7 +189,7 @@ pub fn tags_tree_insert(
                             // Move last pos to a new right leaf
                             let last_pos = tleaf
                                 .pop_last_position()
-                                .map_err(|e| DCBError::DatabaseCorrupted(format!("{}", e)))?;
+                                .map_err(|e| DCBError::DatabaseCorrupted(format!("{e}")))?;
                             let right_id = {
                                 let id = writer.alloc_page_id();
                                 let page = Page::new(
@@ -331,8 +331,7 @@ pub fn tags_tree_insert(
         if sz > lmdb.page_size {
             if verbose {
                 println!(
-                    "Migrating inline positions to per-tag TagLeafNode for index {}",
-                    i
+                    "Migrating inline positions to per-tag TagLeafNode for index {i}",
                 );
             }
             // Take positions out into a local var
@@ -394,7 +393,7 @@ pub fn tags_tree_insert(
                         writer.insert_dirty(page)?;
                         id
                     };
-                    let internal_id = {
+                    {
                         let internal = TagInternalNode {
                             keys: vec![last_pos],
                             child_ids: vec![left_id, right_id],
@@ -403,8 +402,7 @@ pub fn tags_tree_insert(
                         let page = Page::new(id, Node::TagInternal(internal));
                         writer.insert_dirty(page)?;
                         id
-                    };
-                    internal_id
+                    }
                 }
             };
             // Update root_id in the leaf
@@ -434,7 +432,7 @@ pub fn tags_tree_insert(
             let mid = leaf.keys.len() / 2;
             let right_keys: Vec<TagHash> = leaf.keys.split_off(mid);
             let right_values: Vec<TagsLeafValue> = leaf.values.split_off(mid);
-            let promoted_key = right_keys[0].clone();
+            let promoted_key = right_keys[0];
             if verbose {
                 println!(
                     "Split TagsLeaf {:?}, moving {} keys to new right sibling; promoted key {:?}",
@@ -484,8 +482,7 @@ pub fn tags_tree_insert(
                     internal.child_ids[target_idx] = new_id;
                     if verbose {
                         println!(
-                            "Replaced child at idx {}: {:?} -> {:?} in {:?}",
-                            target_idx, old_id, new_id, dirty_parent_page_id
+                            "Replaced child at idx {target_idx}: {old_id:?} -> {new_id:?} in {dirty_parent_page_id:?}",
                         );
                     }
                 } else {
@@ -494,7 +491,7 @@ pub fn tags_tree_insert(
                     ));
                 }
             } else if verbose {
-                println!("No child replacement needed in {:?}", dirty_parent_page_id);
+                println!("No child replacement needed in {dirty_parent_page_id:?}");
             }
         } else {
             return Err(DCBError::DatabaseCorrupted(
@@ -511,8 +508,7 @@ pub fn tags_tree_insert(
                 internal.child_ids.insert(insert_child_idx, new_child_id);
                 if verbose {
                     println!(
-                        "Inserted promoted key at {} and child at {} in {:?}",
-                        insert_key_idx, insert_child_idx, dirty_parent_page_id
+                        "Inserted promoted key at {insert_key_idx} and child at {insert_child_idx} in {dirty_parent_page_id:?}",
                     );
                 }
             } else {
@@ -527,7 +523,7 @@ pub fn tags_tree_insert(
         if needs_split {
             if let Node::TagsInternal(internal) = &mut parent_page.node {
                 if verbose {
-                    println!("Splitting TagsInternal {:?}...", dirty_parent_page_id);
+                    println!("Splitting TagsInternal {dirty_parent_page_id:?}...");
                 }
                 if internal.keys.len() < 3 || internal.child_ids.len() < 4 {
                     return Err(DCBError::DatabaseCorrupted(
@@ -545,7 +541,7 @@ pub fn tags_tree_insert(
                 let new_internal_page =
                     Page::new(new_internal_id, Node::TagsInternal(new_internal));
                 if verbose {
-                    println!("Created new TagsInternal {:?}", new_internal_id);
+                    println!("Created new TagsInternal {new_internal_id:?}");
                 }
                 writer.insert_dirty(new_internal_page)?;
                 split_info = Some((promote_up, new_internal_id));
@@ -567,7 +563,7 @@ pub fn tags_tree_insert(
         if writer.tags_tree_root_id == old_id {
             writer.tags_tree_root_id = new_id;
             if verbose {
-                println!("Replaced Tags root {:?} -> {:?}", old_id, new_id);
+                println!("Replaced Tags root {old_id:?} -> {new_id:?}");
             }
         } else {
             return Err(DCBError::RootIDMismatch(old_id, new_id));
@@ -583,7 +579,7 @@ pub fn tags_tree_insert(
         };
         let new_root_page = Page::new(new_root_id, Node::TagsInternal(new_root));
         if verbose {
-            println!("Created new TagsInternal root {:?}", new_root_id);
+            println!("Created new TagsInternal root {new_root_id:?}");
         }
         writer.insert_dirty(new_root_page)?;
         writer.tags_tree_root_id = new_root_id;

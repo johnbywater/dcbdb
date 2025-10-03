@@ -18,7 +18,7 @@ static DEFAULT_PAGE_SIZE: usize = 4096;
 
 // Map MVCC errors to API errors
 fn map_mvcc_err<E: std::fmt::Display>(e: E) -> DCBError {
-    DCBError::Corruption(format!("{}", e))
+    DCBError::Corruption(format!("{e}"))
 }
 
 /// LMDB-backed EventStore implementing the DCBEventStore
@@ -95,6 +95,7 @@ fn tag_to_hash(tag: &str) -> TagHash {
 /// - issue a position from the writer
 /// - append an EventRecord to the event tree
 /// - insert the position for each tag into the tags tree
+///
 /// Finally, it commits the writer.
 pub fn unconditional_append(lmdb: &Lmdb, events: Vec<DCBEvent>) -> DCBResult<u64> {
     let mut writer = lmdb.writer()?;
@@ -110,10 +111,10 @@ pub fn unconditional_append(lmdb: &Lmdb, events: Vec<DCBEvent>) -> DCBResult<u64
         };
         // Clone tags so we can index them after moving record into event_tree_append
         let tags = record.tags.clone();
-        event_tree_append(&lmdb, &mut writer, record, position)?;
+        event_tree_append(lmdb, &mut writer, record, position)?;
         for tag in tags.iter() {
             let tag_hash: TagHash = tag_to_hash(tag);
-            tags_tree_insert(&lmdb, &mut writer, tag_hash, position)?;
+            tags_tree_insert(lmdb, &mut writer, tag_hash, position)?;
         }
     }
 
@@ -137,7 +138,7 @@ pub fn read_conditional(
     // If no items, return all events with after/limit respected via sequential scan
     if query.items.is_empty() {
         let reader = lmdb.reader()?;
-        let mut iter = EventIterator::new(&lmdb, reader.event_tree_root_id, Some(after));
+        let mut iter = EventIterator::new(lmdb, reader.event_tree_root_id, Some(after));
         let mut out: Vec<DCBSequencedEvent> = Vec::new();
         'outer_all: loop {
             let batch = iter.next_batch(64)?;
@@ -168,7 +169,7 @@ pub fn read_conditional(
     if !all_items_have_tags {
         // Fallback: sequentially scan all events and apply the same matching logic
         let reader = lmdb.reader()?;
-        let mut iter = EventIterator::new(&lmdb, reader.event_tree_root_id, Some(after));
+        let mut iter = EventIterator::new(lmdb, reader.event_tree_root_id, Some(after));
         let mut out: Vec<DCBSequencedEvent> = Vec::new();
         let matches_item = |rec: &EventRecord| -> bool {
             for item in &query.items {
@@ -254,7 +255,7 @@ pub fn read_conditional(
     let mut tag_iters: Vec<PositionTagQiidIterator<_>> = Vec::new();
     for (tag, qiids) in tag_qiis.iter() {
         let tag_hash: TagHash = tag_to_hash(tag);
-        let positions_iter = tags_tree_iter(&lmdb, &reader, tag_hash, after)?; // yields positions for tag
+        let positions_iter = tags_tree_iter(lmdb, &reader, tag_hash, after)?; // yields positions for tag
         tag_iters.push(PositionTagQiidIterator::new(
             positions_iter,
             tag.clone(),
@@ -342,7 +343,7 @@ pub fn read_conditional(
         }
 
         // Lookup the event record at position
-        let rec = event_tree_lookup(&lmdb, reader2.event_tree_root_id, pos)?;
+        let rec = event_tree_lookup(lmdb, reader2.event_tree_root_id, pos)?;
 
         // Check type matching against any of the matching items
         let mut type_ok = false;

@@ -151,7 +151,7 @@ impl EventLeafNode {
                     // Serialize event_type bytes
                     result.extend_from_slice(event_type.as_bytes());
                     // Serialize data_len (8 bytes)
-                    result.extend_from_slice(&(*data_len as u64).to_le_bytes());
+                    result.extend_from_slice(&(*data_len).to_le_bytes());
                     // Serialize number of tags (2 bytes)
                     result.extend_from_slice(&(tags.len() as u16).to_le_bytes());
                     // Serialize each tag (2 bytes for length + string bytes)

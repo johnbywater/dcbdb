@@ -27,8 +27,8 @@ pub struct Reader {
 
 impl Drop for Reader {
     fn drop(&mut self) {
-        // Safety: The Mutex is valid as long as the Lmdb instance is valid,
-        // and the LmdbReader doesn't outlive the Lmdb instance.
+        // Safety: The Mutex is valid as long as the Db instance is valid,
+        // and the Reader doesn't outlive the Db instance.
         unsafe {
             if !self.reader_tsns.is_null() {
                 if let Ok(mut map) = (*self.reader_tsns).lock() {

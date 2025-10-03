@@ -7,8 +7,8 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, transport::Server};
 
 use crate::dcbapi::{
-    DCBAppendCondition, DCBEvent, DCBEventStoreAPI, DCBQuery, DCBQueryItem, DCBSequencedEvent,
-    EventStoreError, DCBResult,
+    DCBAppendCondition, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem, DCBSequencedEvent,
+    DCBError, DCBResult,
 };
 use crate::event_store::EventStore;
 
@@ -179,13 +179,13 @@ impl EventStoreHandle {
             })
             .await
             .map_err(|_| {
-                EventStoreError::Io(std::io::Error::other(
+                DCBError::Io(std::io::Error::other(
                     "Failed to send read request to EventStore thread",
                 ))
             })?;
 
         response_rx.await.map_err(|_| {
-            EventStoreError::Io(std::io::Error::other(
+            DCBError::Io(std::io::Error::other(
                 "Failed to receive read response from EventStore thread",
             ))
         })?
@@ -206,13 +206,13 @@ impl EventStoreHandle {
             })
             .await
             .map_err(|_| {
-                EventStoreError::Io(std::io::Error::other(
+                DCBError::Io(std::io::Error::other(
                     "Failed to send append request to EventStore thread",
                 ))
             })?;
 
         response_rx.await.map_err(|_| {
-            EventStoreError::Io(std::io::Error::other(
+            DCBError::Io(std::io::Error::other(
                 "Failed to receive append response from EventStore thread",
             ))
         })?
@@ -225,13 +225,13 @@ impl EventStoreHandle {
             .send(EventStoreRequest::Head { response_tx })
             .await
             .map_err(|_| {
-                EventStoreError::Io(std::io::Error::other(
+                DCBError::Io(std::io::Error::other(
                     "Failed to send head request to EventStore thread",
                 ))
             })?;
 
         response_rx.await.map_err(|_| {
-            EventStoreError::Io(std::io::Error::other(
+            DCBError::Io(std::io::Error::other(
                 "Failed to receive head response from EventStore thread",
             ))
         })?
@@ -327,7 +327,7 @@ impl EventStoreService for GrpcEventStoreServer {
             Err(e) => {
                 // Convert the error to a gRPC status with specific error type information
                 match e {
-                    EventStoreError::IntegrityError => Err(Status::failed_precondition(
+                    DCBError::IntegrityError => Err(Status::failed_precondition(
                         "Integrity error: condition failed",
                     )),
                     _ => Err(Status::internal(format!("Append error: {e:?}"))),
@@ -378,7 +378,7 @@ impl GrpcEventStoreClient {
 }
 
 #[async_trait::async_trait]
-impl DCBEventStoreAPI for GrpcEventStoreClient {
+impl DCBEventStore for GrpcEventStoreClient {
     fn read(
         &self,
         query: Option<DCBQuery>,
@@ -421,7 +421,7 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
                     ))
                         as Box<dyn crate::dcbapi::DCBReadResponse + '_>)
                 }
-                Err(status) => Err(EventStoreError::Io(std::io::Error::other(format!(
+                Err(status) => Err(DCBError::Io(std::io::Error::other(format!(
                     "gRPC read error: {status}"
                 )))),
             }
@@ -438,7 +438,7 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
                             as Box<dyn crate::dcbapi::DCBReadResponse + '_>,
                     )
                 }
-                Err(status) => Err(EventStoreError::Io(std::io::Error::other(format!(
+                Err(status) => Err(DCBError::Io(std::io::Error::other(format!(
                     "gRPC read error: {status}"
                 )))),
             }
@@ -498,9 +498,9 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
             Err(status) => {
                 // Check if the error message indicates an integrity error
                 if status.message().contains("Integrity error") {
-                    Err(EventStoreError::IntegrityError)
+                    Err(DCBError::IntegrityError)
                 } else {
-                    Err(EventStoreError::Io(std::io::Error::other(format!(
+                    Err(DCBError::Io(std::io::Error::other(format!(
                         "gRPC append error: {status}"
                     ))))
                 }
@@ -526,7 +526,7 @@ impl DCBEventStoreAPI for GrpcEventStoreClient {
 
         match response {
             Ok(response) => Ok(response.into_inner().position),
-            Err(status) => Err(EventStoreError::Io(std::io::Error::other(format!(
+            Err(status) => Err(DCBError::Io(std::io::Error::other(format!(
                 "gRPC head error: {status}"
             )))),
         }
@@ -609,7 +609,7 @@ impl GrpcReadResponse {
                 Ok(())
             }
             Ok(None) => Ok(()),
-            Err(status) => Err(EventStoreError::Io(std::io::Error::other(format!(
+            Err(status) => Err(DCBError::Io(std::io::Error::other(format!(
                 "gRPC stream error: {status}"
             )))),
         }

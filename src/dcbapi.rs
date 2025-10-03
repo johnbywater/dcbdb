@@ -62,7 +62,7 @@ pub trait DCBReadResponse: Iterator<Item = DCBSequencedEvent> {
 }
 
 /// Interface for recording and retrieving events
-pub trait DCBEventStoreAPI {
+pub trait DCBEventStore {
     /// Reads events from the store based on the provided query and constraints
     ///
     /// Returns a DCBReadResponse that provides an iterator over all events,
@@ -101,7 +101,7 @@ pub trait DCBEventStoreAPI {
 
 // Error types
 #[derive(Error, Debug)]
-pub enum EventStoreError {
+pub enum DCBError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
     #[error("Serialization error: {0}")]
@@ -204,4 +204,4 @@ mod tests {
     }
 }
 
-pub type DCBResult<T> = Result<T, EventStoreError>;
+pub type DCBResult<T> = Result<T, DCBError>;

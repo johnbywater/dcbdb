@@ -3,7 +3,7 @@ use std::path::Path;
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 
-use crate::dcbapi::{DCBAppendCondition, DCBEvent, DCBEventStoreAPI, DCBQuery, DCBSequencedEvent, DCBReadResponse, EventStoreError, DCBResult};
+use crate::dcbapi::{DCBAppendCondition, DCBEvent, DCBEventStore, DCBQuery, DCBSequencedEvent, DCBReadResponse, DCBError, DCBResult};
 use crate::lmdb::{Lmdb, LmdbResult};
 use crate::events_tree::{event_tree_append, event_tree_lookup, EventIterator};
 use crate::events_tree_nodes::EventRecord;
@@ -14,17 +14,17 @@ use crate::common::Position;
 static DEFAULT_PAGE_SIZE: usize = 4096;
 
 // Map MVCC errors to API errors
-fn map_mvcc_err<E: std::fmt::Display>(e: E) -> EventStoreError {
-    EventStoreError::Corruption(format!("{}", e))
+fn map_mvcc_err<E: std::fmt::Display>(e: E) -> DCBError {
+    DCBError::Corruption(format!("{}", e))
 }
 
-/// MVCC-backed EventStore implementing the DCBEventStoreAPI
+/// LMDB-backed EventStore implementing the DCBEventStore
 pub struct EventStore {
     lmdb: Lmdb,
 }
 
 impl EventStore {
-    /// Create a new MVCC EventStore at the given directory or file path.
+    /// Create a new EventStore at the given directory or file path.
     /// If a directory path is provided, a file named "dcb.db" will be used inside it.
     pub fn new<P: AsRef<Path>>(path: P) -> DCBResult<Self> {
         let p = path.as_ref();
@@ -301,7 +301,7 @@ pub fn read_conditional(lmdb: &Lmdb, query: DCBQuery, after: Position, limit: Op
     Ok(out)
 }
 
-impl DCBEventStoreAPI for EventStore {
+impl DCBEventStore for EventStore {
     fn read(
         &self,
         query: Option<DCBQuery>,
@@ -347,7 +347,7 @@ impl DCBEventStoreAPI for EventStore {
             let found = read_conditional(db, cond.fail_if_events_match.clone(), after, Some(1))
                 .map_err(map_mvcc_err)?;
             if !found.is_empty() {
-                return Err(EventStoreError::IntegrityError);
+                return Err(DCBError::IntegrityError);
             }
         }
 
@@ -368,7 +368,7 @@ mod tests {
     use super::*;
     use serial_test::serial;
     use tempfile::tempdir;
-    use crate::dcbapi::{DCBQuery, DCBQueryItem, DCBAppendCondition, EventStoreError};
+    use crate::dcbapi::{DCBQuery, DCBQueryItem, DCBAppendCondition, DCBError};
 
     static VERBOSE: bool = false;
 
@@ -621,7 +621,7 @@ mod tests {
         let before_head = store.head().unwrap();
         let res = store.append(vec![DCBEvent { event_type: "TypeD".to_string(), data: vec![4], tags: vec!["qux".to_string()] }], Some(cond_fail));
         match res {
-            Err(EventStoreError::IntegrityError) => {}
+            Err(DCBError::IntegrityError) => {}
             other => panic!("Expected IntegrityError, got {:?}", other),
         }
         // Ensure head unchanged after failed append

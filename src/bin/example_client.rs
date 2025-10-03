@@ -1,5 +1,5 @@
 use clap::Parser;
-use dcbdb::dcbapi::{DCBEvent, DCBEventStoreAPI, DCBQuery, DCBQueryItem};
+use dcbdb::dcbapi::{DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem};
 use dcbdb::grpc::GrpcEventStoreClient;
 
 #[derive(Parser)]

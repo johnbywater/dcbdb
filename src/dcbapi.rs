@@ -5,6 +5,7 @@
 
 use std::iter::Iterator;
 use thiserror::Error;
+use crate::common::PageID;
 
 /// Represents a query item for filtering events
 #[derive(Debug, Clone, Default)]
@@ -102,14 +103,37 @@ pub trait DCBEventStore {
 // Error types
 #[derive(Error, Debug)]
 pub enum DCBError {
+    // Generic/system errors
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    // Bincode-specific serialization error (kept for API completeness)
     #[error("Serialization error: {0}")]
     Serialization(#[from] bincode::error::EncodeError),
+
+    // DCB domain errors
     #[error("Integrity error: condition failed")]
     IntegrityError,
     #[error("Corruption detected: {0}")]
     Corruption(String),
+
+    // LMDB/Storage domain errors (unified into DCBError)
+    #[error("Page not found: {0:?}")]
+    PageNotFound(PageID),
+    #[error("Dirty page not found: {0:?}")]
+    DirtyPageNotFound(PageID),
+    #[error("Root ID mismatched: old {0:?} new {1:?}")]
+    RootIDMismatch(PageID, PageID),
+    #[error("Database corrupted: {0}")]
+    DatabaseCorrupted(String),
+    #[error("Serialization error: {0}")]
+    SerializationError(String),
+    #[error("Deserialization error: {0}")]
+    DeserializationError(String),
+    #[error("Page already freed: {0:?}")]
+    PageAlreadyFreed(PageID),
+    #[error("Page already dirty: {0:?}")]
+    PageAlreadyDirty(PageID),
 }
 
 #[cfg(test)]

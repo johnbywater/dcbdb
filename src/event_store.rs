@@ -23,7 +23,7 @@ fn map_mvcc_err<E: std::fmt::Display>(e: E) -> DCBError {
 
 /// LMDB-backed EventStore implementing the DCBEventStore
 pub struct EventStore {
-    lmdb: Lmdb,
+    lmdb: std::sync::Arc<Lmdb>,
 }
 
 impl EventStore {
@@ -37,7 +37,11 @@ impl EventStore {
             p.to_path_buf()
         };
         let lmdb = Lmdb::new(&file_path, DEFAULT_PAGE_SIZE, false).map_err(map_mvcc_err)?;
-        Ok(Self { lmdb })
+        Ok(Self { lmdb: std::sync::Arc::new(lmdb) })
+    }
+
+    pub fn from_arc(lmdb: std::sync::Arc<Lmdb>) -> Self {
+        Self { lmdb }
     }
 }
 

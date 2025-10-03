@@ -10,7 +10,8 @@ use crate::dcbapi::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem, DCBResult,
     DCBSequencedEvent,
 };
-use crate::event_store::EventStore;
+use crate::event_store::{EventStore, read_conditional};
+use crate::lmdb::Lmdb;
 
 // Include the generated proto code
 pub mod dcbdb {
@@ -84,20 +85,20 @@ impl From<DCBSequencedEvent> for SequencedEventProto {
 
 // Message types for communication between the gRPC server and the EventStore thread
 enum EventStoreRequest {
-    Read {
-        query: Option<DCBQuery>,
-        after: Option<u64>,
-        limit: Option<usize>,
-        response_tx: oneshot::Sender<DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)>>,
-    },
+    // Read {
+    //     query: Option<DCBQuery>,
+    //     after: Option<u64>,
+    //     limit: Option<usize>,
+    //     response_tx: oneshot::Sender<DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)>>,
+    // },
     Append {
         events: Vec<DCBEvent>,
         condition: Option<DCBAppendCondition>,
         response_tx: oneshot::Sender<DCBResult<u64>>,
     },
-    Head {
-        response_tx: oneshot::Sender<DCBResult<Option<u64>>>,
-    },
+    // Head {
+    //     response_tx: oneshot::Sender<DCBResult<Option<u64>>>,
+    // },
     #[allow(dead_code)]
     Shutdown,
 }
@@ -105,40 +106,37 @@ enum EventStoreRequest {
 // Thread-safe wrapper for EventStore
 struct EventStoreHandle {
     request_tx: mpsc::Sender<EventStoreRequest>,
+    lmdb: std::sync::Arc<crate::lmdb::Lmdb>,
 }
 
 impl EventStoreHandle {
     fn new<P: AsRef<Path> + Send + 'static>(path: P) -> std::io::Result<Self> {
-        // Create a channel for sending requests to the EventStore thread
+        // Create a channel for sending requests to the EventStore thread (for writes)
         let (request_tx, mut request_rx) = mpsc::channel::<EventStoreRequest>(32);
 
-        // Spawn a thread to run the EventStore
+        // Build a shared LMDB instance (Arc) upfront so reads can proceed concurrently on this thread
+        let p = path.as_ref();
+        let file_path = if p.is_dir() { p.join("dcb.db") } else { p.to_path_buf() };
+        let lmdb = std::sync::Arc::new(
+            Lmdb::new(&file_path, 4096, false)
+                .map_err(|e| std::io::Error::other(format!("Failed to init LMDB: {e:?}")))?,
+        );
+
+        // Spawn a thread to run the EventStore for serialized write operations
+        let lmdb_for_writer = lmdb.clone();
         thread::spawn(move || {
-            // Create the EventStore in this thread
-            let event_store = match EventStore::new(path) {
-                Ok(store) => store,
-                Err(e) => {
-                    eprintln!("Failed to create EventStore: {e:?}");
-                    return;
-                }
-            };
+            let event_store = EventStore::from_arc(lmdb_for_writer);
 
             // Create a runtime for async operations
             let rt = tokio::runtime::Runtime::new().unwrap();
 
-            // Process requests
+            // Process requests (append/head if needed). Note: reads will be served directly without going through this loop.
             rt.block_on(async {
                 while let Some(request) = request_rx.recv().await {
                     match request {
-                        EventStoreRequest::Read {
-                            query,
-                            after,
-                            limit,
-                            response_tx,
-                        } => {
-                            let result = event_store.read_with_head(query, after, limit);
-                            let _ = response_tx.send(result);
-                        }
+                        // EventStoreRequest::Read { .. } => {
+                        //     // No-op: reads should not be routed here anymore.
+                        // }
                         EventStoreRequest::Append {
                             events,
                             condition,
@@ -147,10 +145,10 @@ impl EventStoreHandle {
                             let result = event_store.append(events, condition);
                             let _ = response_tx.send(result);
                         }
-                        EventStoreRequest::Head { response_tx } => {
-                            let result = event_store.head();
-                            let _ = response_tx.send(result);
-                        }
+                        // EventStoreRequest::Head { response_tx } => {
+                        //     let result = event_store.head();
+                        //     let _ = response_tx.send(result);
+                        // }
                         EventStoreRequest::Shutdown => {
                             break;
                         }
@@ -159,7 +157,7 @@ impl EventStoreHandle {
             });
         });
 
-        Ok(Self { request_tx })
+        Ok(Self { request_tx, lmdb })
     }
 
     async fn read(
@@ -168,27 +166,29 @@ impl EventStoreHandle {
         after: Option<u64>,
         limit: Option<usize>,
     ) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
-        let (response_tx, response_rx) = oneshot::channel();
+        // Concurrent read path: use shared LMDB directly
+        let db: &Lmdb = &self.lmdb;
+        let (_, header) = db
+            .get_latest_header()
+            .map_err(|e| DCBError::Corruption(format!("{e}")))?;
+        let last_committed_position = header.next_position.0.saturating_sub(1);
 
-        self.request_tx
-            .send(EventStoreRequest::Read {
-                query,
-                after,
-                limit,
-                response_tx,
-            })
-            .await
-            .map_err(|_| {
-                DCBError::Io(std::io::Error::other(
-                    "Failed to send read request to EventStore thread",
-                ))
-            })?;
+        let q = query.unwrap_or(DCBQuery { items: vec![] });
+        let after_pos = crate::common::Position(after.unwrap_or(0));
+        let events = read_conditional(db, q, after_pos, limit)
+            .map_err(|e| DCBError::Corruption(format!("{e}")))?;
 
-        response_rx.await.map_err(|_| {
-            DCBError::Io(std::io::Error::other(
-                "Failed to receive read response from EventStore thread",
-            ))
-        })?
+        let head = if limit.is_none() {
+            if last_committed_position == 0 {
+                None
+            } else {
+                Some(last_committed_position)
+            }
+        } else {
+            events.last().map(|e| e.position)
+        };
+
+        Ok((events, head))
     }
 
     async fn append(
@@ -219,22 +219,12 @@ impl EventStoreHandle {
     }
 
     async fn head(&self) -> DCBResult<Option<u64>> {
-        let (response_tx, response_rx) = oneshot::channel();
-
-        self.request_tx
-            .send(EventStoreRequest::Head { response_tx })
-            .await
-            .map_err(|_| {
-                DCBError::Io(std::io::Error::other(
-                    "Failed to send head request to EventStore thread",
-                ))
-            })?;
-
-        response_rx.await.map_err(|_| {
-            DCBError::Io(std::io::Error::other(
-                "Failed to receive head response from EventStore thread",
-            ))
-        })?
+        let db: &Lmdb = &self.lmdb;
+        let (_, header) = db
+            .get_latest_header()
+            .map_err(|e| DCBError::Corruption(format!("{e}")))?;
+        let last = header.next_position.0.saturating_sub(1);
+        if last == 0 { Ok(None) } else { Ok(Some(last)) }
     }
 
     #[allow(dead_code)]
@@ -356,6 +346,7 @@ impl Clone for EventStoreHandle {
     fn clone(&self) -> Self {
         Self {
             request_tx: self.request_tx.clone(),
+            lmdb: self.lmdb.clone(),
         }
     }
 }

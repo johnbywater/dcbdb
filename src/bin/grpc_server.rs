@@ -15,12 +15,14 @@ struct Args {
     address: String,
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     println!("Starting gRPC server for database at {:?}", args.path);
     println!("Listening on {}", args.address);
+    let workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    println!("Tokio runtime flavor: multi_thread; worker threads (default) = {}", workers);
     println!("Press Ctrl+C to shutdown gracefully");
 
     // Create a shutdown channel

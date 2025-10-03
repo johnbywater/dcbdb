@@ -8,9 +8,9 @@ use tonic::{Request, Response, Status, transport::Server};
 
 use crate::dcbapi::{
     DCBAppendCondition, DCBEvent, DCBEventStoreAPI, DCBQuery, DCBQueryItem, DCBSequencedEvent,
-    EventStoreError, Result as DCBResult,
+    EventStoreError, DCBResult,
 };
-use crate::dcbdb::EventStore;
+use crate::event_store::EventStore;
 
 // Include the generated proto code
 pub mod dcbdb {

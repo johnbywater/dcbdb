@@ -58,7 +58,7 @@ pub trait DCBReadResponse: Iterator<Item = DCBSequencedEvent> {
     /// Returns a vector of events with head
     fn collect_with_head(&mut self) -> (Vec<DCBSequencedEvent>, Option<u64>);
     /// Returns a batch of events, updating head with the last event in the batch if there is one and if limit.is_some() is true
-    fn next_batch(&mut self) -> Result<Vec<DCBSequencedEvent>>;
+    fn next_batch(&mut self) -> DCBResult<Vec<DCBSequencedEvent>>;
 }
 
 /// Interface for recording and retrieving events
@@ -75,7 +75,7 @@ pub trait DCBEventStoreAPI {
         query: Option<DCBQuery>,
         after: Option<u64>,
         limit: Option<usize>,
-    ) -> Result<Box<dyn DCBReadResponse + '_>>;
+    ) -> DCBResult<Box<dyn DCBReadResponse + '_>>;
 
     /// Reads events from the store and returns them as a tuple of (Vec<DCBSequencedEvent>, Option<u64>)
     fn read_with_head(
@@ -83,7 +83,7 @@ pub trait DCBEventStoreAPI {
         query: Option<DCBQuery>,
         after: Option<u64>,
         limit: Option<usize>,
-    ) -> Result<(Vec<DCBSequencedEvent>, Option<u64>)> {
+    ) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
         let mut response = self.read(query, after, limit)?;
         Ok(response.collect_with_head())
     }
@@ -91,12 +91,12 @@ pub trait DCBEventStoreAPI {
     /// Returns the current head position of the event store, or None if empty
     ///
     /// Returns the value of last_committed_position, or None if last_committed_position is zero
-    fn head(&self) -> Result<Option<u64>>;
+    fn head(&self) -> DCBResult<Option<u64>>;
 
     /// Appends given events to the event store, unless the condition fails
     ///
     /// Returns the position of the last appended event
-    fn append(&self, events: Vec<DCBEvent>, condition: Option<DCBAppendCondition>) -> Result<u64>;
+    fn append(&self, events: Vec<DCBEvent>, condition: Option<DCBAppendCondition>) -> DCBResult<u64>;
 }
 
 // Error types
@@ -156,7 +156,7 @@ mod tests {
             todo!()
         }
 
-        fn next_batch(&mut self) -> Result<Vec<DCBSequencedEvent>> {
+        fn next_batch(&mut self) -> DCBResult<Vec<DCBSequencedEvent>> {
             let mut batch = Vec::new();
             while let Some(event) = self.next() {
                 batch.push(event);
@@ -204,4 +204,4 @@ mod tests {
     }
 }
 
-pub type Result<T> = std::result::Result<T, EventStoreError>;
+pub type DCBResult<T> = Result<T, EventStoreError>;

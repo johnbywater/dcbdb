@@ -3,7 +3,7 @@ use std::path::Path;
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 
-use crate::dcbapi::{DCBAppendCondition, DCBEvent, DCBEventStoreAPI, DCBQuery, DCBSequencedEvent, DCBReadResponse, EventStoreError, Result as ApiResult};
+use crate::dcbapi::{DCBAppendCondition, DCBEvent, DCBEventStoreAPI, DCBQuery, DCBSequencedEvent, DCBReadResponse, EventStoreError, DCBResult};
 use crate::lmdb::{Lmdb, LmdbResult};
 use crate::events_tree::{event_tree_append, event_tree_lookup, EventIterator};
 use crate::events_tree_nodes::EventRecord;
@@ -26,7 +26,7 @@ pub struct EventStore {
 impl EventStore {
     /// Create a new MVCC EventStore at the given directory or file path.
     /// If a directory path is provided, a file named "dcb.db" will be used inside it.
-    pub fn new<P: AsRef<Path>>(path: P) -> ApiResult<Self> {
+    pub fn new<P: AsRef<Path>>(path: P) -> DCBResult<Self> {
         let p = path.as_ref();
         let file_path = if p.is_dir() { p.join("dcb.db") } else { p.to_path_buf() };
         let lmdb = Lmdb::new(&file_path, DEFAULT_PAGE_SIZE, false).map_err(map_mvcc_err)?;
@@ -55,7 +55,7 @@ impl DCBReadResponse for ReadResponse {
     fn collect_with_head(&mut self) -> (Vec<DCBSequencedEvent>, Option<u64>) {
         (self.events.clone(), self.head)
     }
-    fn next_batch(&mut self) -> ApiResult<Vec<DCBSequencedEvent>> {
+    fn next_batch(&mut self) -> DCBResult<Vec<DCBSequencedEvent>> {
         let batch = self.events[self.idx..].to_vec();
         self.idx = self.events.len();
         Ok(batch)
@@ -307,7 +307,7 @@ impl DCBEventStoreAPI for EventStore {
         query: Option<DCBQuery>,
         after: Option<u64>,
         limit: Option<usize>,
-    ) -> ApiResult<Box<dyn DCBReadResponse + '_>> {
+    ) -> DCBResult<Box<dyn DCBReadResponse + '_>> {
         let db = &self.lmdb;
 
         // Compute last committed position for unlimited head
@@ -331,14 +331,14 @@ impl DCBEventStoreAPI for EventStore {
         Ok(Box::new(ReadResponse { events, idx: 0, head }))
     }
 
-    fn head(&self) -> ApiResult<Option<u64>> {
+    fn head(&self) -> DCBResult<Option<u64>> {
         let db = &self.lmdb;
         let (_, header) = db.get_latest_header().map_err(map_mvcc_err)?;
         let last = header.next_position.0.saturating_sub(1);
         if last == 0 { Ok(None) } else { Ok(Some(last)) }
     }
 
-    fn append(&self, events: Vec<DCBEvent>, condition: Option<DCBAppendCondition>) -> ApiResult<u64> {
+    fn append(&self, events: Vec<DCBEvent>, condition: Option<DCBAppendCondition>) -> DCBResult<u64> {
         let db = &self.lmdb;
 
         // Check condition using read_conditional (limit 1), starting after the provided position
@@ -557,7 +557,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_mvcc_event_store() {
+    fn test_event_store() {
         let temp_dir = tempdir().unwrap();
         let store = EventStore::new(temp_dir.path()).unwrap();
 

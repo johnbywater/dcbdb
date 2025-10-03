@@ -5,7 +5,7 @@ use dcbdb::grpc::GrpcEventStoreClient;
 // use dcbdb::store::EventStore;
 use std::thread;
 use std::time::Duration;
-use dcbdb::dcbdb::EventStore;
+use dcbdb::event_store::EventStore;
 use tempfile::tempdir;
 use uuid::Uuid;
 // Import the EventStore and related types from the main crate

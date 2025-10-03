@@ -5,7 +5,7 @@
 
 pub mod dcbapi;
 pub mod grpc;
-pub mod dcbdb;
+pub mod event_store;
 mod lmdb;
 mod common;
 mod events_tree;

@@ -1,17 +1,17 @@
 use crate::common::Position;
 use crate::common::{PageID, Tsn};
+use crate::dcbapi::{DCBError, DCBResult};
 use crate::events_tree_nodes::EventLeafNode;
 use crate::free_lists_tree_nodes::{FreeListInternalNode, FreeListLeafNode};
 use crate::header_node::HeaderNode;
-use crate::tags_tree_nodes::TagsLeafNode;
 use crate::node::Node;
 use crate::page::Page;
 use crate::pager::Pager;
+use crate::tags_tree_nodes::TagsLeafNode;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::Mutex;
-use crate::dcbapi::{DCBError, DCBResult};
 
 // Reader transaction
 pub struct Reader {
@@ -922,9 +922,7 @@ impl Writer {
                             );
                         }
                     } else {
-                        return Err(DCBError::DatabaseCorrupted(
-                            "Child ID mismatch".to_string(),
-                        ));
+                        return Err(DCBError::DatabaseCorrupted("Child ID mismatch".to_string()));
                     }
                 } else {
                     return Err(DCBError::DatabaseCorrupted(
@@ -940,9 +938,7 @@ impl Writer {
                 if let Node::FreeListInternal(dirty_internal_node) = &mut dirty_internal_page.node {
                     // Remove the child ID and key
                     if dirty_internal_node.child_ids[0] != removed_page_id {
-                        return Err(DCBError::DatabaseCorrupted(
-                            "Child ID mismatch".to_string(),
-                        ));
+                        return Err(DCBError::DatabaseCorrupted("Child ID mismatch".to_string()));
                     }
                     if dirty_internal_node.keys.is_empty() {
                         return Err(DCBError::DatabaseCorrupted(

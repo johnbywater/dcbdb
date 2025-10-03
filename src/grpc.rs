@@ -7,8 +7,8 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, transport::Server};
 
 use crate::dcbapi::{
-    DCBAppendCondition, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem, DCBSequencedEvent,
-    DCBError, DCBResult,
+    DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem, DCBResult,
+    DCBSequencedEvent,
 };
 use crate::event_store::EventStore;
 

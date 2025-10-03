@@ -245,9 +245,7 @@ impl TagsInternalNode {
             self.child_ids[last_idx] = new_id;
             Ok(())
         } else {
-            Err(DCBError::DatabaseCorrupted(
-                "Child ID mismatch".to_string(),
-            ))
+            Err(DCBError::DatabaseCorrupted("Child ID mismatch".to_string()))
         }
     }
 
@@ -440,8 +438,8 @@ impl TagInternalNode {
 #[cfg(test)]
 mod tests {
     use super::{
-        Position, TagInternalNode, TagLeafNode, TagsInternalNode, TagsLeafNode, TagsLeafValue,
-        TAG_HASH_LEN,
+        Position, TAG_HASH_LEN, TagInternalNode, TagLeafNode, TagsInternalNode, TagsLeafNode,
+        TagsLeafValue,
     };
     use crate::common::PageID;
 
@@ -576,7 +574,6 @@ mod tests {
         assert_eq!(node, de);
     }
 }
-
 
 impl TagInternalNode {
     pub(crate) fn split_off(&mut self) -> DCBResult<(Position, Vec<Position>, Vec<PageID>)> {

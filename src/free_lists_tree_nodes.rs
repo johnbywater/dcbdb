@@ -364,19 +364,13 @@ impl FreeListInternalNode {
         Ok(FreeListInternalNode { keys, child_ids })
     }
 
-    pub fn replace_last_child_id(
-        &mut self,
-        old_id: PageID,
-        new_id: PageID,
-    ) -> DCBResult<()> {
+    pub fn replace_last_child_id(&mut self, old_id: PageID, new_id: PageID) -> DCBResult<()> {
         // Replace the last child ID.
         let last_idx = self.child_ids.len() - 1;
         if self.child_ids[last_idx] == old_id {
             self.child_ids[last_idx] = new_id;
         } else {
-            return Err(DCBError::DatabaseCorrupted(
-                "Child ID mismatch".to_string(),
-            ));
+            return Err(DCBError::DatabaseCorrupted("Child ID mismatch".to_string()));
         }
         Ok(())
     }

@@ -3,9 +3,9 @@
 //! This module provides the core interfaces and data structures for working with
 //! an event store that supports dynamic consistency boundaries.
 
+use crate::common::PageID;
 use std::iter::Iterator;
 use thiserror::Error;
-use crate::common::PageID;
 
 /// Represents a query item for filtering events
 #[derive(Debug, Clone, Default)]
@@ -97,7 +97,11 @@ pub trait DCBEventStore {
     /// Appends given events to the event store, unless the condition fails
     ///
     /// Returns the position of the last appended event
-    fn append(&self, events: Vec<DCBEvent>, condition: Option<DCBAppendCondition>) -> DCBResult<u64>;
+    fn append(
+        &self,
+        events: Vec<DCBEvent>,
+        condition: Option<DCBAppendCondition>,
+    ) -> DCBResult<u64>;
 }
 
 // Error types

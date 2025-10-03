@@ -3,13 +3,16 @@ use std::path::Path;
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 
-use crate::dcbapi::{DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBReadResponse, DCBResult, DCBSequencedEvent};
-use crate::lmdb::Lmdb;
-use crate::events_tree::{event_tree_append, event_tree_lookup, EventIterator};
-use crate::events_tree_nodes::EventRecord;
-use crate::tags_tree_nodes::TagHash;
-use crate::tags_tree::{tags_tree_insert, tags_tree_iter};
 use crate::common::Position;
+use crate::dcbapi::{
+    DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBReadResponse, DCBResult,
+    DCBSequencedEvent,
+};
+use crate::events_tree::{EventIterator, event_tree_append, event_tree_lookup};
+use crate::events_tree_nodes::EventRecord;
+use crate::lmdb::Lmdb;
+use crate::tags_tree::{tags_tree_insert, tags_tree_iter};
+use crate::tags_tree_nodes::TagHash;
 
 static DEFAULT_PAGE_SIZE: usize = 4096;
 
@@ -28,7 +31,11 @@ impl EventStore {
     /// If a directory path is provided, a file named "dcb.db" will be used inside it.
     pub fn new<P: AsRef<Path>>(path: P) -> DCBResult<Self> {
         let p = path.as_ref();
-        let file_path = if p.is_dir() { p.join("dcb.db") } else { p.to_path_buf() };
+        let file_path = if p.is_dir() {
+            p.join("dcb.db")
+        } else {
+            p.to_path_buf()
+        };
         let lmdb = Lmdb::new(&file_path, DEFAULT_PAGE_SIZE, false).map_err(map_mvcc_err)?;
         Ok(Self { lmdb })
     }
@@ -43,7 +50,9 @@ struct ReadResponse {
 impl Iterator for ReadResponse {
     type Item = DCBSequencedEvent;
     fn next(&mut self) -> Option<Self::Item> {
-        if self.idx >= self.events.len() { return None; }
+        if self.idx >= self.events.len() {
+            return None;
+        }
         let item = self.events[self.idx].clone();
         self.idx += 1;
         Some(item)
@@ -51,7 +60,9 @@ impl Iterator for ReadResponse {
 }
 
 impl DCBReadResponse for ReadResponse {
-    fn head(&self) -> Option<u64> { self.head }
+    fn head(&self) -> Option<u64> {
+        self.head
+    }
     fn collect_with_head(&mut self) -> (Vec<DCBSequencedEvent>, Option<u64>) {
         (self.events.clone(), self.head)
     }
@@ -110,10 +121,14 @@ pub fn unconditional_append(lmdb: &Lmdb, events: Vec<DCBEvent>) -> DCBResult<u64
     Ok(last_pos_u64)
 }
 
-
 /// Read events using the tags index by merging per-tag iterators, grouping by position,
 /// filtering by tag and type matches, and then looking up the event record.
-pub fn read_conditional(lmdb: &Lmdb, query: DCBQuery, after: Position, limit: Option<usize>) -> DCBResult<Vec<DCBSequencedEvent>> {
+pub fn read_conditional(
+    lmdb: &Lmdb,
+    query: DCBQuery,
+    after: Position,
+    limit: Option<usize>,
+) -> DCBResult<Vec<DCBSequencedEvent>> {
     // Special case: explicit zero limit
     if let Some(0) = limit {
         return Ok(Vec::new());
@@ -126,13 +141,23 @@ pub fn read_conditional(lmdb: &Lmdb, query: DCBQuery, after: Position, limit: Op
         let mut out: Vec<DCBSequencedEvent> = Vec::new();
         'outer_all: loop {
             let batch = iter.next_batch(64)?;
-            if batch.is_empty() { break; }
+            if batch.is_empty() {
+                break;
+            }
             for (pos, rec) in batch.into_iter() {
                 out.push(DCBSequencedEvent {
                     position: pos.0,
-                    event: DCBEvent { event_type: rec.event_type, data: rec.data, tags: rec.tags },
+                    event: DCBEvent {
+                        event_type: rec.event_type,
+                        data: rec.data,
+                        tags: rec.tags,
+                    },
                 });
-                if let Some(lim) = limit { if out.len() >= lim { break 'outer_all; } }
+                if let Some(lim) = limit {
+                    if out.len() >= lim {
+                        break 'outer_all;
+                    }
+                }
             }
         }
         return Ok(out);
@@ -147,23 +172,38 @@ pub fn read_conditional(lmdb: &Lmdb, query: DCBQuery, after: Position, limit: Op
         let mut out: Vec<DCBSequencedEvent> = Vec::new();
         let matches_item = |rec: &EventRecord| -> bool {
             for item in &query.items {
-                let type_ok = item.types.is_empty() || item.types.iter().any(|t| t == &rec.event_type);
-                if !type_ok { continue; }
+                let type_ok =
+                    item.types.is_empty() || item.types.iter().any(|t| t == &rec.event_type);
+                if !type_ok {
+                    continue;
+                }
                 let tags_ok = item.tags.iter().all(|t| rec.tags.iter().any(|et| et == t));
-                if type_ok && tags_ok { return true; }
+                if type_ok && tags_ok {
+                    return true;
+                }
             }
             false
         };
         'outer_fallback: loop {
             let batch = iter.next_batch(64)?;
-            if batch.is_empty() { break; }
+            if batch.is_empty() {
+                break;
+            }
             for (pos, rec) in batch.into_iter() {
                 if matches_item(&rec) {
                     out.push(DCBSequencedEvent {
                         position: pos.0,
-                        event: DCBEvent { event_type: rec.event_type, data: rec.data, tags: rec.tags },
+                        event: DCBEvent {
+                            event_type: rec.event_type,
+                            data: rec.data,
+                            tags: rec.tags,
+                        },
                     });
-                    if let Some(lim) = limit { if out.len() >= lim { break 'outer_fallback; } }
+                    if let Some(lim) = limit {
+                        if out.len() >= lim {
+                            break 'outer_fallback;
+                        }
+                    }
                 }
             }
         }
@@ -204,7 +244,9 @@ pub fn read_conditional(lmdb: &Lmdb, query: DCBQuery, after: Position, limit: Op
     {
         type Item = (Position, String, Vec<usize>);
         fn next(&mut self) -> Option<Self::Item> {
-            self.inner.next().map(|p| (p, self.tag.clone(), self.qiids.clone()))
+            self.inner
+                .next()
+                .map(|p| (p, self.tag.clone(), self.qiids.clone()))
         }
     }
 
@@ -213,7 +255,11 @@ pub fn read_conditional(lmdb: &Lmdb, query: DCBQuery, after: Position, limit: Op
     for (tag, qiids) in tag_qiis.iter() {
         let tag_hash: TagHash = tag_to_hash(tag);
         let positions_iter = tags_tree_iter(&lmdb, &reader, tag_hash, after)?; // yields positions for tag
-        tag_iters.push(PositionTagQiidIterator::new(positions_iter, tag.clone(), qiids.clone()));
+        tag_iters.push(PositionTagQiidIterator::new(
+            positions_iter,
+            tag.clone(),
+            qiids.clone(),
+        ));
     }
 
     // Merge iterators ordered by position
@@ -235,7 +281,13 @@ pub fn read_conditional(lmdb: &Lmdb, query: DCBQuery, after: Position, limit: Op
         I: Iterator<Item = (Position, String, Vec<usize>)>,
     {
         fn new(inner: I) -> Self {
-            Self { inner, current_pos: None, tags: HashSet::new(), qiis: HashSet::new(), finished: false }
+            Self {
+                inner,
+                current_pos: None,
+                tags: HashSet::new(),
+                qiis: HashSet::new(),
+                finished: false,
+            }
         }
     }
     impl<I> Iterator for GroupByPositionIterator<I>
@@ -244,7 +296,9 @@ pub fn read_conditional(lmdb: &Lmdb, query: DCBQuery, after: Position, limit: Op
     {
         type Item = (Position, HashSet<String>, HashSet<usize>);
         fn next(&mut self) -> Option<Self::Item> {
-            if self.finished { return None; }
+            if self.finished {
+                return None;
+            }
             for (pos, tag, qiids) in self.inner.by_ref() {
                 if self.current_pos.is_none() {
                     self.current_pos = Some(pos);
@@ -254,11 +308,15 @@ pub fn read_conditional(lmdb: &Lmdb, query: DCBQuery, after: Position, limit: Op
                     let out_qiis = std::mem::take(&mut self.qiis);
                     self.current_pos = Some(pos);
                     self.tags.insert(tag);
-                    for q in qiids { self.qiis.insert(q); }
+                    for q in qiids {
+                        self.qiis.insert(q);
+                    }
                     return Some((out_pos, out_tags, out_qiis));
                 }
                 self.tags.insert(tag);
-                for q in qiids { self.qiis.insert(q); }
+                for q in qiids {
+                    self.qiis.insert(q);
+                }
             }
             if let Some(p) = self.current_pos.take() {
                 self.finished = true;
@@ -279,7 +337,9 @@ pub fn read_conditional(lmdb: &Lmdb, query: DCBQuery, after: Position, limit: Op
             .copied()
             .filter(|&qii| qi_tags[qii].is_subset(&tags_present))
             .collect();
-        if matching_qiis.is_empty() { continue; }
+        if matching_qiis.is_empty() {
+            continue;
+        }
 
         // Lookup the event record at position
         let rec = event_tree_lookup(&lmdb, reader2.event_tree_root_id, pos)?;
@@ -289,13 +349,27 @@ pub fn read_conditional(lmdb: &Lmdb, query: DCBQuery, after: Position, limit: Op
         'typecheck: for qii in matching_qiis.iter().copied() {
             let item = &query.items[qii];
             if item.types.is_empty() || item.types.iter().any(|t| t == &rec.event_type) {
-                type_ok = true; break 'typecheck;
+                type_ok = true;
+                break 'typecheck;
             }
         }
-        if !type_ok { continue; }
+        if !type_ok {
+            continue;
+        }
 
-        out.push(DCBSequencedEvent { position: pos.0, event: DCBEvent { event_type: rec.event_type, data: rec.data, tags: rec.tags } });
-        if let Some(lim) = limit { if out.len() >= lim { break; } }
+        out.push(DCBSequencedEvent {
+            position: pos.0,
+            event: DCBEvent {
+                event_type: rec.event_type,
+                data: rec.data,
+                tags: rec.tags,
+            },
+        });
+        if let Some(lim) = limit {
+            if out.len() >= lim {
+                break;
+            }
+        }
     }
 
     Ok(out)
@@ -323,12 +397,20 @@ impl DCBEventStore for EventStore {
 
         // Compute head according to semantics
         let head = if limit.is_none() {
-            if last_committed_position == 0 { None } else { Some(last_committed_position) }
+            if last_committed_position == 0 {
+                None
+            } else {
+                Some(last_committed_position)
+            }
         } else {
             events.last().map(|e| e.position)
         };
 
-        Ok(Box::new(ReadResponse { events, idx: 0, head }))
+        Ok(Box::new(ReadResponse {
+            events,
+            idx: 0,
+            head,
+        }))
     }
 
     fn head(&self) -> DCBResult<Option<u64>> {
@@ -338,7 +420,11 @@ impl DCBEventStore for EventStore {
         if last == 0 { Ok(None) } else { Ok(Some(last)) }
     }
 
-    fn append(&self, events: Vec<DCBEvent>, condition: Option<DCBAppendCondition>) -> DCBResult<u64> {
+    fn append(
+        &self,
+        events: Vec<DCBEvent>,
+        condition: Option<DCBAppendCondition>,
+    ) -> DCBResult<u64> {
         let db = &self.lmdb;
 
         // Check condition using read_conditional (limit 1), starting after the provided position
@@ -362,13 +448,12 @@ impl DCBEventStore for EventStore {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dcbapi::{DCBAppendCondition, DCBError, DCBQuery, DCBQueryItem};
     use serial_test::serial;
     use tempfile::tempdir;
-    use crate::dcbapi::{DCBAppendCondition, DCBError, DCBQuery, DCBQueryItem};
 
     static VERBOSE: bool = false;
 
@@ -420,20 +505,25 @@ mod tests {
 
         // after = first -> tail
         let first = all[0].position;
-        let tail = read_conditional(&mut db, DCBQuery { items: vec![] }, Position(first), None).unwrap();
+        let tail =
+            read_conditional(&mut db, DCBQuery { items: vec![] }, Position(first), None).unwrap();
         assert_eq!(tail.len(), input.len() - 1);
 
         // after = last -> empty
         let last = all.last().unwrap().position;
-        let none = read_conditional(&mut db, DCBQuery { items: vec![] }, Position(last), None).unwrap();
+        let none =
+            read_conditional(&mut db, DCBQuery { items: vec![] }, Position(last), None).unwrap();
         assert!(none.is_empty());
 
         // limits
-        let lim0 = read_conditional(&mut db, DCBQuery { items: vec![] }, Position(0), Some(0)).unwrap();
+        let lim0 =
+            read_conditional(&mut db, DCBQuery { items: vec![] }, Position(0), Some(0)).unwrap();
         assert!(lim0.is_empty());
-        let lim3 = read_conditional(&mut db, DCBQuery { items: vec![] }, Position(0), Some(3)).unwrap();
+        let lim3 =
+            read_conditional(&mut db, DCBQuery { items: vec![] }, Position(0), Some(3)).unwrap();
         assert_eq!(lim3.len(), 3);
-        let lim20 = read_conditional(&mut db, DCBQuery { items: vec![] }, Position(0), Some(20)).unwrap();
+        let lim20 =
+            read_conditional(&mut db, DCBQuery { items: vec![] }, Position(0), Some(20)).unwrap();
         assert_eq!(lim20.len(), input.len());
     }
 
@@ -441,17 +531,32 @@ mod tests {
     #[serial]
     fn tags_only_single_tag_after_and_limit() {
         let (_tmp, mut db, _input) = setup_db_with_standard_events();
-        let qi = DCBQuery { items: vec![DCBQueryItem { types: vec![], tags: vec!["alpha".to_string()] }] };
+        let qi = DCBQuery {
+            items: vec![DCBQueryItem {
+                types: vec![],
+                tags: vec!["alpha".to_string()],
+            }],
+        };
         let res = read_conditional(&mut db, qi.clone(), Position(0), None).unwrap();
         assert_eq!(res.len(), 4);
-        assert!(res.iter().all(|e| e.event.tags.iter().any(|t| t == "alpha")));
+        assert!(
+            res.iter()
+                .all(|e| e.event.tags.iter().any(|t| t == "alpha"))
+        );
         assert!(res.windows(2).all(|w| w[0].position < w[1].position));
 
         // after combinations
         let positions: Vec<u64> = res.iter().map(|e| e.position).collect();
-        let after_first = read_conditional(&mut db, qi.clone(), Position(positions[0]), None).unwrap();
+        let after_first =
+            read_conditional(&mut db, qi.clone(), Position(positions[0]), None).unwrap();
         assert_eq!(after_first.len(), positions.len() - 1);
-        let after_last = read_conditional(&mut db, qi.clone(), Position(*positions.last().unwrap()), None).unwrap();
+        let after_last = read_conditional(
+            &mut db,
+            qi.clone(),
+            Position(*positions.last().unwrap()),
+            None,
+        )
+        .unwrap();
         assert!(after_last.is_empty());
 
         // limits
@@ -467,18 +572,34 @@ mod tests {
     #[serial]
     fn tags_only_multi_tag_and() {
         let (_tmp, mut db, _input) = setup_db_with_standard_events();
-        let qi = DCBQuery { items: vec![DCBQueryItem { types: vec![], tags: vec!["alpha".to_string(), "gamma".to_string()] }] };
+        let qi = DCBQuery {
+            items: vec![DCBQueryItem {
+                types: vec![],
+                tags: vec!["alpha".to_string(), "gamma".to_string()],
+            }],
+        };
         let res = read_conditional(&mut db, qi, Position(0), None).unwrap();
         assert_eq!(res.len(), 2);
-        assert!(res.iter().all(|e| e.event.tags.iter().any(|t| t == "alpha")));
-        assert!(res.iter().all(|e| e.event.tags.iter().any(|t| t == "gamma")));
+        assert!(
+            res.iter()
+                .all(|e| e.event.tags.iter().any(|t| t == "alpha"))
+        );
+        assert!(
+            res.iter()
+                .all(|e| e.event.tags.iter().any(|t| t == "gamma"))
+        );
     }
 
     #[test]
     #[serial]
     fn types_plus_tags_index_path() {
         let (_tmp, mut db, _input) = setup_db_with_standard_events();
-        let qi = DCBQuery { items: vec![DCBQueryItem { types: vec!["Type0".to_string()], tags: vec!["alpha".to_string()] }] };
+        let qi = DCBQuery {
+            items: vec![DCBQueryItem {
+                types: vec!["Type0".to_string()],
+                tags: vec!["alpha".to_string()],
+            }],
+        };
         let res = read_conditional(&mut db, qi, Position(0), None).unwrap();
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].event.event_type, "Type0");
@@ -489,15 +610,32 @@ mod tests {
     #[serial]
     fn or_semantics_and_deduplication() {
         let (_tmp, mut db, _input) = setup_db_with_standard_events();
-        let alpha_only = DCBQuery { items: vec![DCBQueryItem { types: vec![], tags: vec!["alpha".to_string()] }] };
-        let alpha_positions: Vec<u64> = read_conditional(&mut db, alpha_only.clone(), Position(0), None).unwrap()
-            .into_iter().map(|e| e.position).collect();
+        let alpha_only = DCBQuery {
+            items: vec![DCBQueryItem {
+                types: vec![],
+                tags: vec!["alpha".to_string()],
+            }],
+        };
+        let alpha_positions: Vec<u64> =
+            read_conditional(&mut db, alpha_only.clone(), Position(0), None)
+                .unwrap()
+                .into_iter()
+                .map(|e| e.position)
+                .collect();
 
         // Overlapping items: alpha OR (alpha AND gamma) should deduplicate
-        let query = DCBQuery { items: vec![
-            DCBQueryItem { types: vec![], tags: vec!["alpha".to_string()] },
-            DCBQueryItem { types: vec![], tags: vec!["alpha".to_string(), "gamma".to_string()] },
-        ]};
+        let query = DCBQuery {
+            items: vec![
+                DCBQueryItem {
+                    types: vec![],
+                    tags: vec!["alpha".to_string()],
+                },
+                DCBQueryItem {
+                    types: vec![],
+                    tags: vec!["alpha".to_string(), "gamma".to_string()],
+                },
+            ],
+        };
         let res = read_conditional(&mut db, query, Position(0), None).unwrap();
         let res_positions: Vec<u64> = res.into_iter().map(|e| e.position).collect();
         assert_eq!(res_positions, alpha_positions);
@@ -512,9 +650,21 @@ mod tests {
 
         // Use a smaller custom set to make counts obvious
         let events = vec![
-            DCBEvent { event_type: "TypeA".to_string(), data: vec![1], tags: vec!["x".to_string()] },
-            DCBEvent { event_type: "TypeB".to_string(), data: vec![2], tags: vec!["y".to_string()] },
-            DCBEvent { event_type: "TypeA".to_string(), data: vec![3], tags: vec!["z".to_string()] },
+            DCBEvent {
+                event_type: "TypeA".to_string(),
+                data: vec![1],
+                tags: vec!["x".to_string()],
+            },
+            DCBEvent {
+                event_type: "TypeB".to_string(),
+                data: vec![2],
+                tags: vec!["y".to_string()],
+            },
+            DCBEvent {
+                event_type: "TypeA".to_string(),
+                data: vec![3],
+                tags: vec!["z".to_string()],
+            },
         ];
         let last = unconditional_append(&db, events).unwrap();
         let (_, header) = db.get_latest_header().unwrap();
@@ -522,7 +672,12 @@ mod tests {
         assert_eq!(last, head);
 
         // Query item with no tags => forces fallback path; select TypeA only
-        let qi = DCBQuery { items: vec![DCBQueryItem { types: vec!["TypeA".to_string()], tags: vec![] }] };
+        let qi = DCBQuery {
+            items: vec![DCBQueryItem {
+                types: vec!["TypeA".to_string()],
+                tags: vec![],
+            }],
+        };
         let res = read_conditional(&mut db, qi.clone(), Position(0), None).unwrap();
         assert_eq!(res.len(), 2);
         assert!(res.iter().all(|e| e.event.event_type == "TypeA"));
@@ -542,7 +697,12 @@ mod tests {
     fn fallback_empty_item_matches_all() {
         let (_tmp, mut db, input) = setup_db_with_standard_events();
         // An empty item (no types, no tags) should match all events via fallback path
-        let qi = DCBQuery { items: vec![DCBQueryItem { types: vec![], tags: vec![] }] };
+        let qi = DCBQuery {
+            items: vec![DCBQueryItem {
+                types: vec![],
+                tags: vec![],
+            }],
+        };
 
         let all = read_conditional(&mut db, qi.clone(), Position(0), None).unwrap();
         assert_eq!(all.len(), input.len());
@@ -566,8 +726,16 @@ mod tests {
 
         // Append a couple of events
         let events = vec![
-            DCBEvent { event_type: "TypeA".to_string(), data: vec![1], tags: vec!["foo".to_string()] },
-            DCBEvent { event_type: "TypeB".to_string(), data: vec![2], tags: vec!["bar".to_string(), "foo".to_string()] },
+            DCBEvent {
+                event_type: "TypeA".to_string(),
+                data: vec![1],
+                tags: vec!["foo".to_string()],
+            },
+            DCBEvent {
+                event_type: "TypeB".to_string(),
+                data: vec![2],
+                tags: vec!["bar".to_string(), "foo".to_string()],
+            },
         ];
         let last = store.append(events.clone(), None).unwrap();
         assert!(last > 0);
@@ -589,7 +757,12 @@ mod tests {
         assert_eq!(head_lim1, Some(only_one[0].position));
 
         // Tag-filtered read ("foo")
-        let query = DCBQuery { items: vec![DCBQueryItem { types: vec![], tags: vec!["foo".to_string()] }] };
+        let query = DCBQuery {
+            items: vec![DCBQueryItem {
+                types: vec![],
+                tags: vec!["foo".to_string()],
+            }],
+        };
         let mut resp2 = store.read(Some(query), None, None).unwrap();
         let out2 = resp2.next_batch().unwrap();
         assert_eq!(out2.len(), 2);
@@ -604,22 +777,46 @@ mod tests {
 
         // Append with a condition that should PASS: query matches existing 'foo' but after = last
         let cond_pass = DCBAppendCondition {
-            fail_if_events_match: DCBQuery { items: vec![DCBQueryItem { types: vec![], tags: vec!["foo".to_string()] }] },
+            fail_if_events_match: DCBQuery {
+                items: vec![DCBQueryItem {
+                    types: vec![],
+                    tags: vec!["foo".to_string()],
+                }],
+            },
             after: Some(last),
         };
         let ok_last = store
-            .append(vec![DCBEvent { event_type: "TypeC".to_string(), data: vec![3], tags: vec!["baz".to_string()] }], Some(cond_pass))
+            .append(
+                vec![DCBEvent {
+                    event_type: "TypeC".to_string(),
+                    data: vec![3],
+                    tags: vec!["baz".to_string()],
+                }],
+                Some(cond_pass),
+            )
             .expect("append with passing condition should succeed");
         assert!(ok_last > last);
         assert_eq!(store.head().unwrap(), Some(ok_last));
 
         // Append with a condition that should FAIL: same query but after = 0
         let cond_fail = DCBAppendCondition {
-            fail_if_events_match: DCBQuery { items: vec![DCBQueryItem { types: vec![], tags: vec!["foo".to_string()] }] },
+            fail_if_events_match: DCBQuery {
+                items: vec![DCBQueryItem {
+                    types: vec![],
+                    tags: vec!["foo".to_string()],
+                }],
+            },
             after: Some(0),
         };
         let before_head = store.head().unwrap();
-        let res = store.append(vec![DCBEvent { event_type: "TypeD".to_string(), data: vec![4], tags: vec!["qux".to_string()] }], Some(cond_fail));
+        let res = store.append(
+            vec![DCBEvent {
+                event_type: "TypeD".to_string(),
+                data: vec![4],
+                tags: vec!["qux".to_string()],
+            }],
+            Some(cond_fail),
+        );
         match res {
             Err(DCBError::IntegrityError) => {}
             other => panic!("Expected IntegrityError, got {:?}", other),

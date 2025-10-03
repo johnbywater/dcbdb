@@ -1,7 +1,7 @@
 use crate::common::PageID;
+use crate::dcbapi::{DCBError, DCBResult};
 use crate::node::Node;
 use crc32fast::Hasher;
-use crate::dcbapi::{DCBError, DCBResult};
 
 // Page structure
 #[derive(Debug, Clone)]
@@ -76,7 +76,6 @@ impl Page {
         Ok(Self { page_id, node })
     }
 }
-
 
 /// Calculate CRC32 checksum for data
 pub fn calc_crc(data: &[u8]) -> u32 {

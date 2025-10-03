@@ -1,11 +1,13 @@
-use crate::lmdb::{Lmdb, Writer};
-use crate::common::Position;
 use crate::common::PageID;
-use crate::events_tree_nodes::{EventInternalNode, EventLeafNode, EventOverflowNode, EventRecord, EventValue};
-use crate::node::Node;
-use crate::page::{Page, PAGE_HEADER_SIZE};
-use std::collections::HashMap;
+use crate::common::Position;
 use crate::dcbapi::{DCBError, DCBResult};
+use crate::events_tree_nodes::{
+    EventInternalNode, EventLeafNode, EventOverflowNode, EventRecord, EventValue,
+};
+use crate::lmdb::{Lmdb, Writer};
+use crate::node::Node;
+use crate::page::{PAGE_HEADER_SIZE, Page};
+use std::collections::HashMap;
 
 // Helpers for storing large event data across overflow pages
 fn write_overflow_chain(lmdb: &Lmdb, writer: &mut Writer, data: &[u8]) -> DCBResult<PageID> {
@@ -27,7 +29,10 @@ fn write_overflow_chain(lmdb: &Lmdb, writer: &mut Writer, data: &[u8]) -> DCBRes
     if chunks.is_empty() {
         // Store an empty chunk page to indicate zero-length data
         let page_id = writer.alloc_page_id();
-        let node = EventOverflowNode { next: PageID(0), data: Vec::new() };
+        let node = EventOverflowNode {
+            next: PageID(0),
+            data: Vec::new(),
+        };
         let page = Page::new(page_id, Node::EventOverflow(node));
         writer.insert_dirty(page)?;
         return Ok(page_id);
@@ -35,7 +40,10 @@ fn write_overflow_chain(lmdb: &Lmdb, writer: &mut Writer, data: &[u8]) -> DCBRes
     let mut next_id = PageID(0);
     for chunk in chunks.iter().rev() {
         let page_id = writer.alloc_page_id();
-        let node = EventOverflowNode { next: next_id, data: (*chunk).to_vec() };
+        let node = EventOverflowNode {
+            next: next_id,
+            data: (*chunk).to_vec(),
+        };
         let page = Page::new(page_id, Node::EventOverflow(node));
         writer.insert_dirty(page)?;
         next_id = page_id;
@@ -65,14 +73,23 @@ fn read_overflow_chain(lmdb: &Lmdb, mut page_id: PageID) -> DCBResult<Vec<u8>> {
 fn materialize_event_value(lmdb: &Lmdb, value: &EventValue) -> DCBResult<EventRecord> {
     match value {
         EventValue::Inline(rec) => Ok(rec.clone()),
-        EventValue::Overflow { event_type, data_len, tags, root_id } => {
+        EventValue::Overflow {
+            event_type,
+            data_len,
+            tags,
+            root_id,
+        } => {
             let data = read_overflow_chain(lmdb, *root_id)?;
             if (data.len() as u64) != *data_len {
                 return Err(DCBError::DatabaseCorrupted(
                     "Overflow data length mismatch".to_string(),
                 ));
             }
-            Ok(EventRecord { event_type: event_type.clone(), data, tags: tags.clone() })
+            Ok(EventRecord {
+                event_type: event_type.clone(),
+                data,
+                tags: tags.clone(),
+            })
         }
     }
 }
@@ -187,7 +204,10 @@ pub fn event_tree_append(
     if let Some((last_key, mut last_value)) = popped {
         // Build new leaf node; convert to overflow if needed to fit
         let new_leaf_page_id = writer.alloc_page_id();
-        let mut new_leaf_node = EventLeafNode { keys: vec![last_key], values: vec![last_value.clone()] };
+        let mut new_leaf_node = EventLeafNode {
+            keys: vec![last_key],
+            values: vec![last_value.clone()],
+        };
         let mut new_leaf_page = Page::new(new_leaf_page_id, Node::EventLeaf(new_leaf_node.clone()));
         let mut serialized_size = new_leaf_page.calc_serialized_size();
         if serialized_size > lmdb.page_size {
@@ -199,7 +219,10 @@ pub fn event_tree_append(
                     tags: rec.tags,
                     root_id,
                 };
-                new_leaf_node = EventLeafNode { keys: vec![last_key], values: vec![last_value.clone()] };
+                new_leaf_node = EventLeafNode {
+                    keys: vec![last_key],
+                    values: vec![last_value.clone()],
+                };
                 new_leaf_page = Page::new(new_leaf_page_id, Node::EventLeaf(new_leaf_node.clone()));
                 serialized_size = new_leaf_page.calc_serialized_size();
             }
@@ -217,7 +240,9 @@ pub fn event_tree_append(
             );
         }
         writer.insert_dirty(new_leaf_page)?;
-        if verbose { println!("Promoting {last_key:?} and {new_leaf_page_id:?}"); }
+        if verbose {
+            println!("Promoting {last_key:?} and {new_leaf_page_id:?}");
+        }
         split_info = Some((last_key, new_leaf_page_id));
     }
 
@@ -365,7 +390,11 @@ pub fn event_tree_append(
     Ok(())
 }
 
-pub fn event_tree_lookup(lmdb: &Lmdb, event_tree_root_id: PageID, position: Position) -> DCBResult<EventRecord> {
+pub fn event_tree_lookup(
+    lmdb: &Lmdb,
+    event_tree_root_id: PageID,
+    position: Position,
+) -> DCBResult<EventRecord> {
     let mut current_page_id: PageID = event_tree_root_id;
     loop {
         let page = lmdb.read_page(current_page_id)?;
@@ -383,20 +412,18 @@ pub fn event_tree_lookup(lmdb: &Lmdb, event_tree_root_id: PageID, position: Posi
                 }
                 current_page_id = internal.child_ids[idx];
             }
-            Node::EventLeaf(leaf) => {
-                match leaf.keys.binary_search(&position) {
-                    Ok(i) => {
-                        let rec = materialize_event_value(lmdb, &leaf.values[i])?;
-                        return Ok(rec);
-                    }
-                    Err(_) => {
-                        return Err(DCBError::DatabaseCorrupted(format!(
-                            "Event at position {:?} not found",
-                            position
-                        )));
-                    }
+            Node::EventLeaf(leaf) => match leaf.keys.binary_search(&position) {
+                Ok(i) => {
+                    let rec = materialize_event_value(lmdb, &leaf.values[i])?;
+                    return Ok(rec);
                 }
-            }
+                Err(_) => {
+                    return Err(DCBError::DatabaseCorrupted(format!(
+                        "Event at position {:?} not found",
+                        position
+                    )));
+                }
+            },
             _ => {
                 return Err(DCBError::DatabaseCorrupted(
                     "Expected EventInternal or EventLeaf node in event tree".to_string(),
@@ -587,7 +614,10 @@ mod tests {
         match &page.node {
             Node::EventLeaf(node) => {
                 assert_eq!(vec![position], node.keys);
-                assert_eq!(vec![crate::events_tree_nodes::EventValue::Inline(record.clone())], node.values);
+                assert_eq!(
+                    vec![crate::events_tree_nodes::EventValue::Inline(record.clone())],
+                    node.values
+                );
             }
             _ => panic!("Expected EventLeaf node"),
         }
@@ -601,7 +631,10 @@ mod tests {
         match &persisted_page.node {
             Node::EventLeaf(node) => {
                 assert_eq!(vec![position], node.keys);
-                assert_eq!(vec![crate::events_tree_nodes::EventValue::Inline(record)], node.values);
+                assert_eq!(
+                    vec![crate::events_tree_nodes::EventValue::Inline(record)],
+                    node.values
+                );
             }
             _ => panic!("Expected EventLeaf node after commit"),
         }
@@ -1174,7 +1207,11 @@ mod tests {
         let mut writer = db.writer().unwrap();
         let pos = writer.issue_position();
         let data = vec![0xAB; 512];
-        let event = EventRecord { event_type: "Big".into(), data: data.clone(), tags: vec![] };
+        let event = EventRecord {
+            event_type: "Big".into(),
+            data: data.clone(),
+            tags: vec![],
+        };
         event_tree_append(&db, &mut writer, event.clone(), pos).unwrap();
         db.commit(&mut writer).unwrap();
 
@@ -1193,7 +1230,9 @@ mod tests {
                 let leaf_page = db.read_page(leaf_id).unwrap();
                 match leaf_page.node {
                     Node::EventLeaf(leaf) => match &leaf.values[0] {
-                        EventValue::Overflow { data_len, .. } => assert_eq!(*data_len as usize, data.len()),
+                        EventValue::Overflow { data_len, .. } => {
+                            assert_eq!(*data_len as usize, data.len())
+                        }
                         _ => panic!("Expected Overflow for large event"),
                     },
                     _ => panic!("Expected EventLeaf child"),
@@ -1214,7 +1253,11 @@ mod tests {
         let mut writer = db.writer().unwrap();
         let pos = writer.issue_position();
         let data = vec![0xCD; 512 * 4];
-        let event = EventRecord { event_type: "Bigger".into(), data: data.clone(), tags: vec![] };
+        let event = EventRecord {
+            event_type: "Bigger".into(),
+            data: data.clone(),
+            tags: vec![],
+        };
         event_tree_append(&db, &mut writer, event.clone(), pos).unwrap();
         db.commit(&mut writer).unwrap();
 
@@ -1234,7 +1277,10 @@ mod tests {
             Node::EventInternal(internal) => {
                 let leaf_id = *internal.child_ids.last().unwrap();
                 let leaf_page = db.read_page(leaf_id).unwrap();
-                match leaf_page.node { Node::EventLeaf(leaf) => check_leaf(&leaf), _ => panic!("Expected leaf") }
+                match leaf_page.node {
+                    Node::EventLeaf(leaf) => check_leaf(&leaf),
+                    _ => panic!("Expected leaf"),
+                }
             }
             Node::EventLeaf(leaf) => check_leaf(&leaf),
             _ => panic!("Unexpected root node type"),
@@ -1286,10 +1332,7 @@ mod tests {
 
             println!(
                 "mvcc_event_tree benchmark: size={}, append_us_per_call={:.3}, commit_us={:.3}, lookup_us_per_call={:.3}",
-                size,
-                append_avg_us,
-                commit_avg_us,
-                lookup_avg_us
+                size, append_avg_us, commit_avg_us, lookup_avg_us
             );
         }
     }

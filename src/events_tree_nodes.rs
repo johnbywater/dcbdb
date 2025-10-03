@@ -1,6 +1,6 @@
-use crate::dcbapi::DCBError;
 use crate::common::PageID;
 use crate::common::Position;
+use crate::dcbapi::DCBError;
 use crate::dcbapi::DCBResult;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,15 +26,24 @@ impl PartialEq<EventValue> for EventRecord {
     fn eq(&self, other: &EventValue) -> bool {
         match other {
             EventValue::Inline(rec) => self == rec,
-            EventValue::Overflow { event_type, data_len, tags, .. } => {
-                &self.event_type == event_type && &self.tags == tags && (self.data.len() as u64) == *data_len
+            EventValue::Overflow {
+                event_type,
+                data_len,
+                tags,
+                ..
+            } => {
+                &self.event_type == event_type
+                    && &self.tags == tags
+                    && (self.data.len() as u64) == *data_len
             }
         }
     }
 }
 
 impl PartialEq<EventRecord> for EventValue {
-    fn eq(&self, other: &EventRecord) -> bool { other == self }
+    fn eq(&self, other: &EventRecord) -> bool {
+        other == self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,7 +77,12 @@ impl EventLeafNode {
                         total_size += 2 + tag.len();
                     }
                 }
-                EventValue::Overflow { event_type, data_len: _, tags, root_id: _ } => {
+                EventValue::Overflow {
+                    event_type,
+                    data_len: _,
+                    tags,
+                    root_id: _,
+                } => {
                     // 2 bytes for event_type length + bytes for the string
                     total_size += 2 + event_type.len();
                     // 8 bytes for data_len (u64)
@@ -124,7 +138,12 @@ impl EventLeafNode {
                         result.extend_from_slice(tag.as_bytes());
                     }
                 }
-                EventValue::Overflow { event_type, data_len, tags, root_id } => {
+                EventValue::Overflow {
+                    event_type,
+                    data_len,
+                    tags,
+                    root_id,
+                } => {
                     // kind = 1
                     result.push(1u8);
                     // Serialize event_type length (2 bytes)
@@ -258,7 +277,8 @@ impl EventLeafNode {
                                 "Unexpected end of data while reading tag length".to_string(),
                             ));
                         }
-                        let tag_len = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
+                        let tag_len =
+                            u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
                         offset += 2;
                         if offset + tag_len > slice.len() {
                             return Err(DCBError::DeserializationError(
@@ -277,7 +297,11 @@ impl EventLeafNode {
                         tags.push(tag);
                     }
 
-                    values.push(EventValue::Inline(EventRecord { event_type, data, tags }));
+                    values.push(EventValue::Inline(EventRecord {
+                        event_type,
+                        data,
+                        tags,
+                    }));
                 }
                 1 => {
                     // Overflow: data_len u64 + tags + root_id
@@ -312,7 +336,8 @@ impl EventLeafNode {
                                 "Unexpected end of data while reading tag length".to_string(),
                             ));
                         }
-                        let tag_len = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
+                        let tag_len =
+                            u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
                         offset += 2;
                         if offset + tag_len > slice.len() {
                             return Err(DCBError::DeserializationError(
@@ -347,7 +372,12 @@ impl EventLeafNode {
                     ]));
                     offset += 8;
 
-                    values.push(EventValue::Overflow { event_type, data_len, tags, root_id });
+                    values.push(EventValue::Overflow {
+                        event_type,
+                        data_len,
+                        tags,
+                        root_id,
+                    });
                 }
                 _ => {
                     return Err(DCBError::DeserializationError(
@@ -521,9 +551,7 @@ impl EventInternalNode {
         if self.child_ids[last_idx] == old_id {
             self.child_ids[last_idx] = new_id;
         } else {
-            return Err(DCBError::DatabaseCorrupted(
-                "Child ID mismatch".to_string(),
-            ));
+            return Err(DCBError::DatabaseCorrupted("Child ID mismatch".to_string()));
         }
         Ok(())
     }
@@ -673,10 +701,7 @@ mod tests {
             EventValue::Inline(v) => {
                 assert_eq!("event_type_3", v.event_type);
                 assert_eq!(vec![3, 0, 0, 0], v.data);
-                assert_eq!(
-                    vec!["tag8".to_string(), "tag9".to_string()],
-                    v.tags
-                );
+                assert_eq!(vec!["tag8".to_string(), "tag9".to_string()], v.tags);
             }
             _ => panic!("Expected Inline for third value"),
         }
@@ -697,7 +722,8 @@ mod tests {
         let serialized = leaf_node.serialize().unwrap();
         assert!(!serialized.is_empty());
         // Deserialize
-        let deserialized = EventLeafNode::from_slice(&serialized).expect("Failed to deserialize EventLeafNode with overflow");
+        let deserialized = EventLeafNode::from_slice(&serialized)
+            .expect("Failed to deserialize EventLeafNode with overflow");
         assert_eq!(leaf_node, deserialized);
 
         // Check specific fields
@@ -705,7 +731,12 @@ mod tests {
         assert_eq!(Position(111), deserialized.keys[0]);
         assert_eq!(1, deserialized.values.len());
         match &deserialized.values[0] {
-            EventValue::Overflow { event_type, data_len, tags, root_id } => {
+            EventValue::Overflow {
+                event_type,
+                data_len,
+                tags,
+                root_id,
+            } => {
                 assert_eq!("over_evt", event_type);
                 assert_eq!(1234567, *data_len);
                 assert_eq!(vec!["a".to_string(), "b".to_string()], *tags);
@@ -746,7 +777,12 @@ mod tests {
             _ => panic!("Expected Inline at index 0"),
         }
         match &deserialized.values[1] {
-            EventValue::Overflow { event_type, data_len, tags, root_id } => {
+            EventValue::Overflow {
+                event_type,
+                data_len,
+                tags,
+                root_id,
+            } => {
                 assert_eq!("overflow_evt", event_type);
                 assert_eq!(9999, *data_len);
                 assert_eq!(vec!["y".to_string(), "z".to_string()], *tags);
@@ -758,7 +794,10 @@ mod tests {
 
     #[test]
     fn test_event_overflow_node_serialize_roundtrip() {
-        let node = EventOverflowNode { next: PageID(77), data: vec![7, 8, 9, 10] };
+        let node = EventOverflowNode {
+            next: PageID(77),
+            data: vec![7, 8, 9, 10],
+        };
         let ser = node.serialize().unwrap();
         assert_eq!(8 + 4, ser.len()); // 8 bytes next + 4 bytes data
         let de = EventOverflowNode::from_slice(&ser).unwrap();

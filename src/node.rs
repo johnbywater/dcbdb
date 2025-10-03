@@ -1,9 +1,9 @@
 use crate::common;
 use crate::common::LmdbError;
-use crate::mvcc_node_event::{EventInternalNode, EventLeafNode, EventOverflowNode};
-use crate::mvcc_node_free_list::{FreeListInternalNode, FreeListLeafNode};
-use crate::mvcc_node_header::HeaderNode;
-use crate::mvcc_node_tags::{TagInternalNode, TagLeafNode, TagsInternalNode, TagsLeafNode};
+use crate::events_btree_nodes::{EventInternalNode, EventLeafNode, EventOverflowNode};
+use crate::free_list_nodes::{FreeListInternalNode, FreeListLeafNode};
+use crate::header_node::HeaderNode;
+use crate::tags_btree_nodes::{TagInternalNode, TagLeafNode, TagsInternalNode, TagsLeafNode};
 
 // Constants for serialization
 const PAGE_TYPE_HEADER: u8 = b'1';

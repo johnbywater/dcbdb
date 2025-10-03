@@ -403,7 +403,7 @@ impl FreeListInternalNode {
 #[cfg(test)]
 mod tests {
     use crate::common::{PageID, Tsn};
-    use crate::mvcc_node_free_list::{FreeListInternalNode, FreeListLeafNode, FreeListLeafValue};
+    use crate::free_list_nodes::{FreeListInternalNode, FreeListLeafNode, FreeListLeafValue};
 
     #[test]
     fn test_freelist_leaf_serialize() {

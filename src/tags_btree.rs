@@ -1,8 +1,8 @@
 use crate::db::{Db, Reader, Writer, Result};
 use crate::common::{LmdbError, PageID, Position};
-use crate::mvcc_node_tags::{TagHash, TagsInternalNode, TagsLeafNode, TagsLeafValue, TagLeafNode, TagInternalNode};
-use crate::mvcc_nodes::Node;
-use crate::mvcc_page::Page;
+use crate::tags_btree_nodes::{TagHash, TagsInternalNode, TagsLeafNode, TagsLeafValue, TagLeafNode, TagInternalNode};
+use crate::node::Node;
+use crate::page::Page;
 
 /// Insert a Position into the tags tree at the given TagHash key.
 ///
@@ -156,7 +156,7 @@ pub fn tags_tree_insert(db: &Db, writer: &mut Writer, tag: TagHash, pos: Positio
                 match &mut leaf_page.node {
                     Node::TagLeaf(tleaf) => {
                         tleaf.positions.push(pos);
-                        let page_bytes = crate::mvcc_page::PAGE_HEADER_SIZE + tleaf.calc_serialized_size();
+                        let page_bytes = crate::page::PAGE_HEADER_SIZE + tleaf.calc_serialized_size();
                         if page_bytes > db.page_size {
                             // Move last pos to a new right leaf
                             let last_pos = tleaf.pop_last_position().map_err(|e| LmdbError::DatabaseCorrupted(format!("{}", e)))?;
@@ -259,7 +259,7 @@ pub fn tags_tree_insert(db: &Db, writer: &mut Writer, tag: TagHash, pos: Positio
             // Create per-tag page or split into an internal if needed
             let new_root_id = {
                 let mut pos_vec = positions;
-                let page_bytes = crate::mvcc_page::PAGE_HEADER_SIZE + TagLeafNode { positions: pos_vec.clone() }.calc_serialized_size();
+                let page_bytes = crate::page::PAGE_HEADER_SIZE + TagLeafNode { positions: pos_vec.clone() }.calc_serialized_size();
                 if page_bytes <= db.page_size {
                     let tag_leaf_id = writer.alloc_page_id();
                     let tag_leaf_page = Page::new(tag_leaf_id, Node::TagLeaf(TagLeafNode { positions: pos_vec }));
@@ -268,7 +268,7 @@ pub fn tags_tree_insert(db: &Db, writer: &mut Writer, tag: TagHash, pos: Positio
                 } else {
                     // Split: move the last position to the right leaf and create an internal root
                     let last_pos = pos_vec.pop().ok_or_else(|| LmdbError::DatabaseCorrupted("No positions to split".to_string()))?;
-                    let left_bytes = crate::mvcc_page::PAGE_HEADER_SIZE + TagLeafNode { positions: pos_vec.clone() }.calc_serialized_size();
+                    let left_bytes = crate::page::PAGE_HEADER_SIZE + TagLeafNode { positions: pos_vec.clone() }.calc_serialized_size();
                     if left_bytes > db.page_size {
                         return Err(LmdbError::DatabaseCorrupted("Recursive per-tag split not implemented".to_string()));
                     }

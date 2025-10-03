@@ -1,6 +1,6 @@
 use crate::db;
 use crate::common::{LmdbError, PageID};
-use crate::mvcc_nodes::Node;
+use crate::node::Node;
 use crc32fast::Hasher;
 
 // Page structure
@@ -90,7 +90,7 @@ mod tests {
     use super::*;
     use crate::common::Position;
     use crate::common::{PageID, Tsn};
-    use crate::mvcc_node_header::HeaderNode;
+    use crate::header_node::HeaderNode;
 
     #[test]
     fn test_page_serialization_and_size() {

@@ -5,10 +5,10 @@ use std::collections::{HashMap, HashSet};
 
 use crate::api::{DCBAppendCondition, DCBEvent, DCBEventStoreAPI, DCBQuery, DCBSequencedEvent, DCBReadResponse, EventStoreError, Result as ApiResult};
 use crate::db::{Db, Result as MvccResult};
-use crate::mvcc_event_tree::{event_tree_append, event_tree_lookup, EventIterator};
-use crate::mvcc_node_event::EventRecord;
-use crate::mvcc_node_tags::TagHash;
-use crate::mvcc_tags_tree::{tags_tree_insert, tags_tree_iter};
+use crate::events_btree::{event_tree_append, event_tree_lookup, EventIterator};
+use crate::events_btree_nodes::EventRecord;
+use crate::tags_btree_nodes::TagHash;
+use crate::tags_btree::{tags_tree_insert, tags_tree_iter};
 use crate::common::Position as MvccPosition;
 
 static DEFAULT_PAGE_SIZE: usize = 4096;

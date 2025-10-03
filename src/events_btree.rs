@@ -1,9 +1,9 @@
 use crate::db::{Db, Writer, Result};
 use crate::common::Position;
 use crate::common::{LmdbError, PageID};
-use crate::mvcc_node_event::{EventInternalNode, EventLeafNode, EventRecord, EventValue, EventOverflowNode};
-use crate::mvcc_nodes::Node;
-use crate::mvcc_page::{Page, PAGE_HEADER_SIZE};
+use crate::events_btree_nodes::{EventInternalNode, EventLeafNode, EventRecord, EventValue, EventOverflowNode};
+use crate::node::Node;
+use crate::page::{Page, PAGE_HEADER_SIZE};
 use std::collections::HashMap;
 
 // Helpers for storing large event data across overflow pages
@@ -542,7 +542,7 @@ impl<'a> EventIterator<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mvcc_nodes::Node;
+    use crate::node::Node;
     use rand::random;
     use serial_test::serial;
     use tempfile::tempdir;
@@ -586,7 +586,7 @@ mod tests {
         match &page.node {
             Node::EventLeaf(node) => {
                 assert_eq!(vec![position], node.keys);
-                assert_eq!(vec![crate::mvcc_node_event::EventValue::Inline(record.clone())], node.values);
+                assert_eq!(vec![crate::events_btree_nodes::EventValue::Inline(record.clone())], node.values);
             }
             _ => panic!("Expected EventLeaf node"),
         }
@@ -600,7 +600,7 @@ mod tests {
         match &persisted_page.node {
             Node::EventLeaf(node) => {
                 assert_eq!(vec![position], node.keys);
-                assert_eq!(vec![crate::mvcc_node_event::EventValue::Inline(record)], node.values);
+                assert_eq!(vec![crate::events_btree_nodes::EventValue::Inline(record)], node.values);
             }
             _ => panic!("Expected EventLeaf node after commit"),
         }

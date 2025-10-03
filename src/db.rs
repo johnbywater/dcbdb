@@ -1,12 +1,12 @@
 use crate::common::Position;
 use crate::common::{LmdbError, PageID, Tsn};
-use crate::mvcc_node_event::EventLeafNode;
-use crate::mvcc_node_free_list::{FreeListInternalNode, FreeListLeafNode};
-use crate::mvcc_node_header::HeaderNode;
-use crate::mvcc_node_tags::TagsLeafNode;
-use crate::mvcc_nodes::Node;
-use crate::mvcc_page::Page;
-use crate::mvcc_pager::Pager;
+use crate::events_btree_nodes::EventLeafNode;
+use crate::free_list_nodes::{FreeListInternalNode, FreeListLeafNode};
+use crate::header_node::HeaderNode;
+use crate::tags_btree_nodes::TagsLeafNode;
+use crate::node::Node;
+use crate::page::Page;
+use crate::pager::Pager;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::Path;
@@ -1010,7 +1010,7 @@ impl Writer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mvcc_node_free_list::FreeListLeafValue;
+    use crate::free_list_nodes::FreeListLeafValue;
     use serial_test::serial;
     use tempfile::tempdir;
 

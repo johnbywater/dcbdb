@@ -266,9 +266,17 @@ impl Lmdb {
             }
         }
 
-        // Write all dirty pages
-        for page in writer.dirty.values() {
-            self.write_page(page)?;
+        // Write all dirty pages in a single file lock
+        if !writer.dirty.is_empty() {
+            let mut serialized_pages: Vec<(PageID, Vec<u8>)> = Vec::with_capacity(writer.dirty.len());
+            for page in writer.dirty.values() {
+                let buf = page.serialize()?;
+                serialized_pages.push((page.page_id, buf));
+            }
+            self.pager.write_pages(&serialized_pages)?;
+            if self.verbose {
+                println!("Wrote {} dirty page(s) to file", serialized_pages.len());
+            }
         }
 
         // Flush changes to disk

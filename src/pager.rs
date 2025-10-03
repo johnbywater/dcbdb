@@ -66,6 +66,34 @@ impl Pager {
         Ok(())
     }
 
+    pub fn write_pages(&self, pages: &[(PageID, Vec<u8>)]) -> io::Result<()> {
+        let mut file: MutexGuard<File> = self.file.lock().unwrap();
+        for (page_id, page) in pages.iter() {
+            if page.len() > self.page_size {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "Page overflow: page_id={:?} size={} > PAGE_SIZE={}",
+                        page_id,
+                        page.len(),
+                        self.page_size
+                    ),
+                ));
+            }
+            // Seek to the correct position for this page
+            file.seek(SeekFrom::Start(page_id.0 * (self.page_size as u64)))?;
+            // Write the page data
+            file.write_all(page)?;
+            // Pad with zeros if needed
+            let padding_size = self.page_size - page.len();
+            if padding_size > 0 {
+                let padding = vec![0u8; padding_size];
+                file.write_all(&padding)?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn read_page(&self, page_id: PageID) -> io::Result<Vec<u8>> {
         let mut file: MutexGuard<File> = self.file.lock().unwrap();
         let offset = page_id.0 * (self.page_size as u64);

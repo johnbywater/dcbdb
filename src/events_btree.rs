@@ -1,6 +1,6 @@
 use crate::db::{Db, Writer, Result};
 use crate::common::Position;
-use crate::common::{LmdbError, PageID};
+use crate::common::{DbError, PageID};
 use crate::events_btree_nodes::{EventInternalNode, EventLeafNode, EventRecord, EventValue, EventOverflowNode};
 use crate::node::Node;
 use crate::page::{Page, PAGE_HEADER_SIZE};
@@ -11,7 +11,7 @@ fn write_overflow_chain(db: &Db, writer: &mut Writer, data: &[u8]) -> Result<Pag
     // Maximum payload per overflow page: page_size - header - next pointer (8 bytes)
     let payload_cap = db.page_size.saturating_sub(PAGE_HEADER_SIZE + 8);
     if payload_cap == 0 {
-        return Err(LmdbError::DatabaseCorrupted(
+        return Err(DbError::DatabaseCorrupted(
             "Page size too small to store overflow data".to_string(),
         ));
     }
@@ -52,7 +52,7 @@ fn read_overflow_chain(db: &Db, mut page_id: PageID) -> Result<Vec<u8>> {
                 page_id = node.next;
             }
             _ => {
-                return Err(LmdbError::DatabaseCorrupted(
+                return Err(DbError::DatabaseCorrupted(
                     "Expected EventOverflow node".to_string(),
                 ));
             }
@@ -67,7 +67,7 @@ fn materialize_event_value(db: &Db, value: &EventValue) -> Result<EventRecord> {
         EventValue::Overflow { event_type, data_len, tags, root_id } => {
             let data = read_overflow_chain(db, *root_id)?;
             if (data.len() as u64) != *data_len {
-                return Err(LmdbError::DatabaseCorrupted(
+                return Err(DbError::DatabaseCorrupted(
                     "Overflow data length mismatch".to_string(),
                 ));
             }
@@ -109,7 +109,7 @@ pub fn event_tree_append(
             stack.push(current_page_id);
             current_page_id = *internal_node.child_ids.last().unwrap();
         } else {
-            return Err(LmdbError::DatabaseCorrupted(
+            return Err(DbError::DatabaseCorrupted(
                 "Expected EventInternal node".to_string(),
             ));
         }
@@ -166,14 +166,14 @@ pub fn event_tree_append(
                         }
                         popped = Some((last_key, last_value));
                     } else {
-                        return Err(LmdbError::DatabaseCorrupted(
+                        return Err(DbError::DatabaseCorrupted(
                             "Expected EventLeaf node".to_string(),
                         ));
                     }
                 }
             }
             _ => {
-                return Err(LmdbError::DatabaseCorrupted(
+                return Err(DbError::DatabaseCorrupted(
                     "Expected EventLeaf node at event tree root".to_string(),
                 ));
             }
@@ -203,7 +203,7 @@ pub fn event_tree_append(
                 serialized_size = new_leaf_page.calc_serialized_size();
             }
             if serialized_size > db.page_size {
-                return Err(LmdbError::DatabaseCorrupted(format!(
+                return Err(DbError::DatabaseCorrupted(format!(
                     "Event too large even after overflow conversion (size: {serialized_size}, max: {})",
                     db.page_size
                 )));
@@ -247,7 +247,7 @@ pub fn event_tree_append(
                 println!("Nothing to replace in {dirty_page_id:?}")
             }
         } else {
-            return Err(LmdbError::DatabaseCorrupted(
+            return Err(DbError::DatabaseCorrupted(
                 "Expected EventInternal node".to_string(),
             ));
         }
@@ -264,7 +264,7 @@ pub fn event_tree_append(
                     );
                 }
             } else {
-                return Err(LmdbError::DatabaseCorrupted(
+                return Err(DbError::DatabaseCorrupted(
                     "Expected EventInternal node".to_string(),
                 ));
             }
@@ -280,7 +280,7 @@ pub fn event_tree_append(
                 // Split the internal node
                 // Ensure we have at least 3 keys and 4 child IDs before splitting
                 if dirty_internal_node.keys.len() < 3 || dirty_internal_node.child_ids.len() < 4 {
-                    return Err(LmdbError::DatabaseCorrupted(
+                    return Err(DbError::DatabaseCorrupted(
                         "Cannot split internal node with too few keys/children".to_string(),
                     ));
                 }
@@ -320,7 +320,7 @@ pub fn event_tree_append(
 
                 split_info = Some((promoted_key, new_internal_page_id));
             } else {
-                return Err(LmdbError::DatabaseCorrupted(
+                return Err(DbError::DatabaseCorrupted(
                     "Expected EventInternal node".to_string(),
                 ));
             }
@@ -337,7 +337,7 @@ pub fn event_tree_append(
                 println!("Replaced root {old_id:?} with {new_id:?}");
             }
         } else {
-            return Err(LmdbError::RootIDMismatch(old_id, new_id));
+            return Err(DbError::RootIDMismatch(old_id, new_id));
         }
     }
 
@@ -376,7 +376,7 @@ pub fn event_tree_lookup(db: &Db, event_tree_root_id: PageID, position: Position
                     Err(i) => i,
                 };
                 if idx >= internal.child_ids.len() {
-                    return Err(LmdbError::DatabaseCorrupted(
+                    return Err(DbError::DatabaseCorrupted(
                         "Child index out of bounds in event tree".to_string(),
                     ));
                 }
@@ -389,7 +389,7 @@ pub fn event_tree_lookup(db: &Db, event_tree_root_id: PageID, position: Position
                         return Ok(rec);
                     }
                     Err(_) => {
-                        return Err(LmdbError::DatabaseCorrupted(format!(
+                        return Err(DbError::DatabaseCorrupted(format!(
                             "Event at position {:?} not found",
                             position
                         )));
@@ -397,7 +397,7 @@ pub fn event_tree_lookup(db: &Db, event_tree_root_id: PageID, position: Position
                 }
             }
             _ => {
-                return Err(LmdbError::DatabaseCorrupted(
+                return Err(DbError::DatabaseCorrupted(
                     "Expected EventInternal or EventLeaf node in event tree".to_string(),
                 ));
             }
@@ -513,7 +513,7 @@ impl<'a> EventIterator<'a> {
                         }
                     }
                     _ => {
-                        return Err(LmdbError::DatabaseCorrupted(
+                        return Err(DbError::DatabaseCorrupted(
                             "Expected EventInternal or EventLeaf node in event tree".to_string(),
                         ));
                     }

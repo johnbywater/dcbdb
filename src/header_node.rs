@@ -1,6 +1,5 @@
-use crate::common;
-use crate::common::Position;
-use crate::common::{LmdbError, PageID, Tsn};
+use crate::common::{DbResult, Position};
+use crate::common::{DbError, PageID, Tsn};
 
 // Node type definitions
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,9 +44,9 @@ impl HeaderNode {
     ///
     /// # Returns
     /// * `Result<Self>` - The deserialized HeaderNode or an error
-    pub fn from_slice(slice: &[u8]) -> common::Result<Self> {
+    pub fn from_slice(slice: &[u8]) -> DbResult<Self> {
         if slice.len() != 48 {
-            return Err(LmdbError::DeserializationError(format!(
+            return Err(DbError::DeserializationError(format!(
                 "Expected 48 bytes, got {}",
                 slice.len()
             )));

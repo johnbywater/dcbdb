@@ -1,5 +1,4 @@
-use crate::common;
-use crate::common::LmdbError;
+use crate::common::{DbError, DbResult};
 use crate::events_btree_nodes::{EventInternalNode, EventLeafNode, EventOverflowNode};
 use crate::free_list_nodes::{FreeListInternalNode, FreeListLeafNode};
 use crate::header_node::HeaderNode;
@@ -63,7 +62,7 @@ impl Node {
         }
     }
 
-    pub fn serialize(&self) -> common::Result<Vec<u8>> {
+    pub fn serialize(&self) -> DbResult<Vec<u8>> {
         match self {
             Node::Header(node) => Ok(node.serialize()),
             Node::FreeListLeaf(node) => node.serialize(),
@@ -78,7 +77,7 @@ impl Node {
         }
     }
 
-    pub fn deserialize(node_type: u8, data: &[u8]) -> common::Result<Self> {
+    pub fn deserialize(node_type: u8, data: &[u8]) -> DbResult<Self> {
         match node_type {
             PAGE_TYPE_HEADER => {
                 let node = HeaderNode::from_slice(data)?;
@@ -120,7 +119,7 @@ impl Node {
                 let node = TagInternalNode::from_slice(data)?;
                 Ok(Node::TagInternal(node))
             }
-            _ => Err(LmdbError::DatabaseCorrupted(format!(
+            _ => Err(DbError::DatabaseCorrupted(format!(
                 "Invalid node type: {node_type}"
             ))),
         }

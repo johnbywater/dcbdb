@@ -2,7 +2,7 @@ use std::{fmt, io};
 
 // Error types
 #[derive(Debug)]
-pub enum LmdbError {
+pub enum DbError {
     Io(io::Error),
     PageNotFound(PageID),
     DirtyPageNotFound(PageID),
@@ -14,40 +14,40 @@ pub enum LmdbError {
     PageAlreadyDirty(PageID),
 }
 
-impl From<io::Error> for LmdbError {
+impl From<io::Error> for DbError {
     fn from(err: io::Error) -> Self {
-        LmdbError::Io(err)
+        DbError::Io(err)
     }
 }
 
-impl fmt::Display for LmdbError {
+impl fmt::Display for DbError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LmdbError::Io(err) => write!(f, "IO error: {err}"),
-            LmdbError::PageNotFound(page_id) => write!(f, "Page not found: {page_id:?}"),
-            LmdbError::DirtyPageNotFound(page_id) => {
+            DbError::Io(err) => write!(f, "IO error: {err}"),
+            DbError::PageNotFound(page_id) => write!(f, "Page not found: {page_id:?}"),
+            DbError::DirtyPageNotFound(page_id) => {
                 write!(f, "Dirty page not found: {page_id:?}")
             }
-            LmdbError::RootIDMismatch(old_id, new_id) => {
+            DbError::RootIDMismatch(old_id, new_id) => {
                 write!(f, "Root ID mismatched: old {old_id:?} new {new_id:?}")
             }
-            LmdbError::DatabaseCorrupted(msg) => write!(f, "Database corrupted: {msg}"),
-            LmdbError::SerializationError(msg) => write!(f, "Serialization error: {msg}"),
-            LmdbError::DeserializationError(msg) => write!(f, "Deserialization error: {msg}"),
-            LmdbError::PageAlreadyFreed(page_id) => {
+            DbError::DatabaseCorrupted(msg) => write!(f, "Database corrupted: {msg}"),
+            DbError::SerializationError(msg) => write!(f, "Serialization error: {msg}"),
+            DbError::DeserializationError(msg) => write!(f, "Deserialization error: {msg}"),
+            DbError::PageAlreadyFreed(page_id) => {
                 write!(f, "Page already freed: {page_id:?}")
             }
-            LmdbError::PageAlreadyDirty(page_id) => {
+            DbError::PageAlreadyDirty(page_id) => {
                 write!(f, "Page already dirty: {page_id:?}")
             }
         }
     }
 }
 
-impl std::error::Error for LmdbError {}
+impl std::error::Error for DbError {}
 
 // Result type alias
-pub type Result<T> = std::result::Result<T, LmdbError>;
+pub type DbResult<T> = Result<T, DbError>;
 
 // NewType definitions
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -56,6 +56,5 @@ pub struct PageID(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Tsn(pub u64);
 
-// Position used by MVCC structures (distinct from wal::Position alias)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Position(pub u64);

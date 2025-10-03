@@ -1,5 +1,5 @@
 use crate::db;
-use crate::common::{LmdbError, PageID};
+use crate::common::{DbError, PageID};
 use crate::node::Node;
 use crc32fast::Hasher;
 
@@ -43,7 +43,7 @@ impl Page {
 
     pub fn deserialize(page_id: PageID, page_data: &[u8]) -> db::Result<Self> {
         if page_data.len() < PAGE_HEADER_SIZE {
-            return Err(LmdbError::DatabaseCorrupted(
+            return Err(DbError::DatabaseCorrupted(
                 "Page data too short".to_string(),
             ));
         }
@@ -55,7 +55,7 @@ impl Page {
             u32::from_le_bytes([page_data[5], page_data[6], page_data[7], page_data[8]]) as usize;
 
         if PAGE_HEADER_SIZE + data_len > page_data.len() {
-            return Err(LmdbError::DatabaseCorrupted(
+            return Err(DbError::DatabaseCorrupted(
                 "Page data length mismatch".to_string(),
             ));
         }
@@ -67,7 +67,7 @@ impl Page {
         let calculated_crc = calc_crc(data);
 
         if calculated_crc != crc {
-            return Err(LmdbError::DatabaseCorrupted("CRC mismatch".to_string()));
+            return Err(DbError::DatabaseCorrupted("CRC mismatch".to_string()));
         }
 
         // Deserialize the node

@@ -1,5 +1,4 @@
-use crate::common;
-use crate::common::{LmdbError, PageID, Tsn};
+use crate::common::{DbError, DbResult, PageID, Tsn};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FreeListLeafValue {
@@ -44,7 +43,7 @@ impl FreeListLeafNode {
     ///
     /// # Returns
     /// * `Result<Vec<u8>, LmdbError>` - The serialized data or an error
-    pub fn serialize(&self) -> common::Result<Vec<u8>> {
+    pub fn serialize(&self) -> DbResult<Vec<u8>> {
         let total_size = self.calc_serialized_size();
         let mut result = Vec::with_capacity(total_size);
 
@@ -80,10 +79,10 @@ impl FreeListLeafNode {
     ///
     /// # Returns
     /// * `Result<Self>` - The deserialized FreeListLeafNode or an error
-    pub fn from_slice(slice: &[u8]) -> common::Result<Self> {
+    pub fn from_slice(slice: &[u8]) -> DbResult<Self> {
         // Check if the slice has at least 2 bytes for keys_len
         if slice.len() < 2 {
-            return Err(LmdbError::DeserializationError(format!(
+            return Err(DbError::DeserializationError(format!(
                 "Expected at least 2 bytes, got {}",
                 slice.len()
             )));
@@ -95,7 +94,7 @@ impl FreeListLeafNode {
         // Calculate the minimum expected size for the keys
         let min_expected_size = 2 + (keys_len * 8);
         if slice.len() < min_expected_size {
-            return Err(LmdbError::DeserializationError(format!(
+            return Err(DbError::DeserializationError(format!(
                 "Expected at least {} bytes for keys, got {}",
                 min_expected_size,
                 slice.len()
@@ -125,7 +124,7 @@ impl FreeListLeafNode {
 
         for _ in 0..keys_len {
             if offset + 2 > slice.len() {
-                return Err(LmdbError::DeserializationError(
+                return Err(DbError::DeserializationError(
                     "Unexpected end of data while reading page_ids length".to_string(),
                 ));
             }
@@ -135,7 +134,7 @@ impl FreeListLeafNode {
             offset += 2;
 
             if offset + (page_ids_len * 8) > slice.len() {
-                return Err(LmdbError::DeserializationError(
+                return Err(DbError::DeserializationError(
                     "Unexpected end of data while reading page_ids".to_string(),
                 ));
             }
@@ -159,7 +158,7 @@ impl FreeListLeafNode {
             offset += page_ids_len * 8;
 
             if offset + 8 > slice.len() {
-                return Err(LmdbError::DeserializationError(
+                return Err(DbError::DeserializationError(
                     "Unexpected end of data while reading root_id".to_string(),
                 ));
             }
@@ -184,7 +183,7 @@ impl FreeListLeafNode {
         Ok(FreeListLeafNode { keys, values })
     }
 
-    pub fn insert_or_append(&mut self, tsn: Tsn, page_id: PageID) -> common::Result<()> {
+    pub fn insert_or_append(&mut self, tsn: Tsn, page_id: PageID) -> DbResult<()> {
         // Find the place to insert the value
         let leaf_idx = self.keys.iter().position(|&k| k == tsn);
 
@@ -194,7 +193,7 @@ impl FreeListLeafNode {
             if self.values[idx].root_id == PageID(0) {
                 self.values[idx].page_ids.push(page_id);
             } else {
-                return Err(LmdbError::DatabaseCorrupted(
+                return Err(DbError::DatabaseCorrupted(
                     "Free list subtree not implemented".to_string(),
                 ));
             }
@@ -217,7 +216,7 @@ impl FreeListLeafNode {
         Ok(())
     }
 
-    pub fn pop_last_key_and_value(&mut self) -> common::Result<(Tsn, FreeListLeafValue)> {
+    pub fn pop_last_key_and_value(&mut self) -> DbResult<(Tsn, FreeListLeafValue)> {
         let last_key = self.keys.pop().unwrap();
         let last_value = self.values.pop().unwrap();
         Ok((last_key, last_value))
@@ -255,7 +254,7 @@ impl FreeListInternalNode {
     ///
     /// # Returns
     /// * `Result<Vec<u8>, LmdbError>` - The serialized data or an error
-    pub fn serialize(&self) -> common::Result<Vec<u8>> {
+    pub fn serialize(&self) -> DbResult<Vec<u8>> {
         let total_size = self.calc_serialized_size();
         let mut result = Vec::with_capacity(total_size);
 
@@ -285,10 +284,10 @@ impl FreeListInternalNode {
     ///
     /// # Returns
     /// * `Result<Self>` - The deserialized FreeListInternalNode or an error
-    pub fn from_slice(slice: &[u8]) -> common::Result<Self> {
+    pub fn from_slice(slice: &[u8]) -> DbResult<Self> {
         // Check if the slice has at least 2 bytes for keys_len
         if slice.len() < 2 {
-            return Err(LmdbError::DeserializationError(format!(
+            return Err(DbError::DeserializationError(format!(
                 "Expected at least 2 bytes, got {}",
                 slice.len()
             )));
@@ -300,7 +299,7 @@ impl FreeListInternalNode {
         // Calculate the minimum expected size for the keys
         let min_expected_size = 2 + (keys_len * 8);
         if slice.len() < min_expected_size {
-            return Err(LmdbError::DeserializationError(format!(
+            return Err(DbError::DeserializationError(format!(
                 "Expected at least {} bytes for keys, got {}",
                 min_expected_size,
                 slice.len()
@@ -327,7 +326,7 @@ impl FreeListInternalNode {
         // Extract the length of child_ids (2 bytes)
         let offset = 2 + (keys_len * 8);
         if offset + 2 > slice.len() {
-            return Err(LmdbError::DeserializationError(
+            return Err(DbError::DeserializationError(
                 "Unexpected end of data while reading child_ids length".to_string(),
             ));
         }
@@ -337,7 +336,7 @@ impl FreeListInternalNode {
         // Calculate the minimum expected size for the child_ids
         let min_expected_size = offset + 2 + (child_ids_len * 8);
         if slice.len() < min_expected_size {
-            return Err(LmdbError::DeserializationError(format!(
+            return Err(DbError::DeserializationError(format!(
                 "Expected at least {} bytes for child_ids, got {}",
                 min_expected_size,
                 slice.len()
@@ -368,13 +367,13 @@ impl FreeListInternalNode {
         &mut self,
         old_id: PageID,
         new_id: PageID,
-    ) -> common::Result<()> {
+    ) -> DbResult<()> {
         // Replace the last child ID.
         let last_idx = self.child_ids.len() - 1;
         if self.child_ids[last_idx] == old_id {
             self.child_ids[last_idx] = new_id;
         } else {
-            return Err(LmdbError::DatabaseCorrupted(
+            return Err(DbError::DatabaseCorrupted(
                 "Child ID mismatch".to_string(),
             ));
         }
@@ -385,13 +384,13 @@ impl FreeListInternalNode {
         &mut self,
         promoted_key: Tsn,
         promoted_page_id: PageID,
-    ) -> common::Result<()> {
+    ) -> DbResult<()> {
         self.keys.push(promoted_key);
         self.child_ids.push(promoted_page_id);
         Ok(())
     }
 
-    pub(crate) fn split_off(&mut self) -> common::Result<(Tsn, Vec<Tsn>, Vec<PageID>)> {
+    pub(crate) fn split_off(&mut self) -> DbResult<(Tsn, Vec<Tsn>, Vec<PageID>)> {
         let middle_idx = self.keys.len() - 2;
         let promoted_key = self.keys.remove(middle_idx);
         let new_keys = self.keys.split_off(middle_idx);

@@ -6,7 +6,7 @@ use std::io;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
 use std::path::Path;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use memmap2::{Mmap, MmapOptions};
 
 // Pager for file I/O
@@ -17,7 +17,7 @@ pub struct Pager {
     // Number of logical database pages contained in a single mmap window.
     mmap_pages_per_map: usize,
     // Cache of memory maps, keyed by map identifier (floor(page_id / mmap_pages_per_map)).
-    mmaps: Mutex<HashMap<u64, Mmap>>,
+    mmaps: Mutex<HashMap<u64, Arc<Mmap>>>,
 }
 
 // Implementation for Pager
@@ -146,49 +146,92 @@ impl Pager {
     }
 
     pub fn read_page_mmap(&self, page_id: PageID) -> io::Result<Vec<u8>> {
-        // Lock file for consistent metadata and mapping creation
+        // Precompute addressing values
+        let page_size_u64 = self.page_size as u64;
+        let offset = page_id.0 * page_size_u64;
+        let pages_per_map = self.mmap_pages_per_map as u64;
+        let map_id = page_id.0 / pages_per_map;
+        let map_offset = map_id * pages_per_map * page_size_u64;
+        let within = (offset - map_offset) as usize;
+
+        // Fast path: if mapping exists, do not obtain file lock; take Arc clone and release map lock
+        if let Some(mmap_arc) = {
+            let maps = self.mmaps.lock().unwrap();
+            maps.get(&map_id).cloned()
+        } {
+            let start = within;
+            let stop = start + self.page_size;
+            if stop > mmap_arc.len() {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    format!("Page {page_id:?} not found"),
+                ));
+            }
+            return Ok(mmap_arc[start..stop].to_vec());
+        }
+
+        // Slow path: need to create the mapping with double-checked locking
         let file: MutexGuard<File> = self.file.lock().unwrap();
         let file_len = file.metadata()?.len();
-        let page_size = self.page_size as u64;
-        let offset = page_id.0 * page_size;
-        let end = offset + page_size;
-        if end > file_len {
+
+        // Re-check if mapping appeared while we acquired the file lock
+        if let Some(mmap_arc) = {
+            let maps = self.mmaps.lock().unwrap();
+            maps.get(&map_id).cloned()
+        } {
+            let start = within;
+            let stop = start + self.page_size;
+            if stop > mmap_arc.len() {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    format!("Page {page_id:?} not found"),
+                ));
+            }
+            return Ok(mmap_arc[start..stop].to_vec());
+        }
+
+        // Calculate mapping window based on current file length
+        let max_len = pages_per_map * page_size_u64;
+        let remaining = file_len.saturating_sub(map_offset);
+        let map_len = min(max_len, remaining) as usize;
+
+        // If the window itself is empty, the page is definitely out of bounds
+        if map_len == 0 || within + self.page_size > map_len {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 format!("Page {page_id:?} not found"),
             ));
         }
 
-        // Calculate map id and map region
-        let pages_per_map = self.mmap_pages_per_map as u64;
-        let map_id = page_id.0 / pages_per_map;
-        let map_offset = map_id * pages_per_map * page_size;
-        let max_len = pages_per_map * page_size;
-        let remaining = file_len.saturating_sub(map_offset);
-        let map_len = min(max_len, remaining) as usize;
-
-        // Get or create mmap for this map_id and copy the requested page while holding the lock
-        let mut out = Vec::with_capacity(self.page_size);
-        {
+        // Create the mmap and insert it, but guard with a double-check
+        let mmap_new = unsafe {
+            MmapOptions::new()
+                .offset(map_offset)
+                .len(map_len)
+                .map(&*file)?
+        };
+        let mmap_arc = {
             let mut maps = self.mmaps.lock().unwrap();
-            if !maps.contains_key(&map_id) {
-                let m = unsafe {
-                    MmapOptions::new()
-                        .offset(map_offset)
-                        .len(map_len)
-                        .map(&*file)?
-                };
-                maps.insert(map_id, m);
+            // Another thread could have inserted meanwhile
+            if let Some(existing) = maps.get(&map_id) {
+                existing.clone()
+            } else {
+                let arc = Arc::new(mmap_new);
+                maps.insert(map_id, arc.clone());
+                arc
             }
-            let mmap_ref = maps.get(&map_id).expect("mmap just inserted");
+        };
 
-            // Slice the desired page within the mmap and copy
-            let within = (offset - map_offset) as usize;
-            let start = within;
-            let stop = start + self.page_size;
-            out.extend_from_slice(&mmap_ref[start..stop]);
+        // Now copy the requested page
+        let start = within;
+        let stop = start + self.page_size;
+        if stop > mmap_arc.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                format!("Page {page_id:?} not found"),
+            ));
         }
-        Ok(out)
+        Ok(mmap_arc[start..stop].to_vec())
     }
 
     pub fn flush(&self) -> io::Result<()> {

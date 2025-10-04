@@ -1,5 +1,4 @@
 use crate::common::PageID;
-use std::cmp::min;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -190,24 +189,29 @@ impl Pager {
             return Ok(mmap_arc[start..stop].to_vec());
         }
 
-        // Calculate mapping window based on current file length
+        // Calculate standard mapping window length (does not depend on current file length)
         let max_len = pages_per_map * page_size_u64;
-        let remaining = file_len.saturating_sub(map_offset);
-        let map_len = min(max_len, remaining) as usize;
 
-        // If the window itself is empty, the page is definitely out of bounds
-        if map_len == 0 || within + self.page_size > map_len {
+        // Before mapping, ensure the requested page is within the current file length.
+        let page_end = offset + page_size_u64;
+        if page_end > file_len {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 format!("Page {page_id:?} not found"),
             ));
         }
 
+        // Ensure the underlying file is large enough to permit a full standard-length mapping.
+        let required_len = map_offset + max_len;
+        if file_len < required_len {
+            file.set_len(required_len)?;
+        }
+
         // Create the mmap and insert it, but guard with a double-check
         let mmap_new = unsafe {
             MmapOptions::new()
                 .offset(map_offset)
-                .len(map_len)
+                .len(max_len as usize)
                 .map(&*file)?
         };
         let mmap_arc = {

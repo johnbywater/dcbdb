@@ -57,10 +57,21 @@ impl Pager {
             OpenOptions::new().read(true).write(true).open(path)?
         };
 
-        // Compute pages per mmap so that each mmap offset is aligned to OS page size.
+        // Compute pages per mmap so that:
+        // - Each mmap offset is aligned to OS page size (and implicitly DB page size), and
+        // - Each mapping window is at least 10 MiB.
         let os_ps = Self::os_page_size();
         let g = Self::gcd(os_ps, page_size);
-        let mmap_pages_per_map = usize::max(1, os_ps / g);
+        // Alignment factor: number of DB pages per window must be a multiple of this to keep
+        // mmap offsets aligned to OS page boundaries.
+        let align_pages = usize::max(1, os_ps / g);
+        // Minimum window size in bytes: 10 MiB
+        let min_window_bytes: usize = 10 * 1024 * 1024;
+        // Minimum number of DB pages to reach at least the min window size
+        let min_pages = (min_window_bytes + page_size - 1) / page_size; // ceil
+        // Choose smallest multiple of align_pages that is >= min_pages
+        let k = if min_pages == 0 { 1 } else { (min_pages + align_pages - 1) / align_pages }; // ceil
+        let mmap_pages_per_map = align_pages * usize::max(1, k);
 
         Ok(Self {
             file: Mutex::new(file),
@@ -222,6 +233,10 @@ impl Pager {
             } else {
                 let arc = Arc::new(mmap_new);
                 maps.insert(map_id, arc.clone());
+                println!(
+                    "Created new mmap: map_id={} offset={} len={}",
+                    map_id, map_offset, max_len
+                );
                 arc
             }
         };

@@ -137,14 +137,57 @@ impl Lmdb {
     }
 
     pub fn get_latest_header(&self) -> DCBResult<(PageID, HeaderNode)> {
-        let header0 = self.read_header(self.header_page_id0)?;
-        let header1 = self.read_header(self.header_page_id1)?;
+        use std::thread::sleep;
+        use std::time::Duration;
 
-        if header1.tsn > header0.tsn {
-            Ok((self.header_page_id1, header1))
-        } else {
-            Ok((self.header_page_id0, header0))
+        let retries: usize = 5;
+        let delay = Duration::from_millis(10);
+
+        for attempt in 0..retries {
+            let h0 = self.read_header(self.header_page_id0);
+            let h1 = self.read_header(self.header_page_id1);
+
+            match (h0, h1) {
+                (Ok(header0), Ok(header1)) => {
+                    if header1.tsn > header0.tsn {
+                        return Ok((self.header_page_id1, header1));
+                    } else {
+                        return Ok((self.header_page_id0, header0));
+                    }
+                }
+                (Ok(header0), Err(_)) => {
+                    return Ok((self.header_page_id0, header0));
+                }
+                (Err(_), Ok(header1)) => {
+                    return Ok((self.header_page_id1, header1));
+                }
+                (Err(e0), Err(e1)) => {
+                    if attempt + 1 < retries {
+                        if self.verbose {
+                            println!(
+                                "Both headers invalid on attempt {}: {:?} | {:?}. Retrying...",
+                                attempt + 1,
+                                e0,
+                                e1
+                            );
+                        }
+                        sleep(delay);
+                        continue;
+                    } else {
+                        return Err(DCBError::DatabaseCorrupted(
+                            format!(
+                                "Both header pages appear corrupted after {} attempts: ({:?}) and ({:?})",
+                                retries, e0, e1
+                            ),
+                        ));
+                    }
+                }
+            }
         }
+        // Unreachable due to returns in match and final error, but keep to satisfy type checker
+        Err(DCBError::DatabaseCorrupted(
+            "Unable to read a valid header".to_string(),
+        ))
     }
 
     pub fn read_header(&self, page_id: PageID) -> DCBResult<HeaderNode> {

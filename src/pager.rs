@@ -1,21 +1,49 @@
 use crate::common::PageID;
+use std::cmp::min;
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
-use memmap2::MmapOptions;
+use memmap2::{Mmap, MmapOptions};
 
 // Pager for file I/O
 pub struct Pager {
     pub file: Mutex<File>,
     pub page_size: usize,
     pub is_file_new: bool,
+    // Number of logical database pages contained in a single mmap window.
+    mmap_pages_per_map: usize,
+    // Cache of memory maps, keyed by map identifier (floor(page_id / mmap_pages_per_map)).
+    mmaps: Mutex<HashMap<u64, Mmap>>,
 }
 
 // Implementation for Pager
 impl Pager {
+    fn gcd(mut a: usize, mut b: usize) -> usize {
+        while b != 0 {
+            let t = b;
+            b = a % t;
+            a = t;
+        }
+        a
+    }
+
+    #[cfg(unix)]
+    fn os_page_size() -> usize {
+        // Safe: sysconf is thread-safe and returns a constant for page size
+        unsafe {
+            let sz = libc::sysconf(libc::_SC_PAGESIZE);
+            if sz <= 0 {
+                4096usize // sensible default
+            } else {
+                sz as usize
+            }
+        }
+    }
+
     pub fn new(path: &Path, page_size: usize) -> io::Result<Self> {
         let is_file_new = !path.exists();
 
@@ -30,10 +58,17 @@ impl Pager {
             OpenOptions::new().read(true).write(true).open(path)?
         };
 
+        // Compute pages per mmap so that each mmap offset is aligned to OS page size.
+        let os_ps = Self::os_page_size();
+        let g = Self::gcd(os_ps, page_size);
+        let mmap_pages_per_map = usize::max(1, os_ps / g);
+
         Ok(Self {
             file: Mutex::new(file),
             page_size,
             is_file_new,
+            mmap_pages_per_map,
+            mmaps: Mutex::new(HashMap::new()),
         })
     }
 
@@ -111,24 +146,48 @@ impl Pager {
     }
 
     pub fn read_page_mmap(&self, page_id: PageID) -> io::Result<Vec<u8>> {
-        // Lock the file for consistent metadata and mapping lifetime
+        // Lock file for consistent metadata and mapping creation
         let file: MutexGuard<File> = self.file.lock().unwrap();
         let file_len = file.metadata()?.len();
-        let offset = page_id.0 * (self.page_size as u64);
-        let end = offset + (self.page_size as u64);
+        let page_size = self.page_size as u64;
+        let offset = page_id.0 * page_size;
+        let end = offset + page_size;
         if end > file_len {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 format!("Page {page_id:?} not found"),
             ));
         }
-        // Map the entire file to avoid OS page-alignment issues with offsets.
-        // For large files, consider mapping a window aligned to the OS page size.
-        let mmap = unsafe { MmapOptions::new().map(&*file)? };
-        let start = offset as usize;
-        let stop = start + self.page_size;
+
+        // Calculate map id and map region
+        let pages_per_map = self.mmap_pages_per_map as u64;
+        let map_id = page_id.0 / pages_per_map;
+        let map_offset = map_id * pages_per_map * page_size;
+        let max_len = pages_per_map * page_size;
+        let remaining = file_len.saturating_sub(map_offset);
+        let map_len = min(max_len, remaining) as usize;
+
+        // Get or create mmap for this map_id and copy the requested page while holding the lock
         let mut out = Vec::with_capacity(self.page_size);
-        out.extend_from_slice(&mmap[start..stop]);
+        {
+            let mut maps = self.mmaps.lock().unwrap();
+            if !maps.contains_key(&map_id) {
+                let m = unsafe {
+                    MmapOptions::new()
+                        .offset(map_offset)
+                        .len(map_len)
+                        .map(&*file)?
+                };
+                maps.insert(map_id, m);
+            }
+            let mmap_ref = maps.get(&map_id).expect("mmap just inserted");
+
+            // Slice the desired page within the mmap and copy
+            let within = (offset - map_offset) as usize;
+            let start = within;
+            let stop = start + self.page_size;
+            out.extend_from_slice(&mmap_ref[start..stop]);
+        }
         Ok(out)
     }
 
@@ -145,6 +204,16 @@ impl Pager {
         }
         Ok(())
     }
+
+    #[cfg(test)]
+    pub fn debug_mmap_count(&self) -> usize {
+        self.mmaps.lock().unwrap().len()
+    }
+
+    #[cfg(test)]
+    pub fn debug_pages_per_mmap(&self) -> usize {
+        self.mmap_pages_per_map
+    }
 }
 
 
@@ -157,7 +226,7 @@ mod tests {
 
     fn temp_file_path(name: &str) -> PathBuf {
         let dir = tempdir().expect("tempdir");
-        dir.into_path().join(name)
+        dir.keep().join(name)
     }
 
     #[test]
@@ -197,5 +266,71 @@ mod tests {
 
         let err = pager.read_page_mmap(PageID(1)).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn mmap_reuse_within_same_map() {
+        // Try a few page sizes to ensure we get at least 2 pages per mmap window
+        let candidates = [512usize, 1024, 2048, 4096, 8192];
+        let mut pager_opt = None;
+        for ps in candidates {
+            let path = temp_file_path("pager_mmap_reuse.db");
+            let pager = Pager::new(&path, ps).expect("pager new");
+            if pager.debug_pages_per_mmap() >= 2 {
+                pager_opt = Some((pager, ps));
+                break;
+            }
+        }
+        let (pager, page_size) = pager_opt.expect("could not find suitable page size for test");
+
+        // Write two pages
+        pager
+            .write_page(PageID(0), &vec![1u8; page_size / 2])
+            .expect("write p0");
+        pager
+            .write_page(PageID(1), &vec![2u8; page_size])
+            .expect("write p1");
+        pager.flush().expect("flush");
+
+        // Read both pages via mmap
+        let _ = pager.read_page_mmap(PageID(0)).expect("read0m");
+        assert_eq!(pager.debug_mmap_count(), 1, "first mmap created");
+        let _ = pager.read_page_mmap(PageID(1)).expect("read1m");
+        assert_eq!(pager.debug_mmap_count(), 1, "should reuse same mmap for pages in same window");
+    }
+
+    #[test]
+    fn mmap_creates_new_on_boundary() {
+        // Ensure pages_per_mmap is available and >= 2 by selecting suitable page size
+        let candidates = [512usize, 1024, 2048, 4096, 8192];
+        let mut pager_opt = None;
+        for ps in candidates {
+            let path = temp_file_path("pager_mmap_boundary.db");
+            let pager = Pager::new(&path, ps).expect("pager new");
+            if pager.debug_pages_per_mmap() >= 1 {
+                pager_opt = Some((pager, ps));
+                break;
+            }
+        }
+        let (pager, page_size) = pager_opt.expect("failed to create pager");
+        let ppm = pager.debug_pages_per_mmap();
+
+        // Write enough pages to cover two windows
+        for p in 0..(ppm as u64 + 1) {
+            let fill = if (p % 2) == 0 { 0xAA } else { 0x55 };
+            pager
+                .write_page(PageID(p), &vec![fill; page_size])
+                .expect("write page");
+        }
+        pager.flush().expect("flush");
+
+        // First read creates first mmap
+        let _ = pager.read_page_mmap(PageID(0)).expect("read first window");
+        assert_eq!(pager.debug_mmap_count(), 1);
+        // Reading the first page in the next window should create a second mmap
+        let _ = pager
+            .read_page_mmap(PageID(ppm as u64))
+            .expect("read second window");
+        assert_eq!(pager.debug_mmap_count(), 2);
     }
 }

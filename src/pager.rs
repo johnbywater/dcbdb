@@ -19,6 +19,19 @@ pub struct Pager {
     mmaps: Mutex<HashMap<u64, Arc<Mmap>>>,
 }
 
+// A zero-copy view over a page backed by a memory map. Holds an Arc to keep the mapping alive.
+pub struct MappedPage {
+    mmap: Arc<Mmap>,
+    start: usize,
+    len: usize,
+}
+
+impl MappedPage {
+    pub fn as_slice(&self) -> &[u8] {
+        &self.mmap[self.start..self.start + self.len]
+    }
+}
+
 // Implementation for Pager
 impl Pager {
     fn gcd(mut a: usize, mut b: usize) -> usize {
@@ -251,6 +264,104 @@ impl Pager {
             ));
         }
         Ok(mmap_arc[start..stop].to_vec())
+    }
+
+    pub fn read_page_mmap_slice(&self, page_id: PageID) -> io::Result<MappedPage> {
+        // Precompute addressing values
+        let page_size_u64 = self.page_size as u64;
+        let offset = page_id.0 * page_size_u64;
+        let pages_per_map = self.mmap_pages_per_map as u64;
+        let map_id = page_id.0 / pages_per_map;
+        let map_offset = map_id * pages_per_map * page_size_u64;
+        let within = (offset - map_offset) as usize;
+
+        // Fast path: if mapping exists, do not obtain file lock; take Arc clone and release map lock
+        if let Some(mmap_arc) = {
+            let maps = self.mmaps.lock().unwrap();
+            maps.get(&map_id).cloned()
+        } {
+            let start = within;
+            let stop = start + self.page_size;
+            if stop > mmap_arc.len() {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    format!("Page {page_id:?} not found"),
+                ));
+            }
+            return Ok(MappedPage { mmap: mmap_arc, start, len: self.page_size });
+        }
+
+        // Slow path: need to create the mapping with double-checked locking
+        let file: MutexGuard<File> = self.file.lock().unwrap();
+        let file_len = file.metadata()?.len();
+
+        // Re-check if mapping appeared while we acquired the file lock
+        if let Some(mmap_arc) = {
+            let maps = self.mmaps.lock().unwrap();
+            maps.get(&map_id).cloned()
+        } {
+            let start = within;
+            let stop = start + self.page_size;
+            if stop > mmap_arc.len() {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    format!("Page {page_id:?} not found"),
+                ));
+            }
+            return Ok(MappedPage { mmap: mmap_arc, start, len: self.page_size });
+        }
+
+        // Calculate standard mapping window length (does not depend on current file length)
+        let max_len = pages_per_map * page_size_u64;
+
+        // Before mapping, ensure the requested page is within the current file length.
+        let page_end = offset + page_size_u64;
+        if page_end > file_len {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                format!("Page {page_id:?} not found"),
+            ));
+        }
+
+        // Ensure the underlying file is large enough to permit a full standard-length mapping.
+        let required_len = map_offset + max_len;
+        if file_len < required_len {
+            file.set_len(required_len)?;
+        }
+
+        // Create the mmap and insert it, but guard with a double-check
+        let mmap_new = unsafe {
+            MmapOptions::new()
+                .offset(map_offset)
+                .len(max_len as usize)
+                .map(&*file)?
+        };
+        let mmap_arc = {
+            let mut maps = self.mmaps.lock().unwrap();
+            // Another thread could have inserted meanwhile
+            if let Some(existing) = maps.get(&map_id) {
+                existing.clone()
+            } else {
+                let arc = Arc::new(mmap_new);
+                maps.insert(map_id, arc.clone());
+                println!(
+                    "Created new mmap: map_id={} offset={} len={}",
+                    map_id, map_offset, max_len
+                );
+                arc
+            }
+        };
+
+        // Now form the mapped page view
+        let start = within;
+        let stop = start + self.page_size;
+        if stop > mmap_arc.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                format!("Page {page_id:?} not found"),
+            ));
+        }
+        Ok(MappedPage { mmap: mmap_arc, start, len: self.page_size })
     }
 
     pub fn flush(&self) -> io::Result<()> {

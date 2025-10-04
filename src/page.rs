@@ -67,7 +67,7 @@ impl Page {
         let calculated_crc = calc_crc(data);
 
         if calculated_crc != crc {
-            return Err(DCBError::DatabaseCorrupted("CRC mismatch".to_string()));
+            return Err(DCBError::DatabaseCorrupted(format!("CRC mismatch (page ID: {page_id:?})")));
         }
 
         // Deserialize the node

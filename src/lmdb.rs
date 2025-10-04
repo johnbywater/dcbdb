@@ -161,11 +161,11 @@ impl Lmdb {
     }
 
     pub fn read_page(&self, page_id: PageID) -> DCBResult<Page> {
-        let page_data = self.pager.read_page_mmap(page_id)?;
+        let mapped = self.pager.read_page_mmap_slice(page_id)?;
         if self.verbose {
             println!("Read {page_id:?} from file, deserializing...");
         }
-        Page::deserialize(page_id, &page_data)
+        Page::deserialize(page_id, mapped.as_slice())
     }
 
     pub fn write_page(&self, page: &Page) -> DCBResult<()> {

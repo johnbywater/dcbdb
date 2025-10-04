@@ -161,7 +161,7 @@ impl Lmdb {
     }
 
     pub fn read_page(&self, page_id: PageID) -> DCBResult<Page> {
-        let page_data = self.pager.read_page(page_id)?;
+        let page_data = self.pager.read_page_mmap(page_id)?;
         if self.verbose {
             println!("Read {page_id:?} from file, deserializing...");
         }

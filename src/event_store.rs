@@ -16,11 +16,6 @@ use crate::tags_tree_nodes::TagHash;
 
 static DEFAULT_PAGE_SIZE: usize = 4096;
 
-// Map MVCC errors to API errors
-fn map_mvcc_err<E: std::fmt::Display>(e: E) -> DCBError {
-    DCBError::Corruption(format!("{e}"))
-}
-
 /// LMDB-backed EventStore implementing the DCBEventStore
 pub struct EventStore {
     lmdb: std::sync::Arc<Lmdb>,
@@ -36,7 +31,7 @@ impl EventStore {
         } else {
             p.to_path_buf()
         };
-        let lmdb = Lmdb::new(&file_path, DEFAULT_PAGE_SIZE, false).map_err(map_mvcc_err)?;
+        let lmdb = Lmdb::new(&file_path, DEFAULT_PAGE_SIZE, false)?;
         Ok(Self { lmdb: std::sync::Arc::new(lmdb) })
     }
 
@@ -396,7 +391,7 @@ impl DCBEventStore for EventStore {
         let after_pos = Position(after.unwrap_or(0));
 
         // Delegate to read_conditional
-        let events = read_conditional(lmdb, reader.event_tree_root_id, reader.tags_tree_root_id, q, after_pos, limit).map_err(map_mvcc_err)?;
+        let events = read_conditional(lmdb, reader.event_tree_root_id, reader.tags_tree_root_id, q, after_pos, limit)?;
 
         // Compute head according to semantics
         let head = if limit.is_none() {
@@ -418,7 +413,7 @@ impl DCBEventStore for EventStore {
 
     fn head(&self) -> DCBResult<Option<u64>> {
         let db = &self.lmdb;
-        let (_, header) = db.get_latest_header().map_err(map_mvcc_err)?;
+        let (_, header) = db.get_latest_header()?;
         let last = header.next_position.0.saturating_sub(1);
         if last == 0 { Ok(None) } else { Ok(Some(last)) }
     }
@@ -434,8 +429,7 @@ impl DCBEventStore for EventStore {
         if let Some(cond) = condition {
             let after = Position(cond.after.unwrap_or(0));
             let reader = lmdb.reader()?;
-            let found = read_conditional(lmdb, reader.event_tree_root_id, reader.tags_tree_root_id, cond.fail_if_events_match.clone(), after, Some(1))
-                .map_err(map_mvcc_err)?;
+            let found = read_conditional(lmdb, reader.event_tree_root_id, reader.tags_tree_root_id, cond.fail_if_events_match.clone(), after, Some(1))?;
             if !found.is_empty() {
                 return Err(DCBError::IntegrityError);
             }
@@ -447,7 +441,7 @@ impl DCBEventStore for EventStore {
         }
 
         // Append unconditionally via helper, which commits internally and returns last position
-        let last = unconditional_append(lmdb, events).map_err(map_mvcc_err)?;
+        let last = unconditional_append(lmdb, events)?;
         Ok(last)
     }
 }
@@ -504,7 +498,7 @@ mod tests {
 
         // after = 0 -> all
         let reader = lmdb.reader().unwrap();
-        
+
         let all = read_conditional(&mut lmdb, reader.event_tree_root_id, reader.tags_tree_root_id, DCBQuery { items: vec![] }, Position(0), None).unwrap();
         assert_eq!(all.len(), input.len());
         assert!(all.windows(2).all(|w| w[0].position < w[1].position));

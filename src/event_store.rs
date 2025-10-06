@@ -458,6 +458,8 @@ impl EventStore {
         &self,
         items: Vec<(Vec<DCBEvent>, Option<DCBAppendCondition>)>,
     ) -> DCBResult<Vec<DCBResult<u64>>> {
+        // println!("Processing batch of {} items", items.len());
+
         let lmdb = &self.lmdb;
         let mut writer = lmdb.writer()?;
         let mut results: Vec<DCBResult<u64>> = Vec::with_capacity(items.len());

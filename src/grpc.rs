@@ -142,8 +142,58 @@ impl EventStoreHandle {
                             condition,
                             response_tx,
                         } => {
-                            let result = event_store.append(events, condition);
-                            let _ = response_tx.send(result);
+                            // Batch processing: drain any immediately available append requests
+                            let mut items: Vec<(Vec<DCBEvent>, Option<DCBAppendCondition>)> = Vec::new();
+                            let mut responders: Vec<oneshot::Sender<DCBResult<u64>>> = Vec::new();
+
+                            items.push((events, condition));
+                            responders.push(response_tx);
+
+                            // Drain the channel for more pending append requests without awaiting
+                            loop {
+                                match request_rx.try_recv() {
+                                    Ok(EventStoreRequest::Append { events, condition, response_tx }) => {
+                                        items.push((events, condition));
+                                        responders.push(response_tx);
+                                    }
+                                    Ok(EventStoreRequest::Shutdown) => {
+                                        // Push back the shutdown signal by breaking and letting outer loop handle after batch
+                                        // We'll process current batch first, then break outer loop on next iteration when channel is empty
+                                        // To ensure shutdown is noticed, we stop draining further
+                                        break;
+                                    }
+                                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+                                }
+                            }
+
+                            // Execute a single batched append
+                            let batch_result = event_store.append_batch(items);
+                            match batch_result {
+                                Ok(results) => {
+                                    for (res, tx) in results.into_iter().zip(responders.into_iter()) {
+                                        let _ = tx.send(res);
+                                    }
+                                }
+                                Err(e) => {
+                                    // If the batch failed as a whole (e.g., commit failed), propagate an error to all responders
+                                    // We cannot clone DCBError, so move it into the last sender and send IO-wrapped messages to others.
+                                    let total = responders.len();
+                                    let mut iter = responders.into_iter();
+                                    if total > 1 {
+                                        for _ in 0..(total - 1) {
+                                            if let Some(tx) = iter.next() {
+                                                let _ = tx.send(Err(DCBError::Io(std::io::Error::other(
+                                                    "Batched append failed; see a concurrent request error for details",
+                                                ))));
+                                            }
+                                        }
+                                    }
+                                    if let Some(tx) = iter.next() {
+                                        let _ = tx.send(Err(e));
+                                    }
+                                }
+                            }
                         }
                         // EventStoreRequest::Head { response_tx } => {
                         //     let result = event_store.head();

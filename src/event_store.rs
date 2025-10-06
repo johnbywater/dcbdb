@@ -140,9 +140,11 @@ pub fn read_conditional(
     }
 
     // If no items, return all events with after/limit respected via sequential scan
+    let reader = lmdb.reader()?;
+    let event_tree_root_id = reader.event_tree_root_id;
+    let tags_tree_root_id = reader.tags_tree_root_id;
     if query.items.is_empty() {
-        let reader = lmdb.reader()?;
-        let mut iter = EventIterator::new(lmdb, reader.event_tree_root_id, Some(after));
+        let mut iter = EventIterator::new(lmdb, event_tree_root_id, Some(after));
         let mut out: Vec<DCBSequencedEvent> = Vec::new();
         'outer_all: loop {
             let batch = iter.next_batch(64)?;
@@ -172,8 +174,7 @@ pub fn read_conditional(
     let all_items_have_tags = query.items.iter().all(|it| !it.tags.is_empty());
     if !all_items_have_tags {
         // Fallback: sequentially scan all events and apply the same matching logic
-        let reader = lmdb.reader()?;
-        let mut iter = EventIterator::new(lmdb, reader.event_tree_root_id, Some(after));
+        let mut iter = EventIterator::new(lmdb, event_tree_root_id, Some(after));
         let mut out: Vec<DCBSequencedEvent> = Vec::new();
         let matches_item = |rec: &EventRecord| -> bool {
             for item in &query.items {
@@ -255,11 +256,10 @@ pub fn read_conditional(
         }
     }
 
-    let reader = lmdb.reader()?;
     let mut tag_iters: Vec<PositionTagQiidIterator<_>> = Vec::new();
     for (tag, qiids) in tag_qiis.iter() {
         let tag_hash: TagHash = tag_to_hash(tag);
-        let positions_iter = TagsTreeIterator::new(lmdb, reader.tags_tree_root_id, tag_hash, after); // yields positions for tag
+        let positions_iter = TagsTreeIterator::new(lmdb, tags_tree_root_id, tag_hash, after); // yields positions for tag
         tag_iters.push(PositionTagQiidIterator::new(
             positions_iter,
             tag.clone(),
@@ -333,7 +333,6 @@ pub fn read_conditional(
         }
     }
 
-    let reader2 = lmdb.reader()?; // separate reader for event lookup if needed
     let mut out: Vec<DCBSequencedEvent> = Vec::new();
     for (pos, tags_present, qiis_present) in GroupByPositionIterator::new(merged) {
         // Find any query item whose required tag set is subset of tags_present
@@ -347,7 +346,7 @@ pub fn read_conditional(
         }
 
         // Lookup the event record at position
-        let rec = event_tree_lookup(lmdb, reader2.event_tree_root_id, pos)?;
+        let rec = event_tree_lookup(lmdb, event_tree_root_id, pos)?;
 
         // Check type matching against any of the matching items
         let mut type_ok = false;

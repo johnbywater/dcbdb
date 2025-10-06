@@ -19,6 +19,7 @@ pub struct Reader {
     pub tsn: Tsn,
     pub event_tree_root_id: PageID,
     pub tags_tree_root_id: PageID,
+    pub next_position: Position,
     reader_id: usize,
     reader_tsns: *const Mutex<HashMap<usize, Tsn>>,
 }
@@ -241,6 +242,7 @@ impl Lmdb {
             tsn: header_node.tsn,
             event_tree_root_id: header_node.event_tree_root_id,
             tags_tree_root_id: header_node.tags_tree_root_id,
+            next_position: header_node.next_position,
             reader_id,
             reader_tsns: &self.reader_tsns,
         };

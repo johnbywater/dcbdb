@@ -246,10 +246,10 @@ impl Pager {
             } else {
                 let arc = Arc::new(mmap_new);
                 maps.insert(map_id, arc.clone());
-                println!(
-                    "Created new mmap: map_id={} offset={} len={}",
-                    map_id, map_offset, max_len
-                );
+                // println!(
+                //     "Created new mmap: map_id={} offset={} len={}",
+                //     map_id, map_offset, max_len
+                // );
                 arc
             }
         };
@@ -344,10 +344,10 @@ impl Pager {
             } else {
                 let arc = Arc::new(mmap_new);
                 maps.insert(map_id, arc.clone());
-                println!(
-                    "Created new mmap: map_id={} offset={} len={}",
-                    map_id, map_offset, max_len
-                );
+                // println!(
+                //     "Created new mmap: map_id={} offset={} len={}",
+                //     map_id, map_offset, max_len
+                // );
                 arc
             }
         };

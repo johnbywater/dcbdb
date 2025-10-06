@@ -3,7 +3,7 @@ use std::path::Path;
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 
-use crate::common::Position;
+use crate::common::{PageID, Position};
 use crate::dcbapi::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBReadResponse, DCBResult,
     DCBSequencedEvent,
@@ -130,6 +130,8 @@ pub fn unconditional_append(lmdb: &Lmdb, events: Vec<DCBEvent>) -> DCBResult<u64
 /// filtering by tag and type matches, and then looking up the event record.
 pub fn read_conditional(
     lmdb: &Lmdb,
+    event_tree_root_id: PageID,
+    tags_tree_root_id: PageID,
     query: DCBQuery,
     after: Position,
     limit: Option<usize>,
@@ -140,9 +142,6 @@ pub fn read_conditional(
     }
 
     // If no items, return all events with after/limit respected via sequential scan
-    let reader = lmdb.reader()?;
-    let event_tree_root_id = reader.event_tree_root_id;
-    let tags_tree_root_id = reader.tags_tree_root_id;
     if query.items.is_empty() {
         let mut iter = EventIterator::new(lmdb, event_tree_root_id, Some(after));
         let mut out: Vec<DCBSequencedEvent> = Vec::new();
@@ -386,18 +385,18 @@ impl DCBEventStore for EventStore {
         after: Option<u64>,
         limit: Option<usize>,
     ) -> DCBResult<Box<dyn DCBReadResponse + '_>> {
-        let db = &self.lmdb;
+        let lmdb = &self.lmdb;
+        let reader = lmdb.reader()?;
 
         // Compute last committed position for unlimited head
-        let (_, header) = db.get_latest_header().map_err(map_mvcc_err)?;
-        let last_committed_position = header.next_position.0.saturating_sub(1);
+        let last_committed_position = reader.next_position.0.saturating_sub(1);
 
         // Build query and after
         let q = query.unwrap_or(DCBQuery { items: vec![] });
         let after_pos = Position(after.unwrap_or(0));
 
         // Delegate to read_conditional
-        let events = read_conditional(db, q, after_pos, limit).map_err(map_mvcc_err)?;
+        let events = read_conditional(lmdb, reader.event_tree_root_id, reader.tags_tree_root_id, q, after_pos, limit).map_err(map_mvcc_err)?;
 
         // Compute head according to semantics
         let head = if limit.is_none() {
@@ -429,12 +428,13 @@ impl DCBEventStore for EventStore {
         events: Vec<DCBEvent>,
         condition: Option<DCBAppendCondition>,
     ) -> DCBResult<u64> {
-        let db = &self.lmdb;
+        let lmdb = &self.lmdb;
 
         // Check condition using read_conditional (limit 1), starting after the provided position
         if let Some(cond) = condition {
             let after = Position(cond.after.unwrap_or(0));
-            let found = read_conditional(db, cond.fail_if_events_match.clone(), after, Some(1))
+            let reader = lmdb.reader()?;
+            let found = read_conditional(lmdb, reader.event_tree_root_id, reader.tags_tree_root_id, cond.fail_if_events_match.clone(), after, Some(1))
                 .map_err(map_mvcc_err)?;
             if !found.is_empty() {
                 return Err(DCBError::IntegrityError);
@@ -447,7 +447,7 @@ impl DCBEventStore for EventStore {
         }
 
         // Append unconditionally via helper, which commits internally and returns last position
-        let last = unconditional_append(db, events).map_err(map_mvcc_err)?;
+        let last = unconditional_append(lmdb, events).map_err(map_mvcc_err)?;
         Ok(last)
     }
 }
@@ -500,34 +500,36 @@ mod tests {
     #[test]
     #[serial]
     fn empty_query_after_and_limit() {
-        let (_tmp, mut db, input) = setup_db_with_standard_events();
+        let (_tmp, mut lmdb, input) = setup_db_with_standard_events();
 
         // after = 0 -> all
-        let all = read_conditional(&mut db, DCBQuery { items: vec![] }, Position(0), None).unwrap();
+        let reader = lmdb.reader().unwrap();
+        
+        let all = read_conditional(&mut lmdb, reader.event_tree_root_id, reader.tags_tree_root_id, DCBQuery { items: vec![] }, Position(0), None).unwrap();
         assert_eq!(all.len(), input.len());
         assert!(all.windows(2).all(|w| w[0].position < w[1].position));
 
         // after = first -> tail
         let first = all[0].position;
         let tail =
-            read_conditional(&mut db, DCBQuery { items: vec![] }, Position(first), None).unwrap();
+            read_conditional(&mut lmdb, reader.event_tree_root_id, reader.tags_tree_root_id,DCBQuery { items: vec![] }, Position(first), None).unwrap();
         assert_eq!(tail.len(), input.len() - 1);
 
         // after = last -> empty
         let last = all.last().unwrap().position;
         let none =
-            read_conditional(&mut db, DCBQuery { items: vec![] }, Position(last), None).unwrap();
+            read_conditional(&mut lmdb, reader.event_tree_root_id, reader.tags_tree_root_id,DCBQuery { items: vec![] }, Position(last), None).unwrap();
         assert!(none.is_empty());
 
         // limits
         let lim0 =
-            read_conditional(&mut db, DCBQuery { items: vec![] }, Position(0), Some(0)).unwrap();
+            read_conditional(&mut lmdb, reader.event_tree_root_id, reader.tags_tree_root_id,DCBQuery { items: vec![] }, Position(0), Some(0)).unwrap();
         assert!(lim0.is_empty());
         let lim3 =
-            read_conditional(&mut db, DCBQuery { items: vec![] }, Position(0), Some(3)).unwrap();
+            read_conditional(&mut lmdb, reader.event_tree_root_id, reader.tags_tree_root_id,DCBQuery { items: vec![] }, Position(0), Some(3)).unwrap();
         assert_eq!(lim3.len(), 3);
         let lim20 =
-            read_conditional(&mut db, DCBQuery { items: vec![] }, Position(0), Some(20)).unwrap();
+            read_conditional(&mut lmdb, reader.event_tree_root_id, reader.tags_tree_root_id,DCBQuery { items: vec![] }, Position(0), Some(20)).unwrap();
         assert_eq!(lim20.len(), input.len());
     }
 
@@ -541,7 +543,8 @@ mod tests {
                 tags: vec!["alpha".to_string()],
             }],
         };
-        let res = read_conditional(&mut db, qi.clone(), Position(0), None).unwrap();
+        let reader = db.reader().unwrap();
+        let res = read_conditional(&mut db, reader.event_tree_root_id, reader.tags_tree_root_id, qi.clone(), Position(0), None).unwrap();
         assert_eq!(res.len(), 4);
         assert!(
             res.iter()
@@ -552,10 +555,11 @@ mod tests {
         // after combinations
         let positions: Vec<u64> = res.iter().map(|e| e.position).collect();
         let after_first =
-            read_conditional(&mut db, qi.clone(), Position(positions[0]), None).unwrap();
+            read_conditional(&mut db, reader.event_tree_root_id, reader.tags_tree_root_id, qi.clone(), Position(positions[0]), None).unwrap();
         assert_eq!(after_first.len(), positions.len() - 1);
         let after_last = read_conditional(
             &mut db,
+            reader.event_tree_root_id, reader.tags_tree_root_id,
             qi.clone(),
             Position(*positions.last().unwrap()),
             None,
@@ -564,11 +568,11 @@ mod tests {
         assert!(after_last.is_empty());
 
         // limits
-        let lim0 = read_conditional(&mut db, qi.clone(), Position(0), Some(0)).unwrap();
+        let lim0 = read_conditional(&mut db, reader.event_tree_root_id, reader.tags_tree_root_id, qi.clone(), Position(0), Some(0)).unwrap();
         assert!(lim0.is_empty());
-        let lim1 = read_conditional(&mut db, qi.clone(), Position(0), Some(1)).unwrap();
+        let lim1 = read_conditional(&mut db, reader.event_tree_root_id, reader.tags_tree_root_id, qi.clone(), Position(0), Some(1)).unwrap();
         assert_eq!(lim1.len(), 1);
-        let lim10 = read_conditional(&mut db, qi, Position(0), Some(10)).unwrap();
+        let lim10 = read_conditional(&mut db, reader.event_tree_root_id, reader.tags_tree_root_id, qi, Position(0), Some(10)).unwrap();
         assert_eq!(lim10.len(), 4);
     }
 
@@ -582,7 +586,8 @@ mod tests {
                 tags: vec!["alpha".to_string(), "gamma".to_string()],
             }],
         };
-        let res = read_conditional(&mut db, qi, Position(0), None).unwrap();
+        let reader = db.reader().unwrap();
+        let res = read_conditional(&mut db, reader.event_tree_root_id, reader.tags_tree_root_id, qi, Position(0), None).unwrap();
         assert_eq!(res.len(), 2);
         assert!(
             res.iter()
@@ -604,7 +609,8 @@ mod tests {
                 tags: vec!["alpha".to_string()],
             }],
         };
-        let res = read_conditional(&mut db, qi, Position(0), None).unwrap();
+        let reader = db.reader().unwrap();
+        let res = read_conditional(&mut db, reader.event_tree_root_id, reader.tags_tree_root_id, qi, Position(0), None).unwrap();
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].event.event_type, "Type0");
         assert!(res[0].event.tags.iter().any(|t| t == "alpha"));
@@ -620,8 +626,9 @@ mod tests {
                 tags: vec!["alpha".to_string()],
             }],
         };
+        let reader = db.reader().unwrap();
         let alpha_positions: Vec<u64> =
-            read_conditional(&mut db, alpha_only.clone(), Position(0), None)
+            read_conditional(&mut db, reader.event_tree_root_id, reader.tags_tree_root_id, alpha_only.clone(), Position(0), None)
                 .unwrap()
                 .into_iter()
                 .map(|e| e.position)
@@ -640,7 +647,7 @@ mod tests {
                 },
             ],
         };
-        let res = read_conditional(&mut db, query, Position(0), None).unwrap();
+        let res = read_conditional(&mut db, reader.event_tree_root_id, reader.tags_tree_root_id, query, Position(0), None).unwrap();
         let res_positions: Vec<u64> = res.into_iter().map(|e| e.position).collect();
         assert_eq!(res_positions, alpha_positions);
     }
@@ -682,17 +689,18 @@ mod tests {
                 tags: vec![],
             }],
         };
-        let res = read_conditional(&mut db, qi.clone(), Position(0), None).unwrap();
+        let reader = db.reader().unwrap();
+        let res = read_conditional(&mut db, reader.event_tree_root_id, reader.tags_tree_root_id, qi.clone(), Position(0), None).unwrap();
         assert_eq!(res.len(), 2);
         assert!(res.iter().all(|e| e.event.event_type == "TypeA"));
 
         // After skip first matching
         let first_pos = res[0].position;
-        let res_after = read_conditional(&mut db, qi.clone(), Position(first_pos), None).unwrap();
+        let res_after = read_conditional(&mut db, reader.event_tree_root_id, reader.tags_tree_root_id, qi.clone(), Position(first_pos), None).unwrap();
         assert_eq!(res_after.len(), 1);
 
         // Limit 1
-        let res_lim1 = read_conditional(&mut db, qi, Position(0), Some(1)).unwrap();
+        let res_lim1 = read_conditional(&mut db, reader.event_tree_root_id, reader.tags_tree_root_id, qi, Position(0), Some(1)).unwrap();
         assert_eq!(res_lim1.len(), 1);
     }
 
@@ -708,14 +716,15 @@ mod tests {
             }],
         };
 
-        let all = read_conditional(&mut db, qi.clone(), Position(0), None).unwrap();
+        let reader = db.reader().unwrap();
+        let all = read_conditional(&mut db, reader.event_tree_root_id, reader.tags_tree_root_id, qi.clone(), Position(0), None).unwrap();
         assert_eq!(all.len(), input.len());
 
         // After and limit still apply
         let first = all[0].position;
-        let tail = read_conditional(&mut db, qi.clone(), Position(first), None).unwrap();
+        let tail = read_conditional(&mut db, reader.event_tree_root_id, reader.tags_tree_root_id, qi.clone(), Position(first), None).unwrap();
         assert_eq!(tail.len(), input.len() - 1);
-        let lim5 = read_conditional(&mut db, qi, Position(0), Some(5)).unwrap();
+        let lim5 = read_conditional(&mut db, reader.event_tree_root_id, reader.tags_tree_root_id, qi, Position(0), Some(5)).unwrap();
         assert_eq!(lim5.len(), 5);
     }
 

@@ -168,14 +168,12 @@ impl EventStoreHandle {
     ) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
         // Concurrent read path: use shared LMDB directly
         let db: &Lmdb = &self.lmdb;
-        let (_, header) = db
-            .get_latest_header()
-            .map_err(|e| DCBError::Corruption(format!("{e}")))?;
-        let last_committed_position = header.next_position.0.saturating_sub(1);
+        let reader = db.reader()?;
+        let last_committed_position = reader.next_position.0.saturating_sub(1);
 
         let q = query.unwrap_or(DCBQuery { items: vec![] });
         let after_pos = crate::common::Position(after.unwrap_or(0));
-        let events = read_conditional(db, q, after_pos, limit)
+        let events = read_conditional(db, reader.event_tree_root_id, reader.tags_tree_root_id, q, after_pos, limit)
             .map_err(|e| DCBError::Corruption(format!("{e}")))?;
 
         let head = if limit.is_none() {

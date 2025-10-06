@@ -1,6 +1,6 @@
 use crate::common::{PageID, Position};
 use crate::dcbapi::{DCBError, DCBResult};
-use crate::lmdb::{Lmdb, Reader, Writer};
+use crate::lmdb::{Lmdb, Writer};
 use crate::node::Node;
 use crate::page::Page;
 use crate::tags_tree_nodes::{
@@ -589,7 +589,7 @@ pub fn tags_tree_insert(
 // Iterator over positions for a given tag in the tags tree
 pub struct TagsTreeIterator<'a> {
     db: &'a Lmdb,
-    reader: &'a Reader,
+    tags_root_id: PageID,
     tag: TagHash,
     after: Position,
     state: IterState,
@@ -605,10 +605,10 @@ enum IterState {
 }
 
 impl<'a> TagsTreeIterator<'a> {
-    pub fn new(db: &'a Lmdb, reader: &'a Reader, tag: TagHash, after: Position) -> Self {
+    pub fn new(db: &'a Lmdb, tags_root_id: PageID, tag: TagHash, after: Position) -> Self {
         Self {
             db,
-            reader,
+            tags_root_id,
             tag,
             after,
             state: IterState::NotStarted,
@@ -624,7 +624,7 @@ impl<'a> Iterator for TagsTreeIterator<'a> {
             match &mut self.state {
                 IterState::NotStarted => {
                     // Lazily traverse the tags tree to locate positions for the tag
-                    let mut current_page_id: PageID = self.reader.tags_tree_root_id;
+                    let mut current_page_id: PageID = self.tags_root_id;
                     let positions: Vec<Position> = loop {
                         match self.db.read_page(current_page_id) {
                             Ok(page) => match page.node {
@@ -758,9 +758,9 @@ mod tests {
         n.to_le_bytes()
     }
 
-    fn tags_tree_lookup(lmdb: &Lmdb, reader: &Reader, tag: TagHash) -> DCBResult<Vec<Position>> {
+    fn tags_tree_lookup(lmdb: &Lmdb, tags_root_id: PageID, tag: TagHash) -> DCBResult<Vec<Position>> {
         // Reuse the iterator to traverse and collect all positions for the tag
-        let iter = TagsTreeIterator::new(lmdb, reader, tag, Position(0));
+        let iter = TagsTreeIterator::new(lmdb, tags_root_id, tag, Position(0));
         Ok(iter.collect())
     }
 
@@ -812,9 +812,9 @@ mod tests {
         // Commit and verify lookup_tag on some keys
         db.commit(&mut writer).unwrap();
         let reader = db.reader().unwrap();
-        let res_10 = tags_tree_lookup(&db, &reader, th(10)).unwrap();
+        let res_10 = tags_tree_lookup(&db, reader.tags_tree_root_id, th(10)).unwrap();
         assert!(!res_10.is_empty());
-        let res_missing = tags_tree_lookup(&db, &reader, th(999)).unwrap();
+        let res_missing = tags_tree_lookup(&db, reader.tags_tree_root_id, th(999)).unwrap();
         assert!(res_missing.is_empty());
     }
 
@@ -833,10 +833,10 @@ mod tests {
         db.commit(&mut writer).unwrap();
 
         let reader = db.reader().unwrap();
-        let vals = tags_tree_lookup(&db, &reader, t1).unwrap();
+        let vals = tags_tree_lookup(&db, reader.tags_tree_root_id, t1).unwrap();
         assert_eq!(vals, vec![p1, p2]);
         // non-existent
-        let vals_none = tags_tree_lookup(&db, &reader, th(1000)).unwrap();
+        let vals_none = tags_tree_lookup(&db, reader.tags_tree_root_id, th(1000)).unwrap();
         assert!(vals_none.is_empty());
     }
 
@@ -997,7 +997,7 @@ mod tests {
         db.commit(&mut writer).unwrap();
         let reader = db.reader().unwrap();
         for (tag, pos) in &appended {
-            let positions = tags_tree_lookup(&db, &reader, *tag).unwrap();
+            let positions = tags_tree_lookup(&db, reader.tags_tree_root_id, *tag).unwrap();
             assert_eq!(positions, vec![*pos]);
         }
     }
@@ -1095,7 +1095,7 @@ mod tests {
         // Validate lookup_tag for each inserted tag
         let reader = db.reader().unwrap();
         for (tag, pos) in &appended {
-            let positions = tags_tree_lookup(&db, &reader, *tag).unwrap();
+            let positions = tags_tree_lookup(&db, reader.tags_tree_root_id, *tag).unwrap();
             assert_eq!(positions, vec![*pos]);
         }
     }
@@ -1456,30 +1456,30 @@ mod tests {
         let reader = db.reader().unwrap();
 
         // after = 0 -> all positions
-        let collected_all: Vec<Position> = TagsTreeIterator::new(&db, &reader, tag, Position(0))
+        let collected_all: Vec<Position> = TagsTreeIterator::new(&db, reader.tags_tree_root_id, tag, Position(0))
             .collect();
         assert_eq!(collected_all, inserted);
 
         // after = first -> drop first
         let after_first = inserted[0];
-        let collected_after_first: Vec<Position> = TagsTreeIterator::new(&db, &reader, tag, after_first)
+        let collected_after_first: Vec<Position> = TagsTreeIterator::new(&db, reader.tags_tree_root_id, tag, after_first)
             .collect();
         assert_eq!(collected_after_first, inserted[1..].to_vec());
 
         // after = middle -> drop up to and including that element
         let after_mid = inserted[2];
-        let collected_after_mid: Vec<Position> = TagsTreeIterator::new(&db, &reader, tag, after_mid)
+        let collected_after_mid: Vec<Position> = TagsTreeIterator::new(&db, reader.tags_tree_root_id, tag, after_mid)
             .collect();
         assert_eq!(collected_after_mid, inserted[3..].to_vec());
 
         // after = last -> empty
         let after_last = *inserted.last().unwrap();
-        let collected_empty: Vec<Position> = TagsTreeIterator::new(&db, &reader, tag, after_last)
+        let collected_empty: Vec<Position> = TagsTreeIterator::new(&db, reader.tags_tree_root_id, tag, after_last)
             .collect();
         assert!(collected_empty.is_empty());
 
         // non-existent tag yields empty iterator regardless of after
-        let empty_iter = TagsTreeIterator::new(&db, &reader, th(9999), Position(0));
+        let empty_iter = TagsTreeIterator::new(&db, reader.tags_tree_root_id, th(9999), Position(0));
         assert_eq!(empty_iter.collect::<Vec<Position>>(), Vec::new());
     }
 
@@ -1510,7 +1510,7 @@ mod tests {
             let reader = db.reader().unwrap();
             let start_lookup = Instant::now();
             for n in 0..(size as u64) {
-                let res = tags_tree_lookup(&db, &reader, th(n)).unwrap();
+                let res = tags_tree_lookup(&db, reader.tags_tree_root_id, th(n)).unwrap();
                 hint::black_box(&res);
             }
             let lookup_elapsed = start_lookup.elapsed();
@@ -1551,7 +1551,7 @@ mod tests {
             // Lookup phase
             let reader = db.reader().unwrap();
             let start_lookup = Instant::now();
-            let res = tags_tree_lookup(&db, &reader, tag).unwrap();
+            let res = tags_tree_lookup(&db, reader.tags_tree_root_id, tag).unwrap();
             hint::black_box(&res);
             let lookup_elapsed = start_lookup.elapsed();
 

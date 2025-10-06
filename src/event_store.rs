@@ -259,7 +259,7 @@ pub fn read_conditional(
     let mut tag_iters: Vec<PositionTagQiidIterator<_>> = Vec::new();
     for (tag, qiids) in tag_qiis.iter() {
         let tag_hash: TagHash = tag_to_hash(tag);
-        let positions_iter = TagsTreeIterator::new(lmdb, &reader, tag_hash, after); // yields positions for tag
+        let positions_iter = TagsTreeIterator::new(lmdb, reader.tags_tree_root_id, tag_hash, after); // yields positions for tag
         tag_iters.push(PositionTagQiidIterator::new(
             positions_iter,
             tag.clone(),

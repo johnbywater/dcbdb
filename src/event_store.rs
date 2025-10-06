@@ -1071,4 +1071,66 @@ mod tests {
         assert_eq!(big_by_type[0].event.data.len(), big_data_len);
         assert!(big_by_type[0].event.data.iter().all(|&b| b == 0xAB));
     }
+
+    #[test]
+    fn test_append_batch_dirty_visibility_with_tags_and_types_small_and_big_overflow() {
+        let temp_dir = tempdir().unwrap();
+        let store = EventStore::new(temp_dir.path()).unwrap();
+
+        // Small inline event: type "S" with tag "x"
+        let small = DCBEvent { event_type: "S".into(), data: b"sm".to_vec(), tags: vec!["x".into()] };
+        // Big overflow event: type "B" with tag "y" and large payload to exercise overflow pages
+        let big_data_len = super::DEFAULT_PAGE_SIZE * 3; // ensure multiple overflow pages
+        let big = DCBEvent { event_type: "B".into(), data: vec![0xCD; big_data_len], tags: vec!["y".into()] };
+        // Fillers that will be conditioned out
+        let filler1 = DCBEvent { event_type: "X".into(), data: b"x".to_vec(), tags: vec![] };
+        let filler2 = DCBEvent { event_type: "Y".into(), data: b"y".to_vec(), tags: vec![] };
+        let final_ok = DCBEvent { event_type: "C".into(), data: b"c".to_vec(), tags: vec![] };
+
+        // Conditions combining tags and types so the tags index is used and the type filter applies after lookup
+        let q_s_and_x = DCBQuery { items: vec![DCBQueryItem { types: vec!["S".into()], tags: vec!["x".into()] }] };
+        let q_b_and_y = DCBQuery { items: vec![DCBQueryItem { types: vec!["B".into()], tags: vec!["y".into()] }] };
+
+        let items = vec![
+            // 1) Append small S@x
+            (vec![small.clone()], None),
+            // 2) Should fail because S@x exists in dirty pages (tags path + type filter)
+            (vec![filler1.clone()], Some(DCBAppendCondition { fail_if_events_match: q_s_and_x.clone(), after: None })),
+            // 3) Append big B@y (overflow)
+            (vec![big.clone()], None),
+            // 4) Should fail because B@y exists in dirty pages (tags path + type filter and overflow read)
+            (vec![filler2.clone()], Some(DCBAppendCondition { fail_if_events_match: q_b_and_y.clone(), after: None })),
+            // 5) Should succeed because after=Some(2) ignores positions <= 2 (small at 1, big at 2)
+            (vec![final_ok.clone()], Some(DCBAppendCondition { fail_if_events_match: q_b_and_y.clone(), after: Some(2) })),
+        ];
+
+        let results = store.append_batch(items).unwrap();
+        assert_eq!(results.len(), 5);
+        match &results[0] { Ok(pos) => assert_eq!(*pos, 1), other => panic!("unexpected for item0: {:?}", other) }
+        match &results[1] { Err(DCBError::IntegrityError) => {}, other => panic!("expected IntegrityError for item1, got {:?}", other) }
+        match &results[2] { Ok(pos) => assert_eq!(*pos, 2), other => panic!("unexpected for item2: {:?}", other) }
+        match &results[3] { Err(DCBError::IntegrityError) => {}, other => panic!("expected IntegrityError for item3, got {:?}", other) }
+        match &results[4] { Ok(pos) => assert_eq!(*pos, 3), other => panic!("unexpected for item4: {:?}", other) }
+
+        // Verify committed state and order
+        let (events, head) = store.read_with_head(None, None, None).unwrap();
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].event.event_type, small.event_type);
+        assert_eq!(events[1].event.event_type, big.event_type);
+        assert_eq!(events[2].event.event_type, final_ok.event_type);
+        assert_eq!(head, Some(3));
+
+        // Query by combined type+tag should return exactly one for each
+        let (small_combined, _) = store.read_with_head(Some(q_s_and_x.clone()), None, None).unwrap();
+        assert_eq!(small_combined.len(), 1);
+        assert_eq!(small_combined[0].event.event_type, "S");
+        assert!(small_combined[0].event.tags.iter().any(|t| t == "x"));
+
+        let (big_combined, _) = store.read_with_head(Some(q_b_and_y.clone()), None, None).unwrap();
+        assert_eq!(big_combined.len(), 1);
+        assert_eq!(big_combined[0].event.event_type, "B");
+        assert!(big_combined[0].event.tags.iter().any(|t| t == "y"));
+        assert_eq!(big_combined[0].event.data.len(), big_data_len);
+        assert!(big_combined[0].event.data.iter().all(|&b| b == 0xCD));
+    }
 }

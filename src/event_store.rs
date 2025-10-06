@@ -447,10 +447,74 @@ impl DCBEventStore for EventStore {
     }
 }
 
+impl EventStore {
+    /// Appends a batch of (events, condition) using a single writer/transaction.
+    /// For each item, behaves like append():
+    /// - If condition is Some and matches any events (considering uncommitted writes), returns Err(IntegrityError) for that item and continues.
+    /// - If events is empty, returns Ok(0) for that item and continues.
+    /// - Otherwise performs unconditional append and records Ok(last_position) for that item.
+    /// At the end, commits the writer once. If commit fails, returns the commit error and discards per-item results.
+    pub fn append_batch(
+        &self,
+        items: Vec<(Vec<DCBEvent>, Option<DCBAppendCondition>)>,
+    ) -> DCBResult<Vec<DCBResult<u64>>> {
+        let lmdb = &self.lmdb;
+        let mut writer = lmdb.writer()?;
+        let mut results: Vec<DCBResult<u64>> = Vec::with_capacity(items.len());
+
+        for (events, condition) in items.into_iter() {
+            // Check condition using read_conditional (limit 1), starting after the provided position
+            if let Some(cond) = condition {
+                let after = Position(cond.after.unwrap_or(0));
+                let found = read_conditional(
+                    lmdb,
+                    &writer.dirty,
+                    writer.events_tree_root_id,
+                    writer.tags_tree_root_id,
+                    cond.fail_if_events_match.clone(),
+                    after,
+                    Some(1),
+                );
+                match found {
+                    Ok(found_vec) => {
+                        if !found_vec.is_empty() {
+                            results.push(Err(DCBError::IntegrityError));
+                            continue;
+                        }
+                    }
+                    Err(e) => {
+                        // Propagate read error for this item but continue with others
+                        results.push(Err(e));
+                        continue;
+                    }
+                }
+            }
+
+            if events.is_empty() {
+                results.push(Ok(0));
+                continue;
+            }
+
+            // Append unconditionally
+            match unconditional_append(lmdb, &mut writer, events) {
+                Ok(last) => results.push(Ok(last)),
+                Err(e) => {
+                    // Record error for this item and continue
+                    results.push(Err(e));
+                }
+            }
+        }
+
+        // Single commit at the end of the batch
+        lmdb.commit(&mut writer)?;
+        Ok(results)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dcbapi::{DCBAppendCondition, DCBError, DCBQuery, DCBQueryItem};
+    use crate::dcbapi::{DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem};
     use crate::page::Page;
     use std::collections::HashMap;
     use serial_test::serial;
@@ -857,5 +921,54 @@ mod tests {
         }
         // Ensure head unchanged after failed append
         assert_eq!(store.head().unwrap(), before_head);
+    }
+
+    #[test]
+    fn test_append_batch_mixed_conditions() {
+        let temp_dir = tempdir().unwrap();
+        let store = EventStore::new(temp_dir.path()).unwrap();
+
+        let e1 = DCBEvent { event_type: "A".into(), data: b"1".to_vec(), tags: vec!["t1".into()] };
+        let e2 = DCBEvent { event_type: "B".into(), data: b"2".to_vec(), tags: vec!["t2".into()] };
+        let e3 = DCBEvent { event_type: "C".into(), data: b"3".to_vec(), tags: vec!["t3".into()] };
+
+        // Batch: first succeeds, second fails due to condition matching any event, third succeeds (after high position)
+        let items = vec![
+            (vec![e1.clone()], None),
+            (
+                vec![e2.clone()],
+                Some(DCBAppendCondition { fail_if_events_match: DCBQuery::default(), after: None }),
+            ),
+            (
+                vec![e3.clone()],
+                Some(DCBAppendCondition { fail_if_events_match: DCBQuery::default(), after: Some(10) }),
+            ),
+        ];
+
+        let results = store.append_batch(items).unwrap();
+
+        assert_eq!(results.len(), 3);
+        // First item should succeed with last position 1
+        match &results[0] {
+            Ok(pos) => assert_eq!(*pos, 1),
+            Err(e) => panic!("unexpected error for first item: {:?}", e),
+        }
+        // Second item should fail integrity
+        match &results[1] {
+            Ok(pos) => panic!("expected integrity error, got Ok({})", pos),
+            Err(e) => assert!(matches!(e, DCBError::IntegrityError)),
+        }
+        // Third item should succeed with last position 2 (since second didn't append)
+        match &results[2] {
+            Ok(pos) => assert_eq!(*pos, 2),
+            Err(e) => panic!("unexpected error for third item: {:?}", e),
+        }
+
+        // Verify committed state: only e1 and e3 should be present, head is 2
+        let (events, head) = store.read_with_head(None, None, None).unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event.data, e1.data);
+        assert_eq!(events[1].event.data, e3.data);
+        assert_eq!(head, Some(2));
     }
 }

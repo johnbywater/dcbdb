@@ -392,10 +392,10 @@ pub fn event_tree_append(
 
 pub fn event_tree_lookup(
     lmdb: &Lmdb,
-    event_tree_root_id: PageID,
+    events_tree_root_id: PageID,
     position: Position,
 ) -> DCBResult<EventRecord> {
-    let mut current_page_id: PageID = event_tree_root_id;
+    let mut current_page_id: PageID = events_tree_root_id;
     loop {
         let page = lmdb.read_page(current_page_id)?;
         match &page.node {
@@ -440,8 +440,8 @@ pub struct EventIterator<'a> {
 }
 
 impl<'a> EventIterator<'a> {
-    pub fn new(db: &'a Lmdb, event_tree_root_id: PageID, after: Option<Position>) -> Self {
-        let next_position = (event_tree_root_id, 0);
+    pub fn new(db: &'a Lmdb, events_tree_root_id: PageID, after: Option<Position>) -> Self {
+        let next_position = (events_tree_root_id, 0);
         let after = after.unwrap_or(Position(0));
         Self {
             db,
@@ -626,7 +626,7 @@ mod tests {
 
         // Read back the latest header and the persisted root event leaf page
         let (_header_page_id, header) = db.get_latest_header().unwrap();
-        let persisted_page = db.read_page(header.event_tree_root_id).unwrap();
+        let persisted_page = db.read_page(header.events_tree_root_id).unwrap();
         match &persisted_page.node {
             Node::EventLeaf(node) => {
                 assert_eq!(vec![position], node.keys);
@@ -1019,10 +1019,10 @@ mod tests {
 
         // Start a reader
         let reader = db.reader().unwrap();
-        let event_tree_root_id = reader.event_tree_root_id;
+        let events_tree_root_id = reader.events_tree_root_id;
         let reader_tsn = reader.tsn;
 
-        let mut events_iterator = EventIterator::new(&db, event_tree_root_id, None);
+        let mut events_iterator = EventIterator::new(&db, events_tree_root_id, None);
 
         // Ensure the reader's tsn is registered while the iterator is alive
         {
@@ -1058,7 +1058,7 @@ mod tests {
 
         // Additionally, validate lookup_event for each appended position using the existing reader in the iterator
         for (pos, expected_rec) in copy_inserted.iter() {
-            let found = event_tree_lookup(&db, event_tree_root_id, *pos).unwrap();
+            let found = event_tree_lookup(&db, events_tree_root_id, *pos).unwrap();
             assert_eq!(expected_rec, &found);
         }
 
@@ -1143,9 +1143,9 @@ mod tests {
 
         // Start a reader
         let reader = db.reader().unwrap();
-        let event_tree_root_id = reader.event_tree_root_id;
+        let events_tree_root_id = reader.events_tree_root_id;
         let reader_tsn = reader.tsn;
-        let mut events_iterator = EventIterator::new(&db, event_tree_root_id, Some(after_pos));
+        let mut events_iterator = EventIterator::new(&db, events_tree_root_id, Some(after_pos));
 
         // Ensure the reader's tsn is registered while the iterator is alive
         {
@@ -1216,12 +1216,12 @@ mod tests {
 
         // Lookup should return identical payload
         let reader = db.reader().unwrap();
-        let got = event_tree_lookup(&db, reader.event_tree_root_id, pos).unwrap();
+        let got = event_tree_lookup(&db, reader.events_tree_root_id, pos).unwrap();
         assert_eq!(event, got);
 
         // Ensure an overflow page is used for storage
         let (_hdr_id, header) = db.get_latest_header().unwrap();
-        let root = db.read_page(header.event_tree_root_id).unwrap();
+        let root = db.read_page(header.events_tree_root_id).unwrap();
         match root.node {
             Node::EventInternal(internal) => {
                 // Our key should be in the last child
@@ -1262,12 +1262,12 @@ mod tests {
 
         // Lookup
         let reader = db.reader().unwrap();
-        let got = event_tree_lookup(&db, reader.event_tree_root_id, pos).unwrap();
+        let got = event_tree_lookup(&db, reader.events_tree_root_id, pos).unwrap();
         assert_eq!(event, got);
 
         // Ensure overflow in leaf
         let (_hdr_id, header) = db.get_latest_header().unwrap();
-        let root = db.read_page(header.event_tree_root_id).unwrap();
+        let root = db.read_page(header.events_tree_root_id).unwrap();
         let check_leaf = |leaf: &EventLeafNode| match &leaf.values[0] {
             EventValue::Overflow { data_len, .. } => assert_eq!(*data_len as usize, data.len()),
             _ => panic!("Expected Overflow for very large event"),
@@ -1320,7 +1320,7 @@ mod tests {
             let reader = db.reader().unwrap();
             let start_lookup = std::time::Instant::now();
             for &pos in &positions {
-                let rec = event_tree_lookup(&db, reader.event_tree_root_id, pos).unwrap();
+                let rec = event_tree_lookup(&db, reader.events_tree_root_id, pos).unwrap();
                 std::hint::black_box(&rec);
             }
             let lookup_elapsed = start_lookup.elapsed();

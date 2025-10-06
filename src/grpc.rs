@@ -173,7 +173,7 @@ impl EventStoreHandle {
 
         let q = query.unwrap_or(DCBQuery { items: vec![] });
         let after_pos = crate::common::Position(after.unwrap_or(0));
-        let events = read_conditional(db, reader.event_tree_root_id, reader.tags_tree_root_id, q, after_pos, limit)
+        let events = read_conditional(db, reader.events_tree_root_id, reader.tags_tree_root_id, q, after_pos, limit)
             .map_err(|e| DCBError::Corruption(format!("{e}")))?;
 
         let head = if limit.is_none() {

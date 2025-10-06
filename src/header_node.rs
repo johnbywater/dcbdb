@@ -8,7 +8,7 @@ pub struct HeaderNode {
     pub tsn: Tsn,
     pub next_page_id: PageID,
     pub free_lists_tree_root_id: PageID,
-    pub event_tree_root_id: PageID,
+    pub events_tree_root_id: PageID,
     pub tags_tree_root_id: PageID,
     pub next_position: Position,
 }
@@ -18,7 +18,7 @@ impl HeaderNode {
     /// - 8 bytes for tsn
     /// - 8 bytes for next_page_id
     /// - 8 bytes for free_lists_tree_root_id
-    /// - 8 bytes for event_tree_root_id
+    /// - 8 bytes for events_tree_root_id
     /// - 8 bytes for tags_tree_root_id
     /// - 8 bytes for next_position
     ///
@@ -29,7 +29,7 @@ impl HeaderNode {
         result.extend_from_slice(&self.tsn.0.to_le_bytes());
         result.extend_from_slice(&self.next_page_id.0.to_le_bytes());
         result.extend_from_slice(&self.free_lists_tree_root_id.0.to_le_bytes());
-        result.extend_from_slice(&self.event_tree_root_id.0.to_le_bytes());
+        result.extend_from_slice(&self.events_tree_root_id.0.to_le_bytes());
         result.extend_from_slice(&self.tags_tree_root_id.0.to_le_bytes());
         result.extend_from_slice(&self.next_position.0.to_le_bytes());
         result
@@ -40,7 +40,7 @@ impl HeaderNode {
     /// - 8 bytes for tsn
     /// - 8 bytes for next_page_id
     /// - 8 bytes for free_lists_tree_root_id
-    /// - 8 bytes for event_tree_root_id
+    /// - 8 bytes for events_tree_root_id
     /// - 8 bytes for tags_tree_root_id
     /// - 8 bytes for next_position
     ///
@@ -80,7 +80,7 @@ impl HeaderNode {
             tsn: Tsn(tsn),
             next_page_id: PageID(next_page_id),
             free_lists_tree_root_id: PageID(freetree_root_id),
-            event_tree_root_id: PageID(position_root_id),
+            events_tree_root_id: PageID(position_root_id),
             tags_tree_root_id: PageID(tags_root_id),
             next_position: Position(next_position),
         })
@@ -97,7 +97,7 @@ mod tests {
             tsn: Tsn(42),
             next_page_id: PageID(123),
             free_lists_tree_root_id: PageID(456),
-            event_tree_root_id: PageID(789),
+            events_tree_root_id: PageID(789),
             tags_tree_root_id: PageID(321),
             next_position: Position(9876543210),
         };
@@ -139,8 +139,8 @@ mod tests {
             deserialized.free_lists_tree_root_id
         );
         assert_eq!(
-            header_node.event_tree_root_id,
-            deserialized.event_tree_root_id
+            header_node.events_tree_root_id,
+            deserialized.events_tree_root_id
         );
         assert_eq!(header_node.next_position, deserialized.next_position);
     }

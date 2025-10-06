@@ -98,7 +98,7 @@ mod tests {
             tsn: Tsn(42),
             next_page_id: PageID(123),
             free_lists_tree_root_id: PageID(456),
-            event_tree_root_id: PageID(789),
+            events_tree_root_id: PageID(789),
             tags_tree_root_id: PageID(1011),
             next_position: Position(1234),
         });

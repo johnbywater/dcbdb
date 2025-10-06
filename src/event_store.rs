@@ -124,7 +124,7 @@ pub fn unconditional_append(lmdb: &Lmdb, writer: &mut Writer, events: Vec<DCBEve
 /// filtering by tag and type matches, and then looking up the event record.
 pub fn read_conditional(
     lmdb: &Lmdb,
-    _dirty: &HashMap<PageID, Page>,
+    dirty: &HashMap<PageID, Page>,
     events_tree_root_id: PageID,
     tags_tree_root_id: PageID,
     query: DCBQuery,
@@ -138,7 +138,7 @@ pub fn read_conditional(
 
     // If no items, return all events with after/limit respected via sequential scan
     if query.items.is_empty() {
-        let mut iter = EventIterator::new(lmdb, events_tree_root_id, Some(after));
+        let mut iter = EventIterator::new(lmdb, dirty, events_tree_root_id, Some(after));
         let mut out: Vec<DCBSequencedEvent> = Vec::new();
         'outer_all: loop {
             let batch = iter.next_batch(64)?;
@@ -168,7 +168,7 @@ pub fn read_conditional(
     let all_items_have_tags = query.items.iter().all(|it| !it.tags.is_empty());
     if !all_items_have_tags {
         // Fallback: sequentially scan all events and apply the same matching logic
-        let mut iter = EventIterator::new(lmdb, events_tree_root_id, Some(after));
+        let mut iter = EventIterator::new(lmdb, dirty, events_tree_root_id, Some(after));
         let mut out: Vec<DCBSequencedEvent> = Vec::new();
         let matches_item = |rec: &EventRecord| -> bool {
             for item in &query.items {
@@ -253,7 +253,7 @@ pub fn read_conditional(
     let mut tag_iters: Vec<PositionTagQiidIterator<_>> = Vec::new();
     for (tag, qiids) in tag_qiis.iter() {
         let tag_hash: TagHash = tag_to_hash(tag);
-        let positions_iter = TagsTreeIterator::new(lmdb, tags_tree_root_id, tag_hash, after); // yields positions for tag
+        let positions_iter = TagsTreeIterator::new(lmdb, dirty, tags_tree_root_id, tag_hash, after); // yields positions for tag
         tag_iters.push(PositionTagQiidIterator::new(
             positions_iter,
             tag.clone(),
@@ -340,7 +340,7 @@ pub fn read_conditional(
         }
 
         // Lookup the event record at position
-        let rec = event_tree_lookup(lmdb, events_tree_root_id, pos)?;
+        let rec = event_tree_lookup(lmdb, dirty, events_tree_root_id, pos)?;
 
         // Check type matching against any of the matching items
         let mut type_ok = false;

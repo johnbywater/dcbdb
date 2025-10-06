@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use crate::common::{PageID, Position};
 use crate::dcbapi::{DCBError, DCBResult};
 use crate::lmdb::{Lmdb, Writer};
@@ -589,6 +590,7 @@ pub fn tags_tree_insert(
 // Iterator over positions for a given tag in the tags tree
 pub struct TagsTreeIterator<'a> {
     db: &'a Lmdb,
+    dirty: &'a HashMap<PageID, Page>,
     tags_root_id: PageID,
     tag: TagHash,
     after: Position,
@@ -605,9 +607,10 @@ enum IterState {
 }
 
 impl<'a> TagsTreeIterator<'a> {
-    pub fn new(db: &'a Lmdb, tags_root_id: PageID, tag: TagHash, after: Position) -> Self {
+    pub fn new(db: &'a Lmdb, dirty: &'a HashMap<PageID, Page>, tags_root_id: PageID, tag: TagHash, after: Position) -> Self {
         Self {
             db,
+            dirty,
             tags_root_id,
             tag,
             after,
@@ -626,7 +629,7 @@ impl<'a> Iterator for TagsTreeIterator<'a> {
                     // Lazily traverse the tags tree to locate positions for the tag
                     let mut current_page_id: PageID = self.tags_root_id;
                     let positions: Vec<Position> = loop {
-                        match self.db.read_page(current_page_id) {
+                        match self.get_page(current_page_id) {
                             Ok(page) => match page.node {
                                 Node::TagsInternal(internal) => {
                                     let idx = match internal.keys.binary_search(&self.tag) {
@@ -646,7 +649,7 @@ impl<'a> Iterator for TagsTreeIterator<'a> {
                                             break val.positions.clone();
                                         } else {
                                             // Load positions from per-tag leaf page
-                                            match self.db.read_page(val.root_id) {
+                                            match self.get_page(val.root_id) {
                                                 Ok(p) => match p.node {
                                                     Node::TagLeaf(tleaf) => {
                                                         break tleaf.positions.clone();
@@ -663,7 +666,7 @@ impl<'a> Iterator for TagsTreeIterator<'a> {
                                                             .collect();
                                                         while let Some(pid) = stack.pop() {
                                                             if let Ok(child_page) =
-                                                                self.db.read_page(pid)
+                                                                self.get_page(pid)
                                                             {
                                                                 match child_page.node {
                                                                     Node::TagLeaf(tleaf) => {
@@ -735,6 +738,18 @@ impl<'a> Iterator for TagsTreeIterator<'a> {
     }
 }
 
+impl<'a> TagsTreeIterator<'a> {
+    fn get_page(&self, page_id: PageID) -> DCBResult<Page> {
+        // Prefer the dirty (unflushed) page if present; otherwise read from disk
+        let page = if let Some(p) = self.dirty.get(&page_id) {
+            p.clone()
+        } else {
+            self.db.read_page(page_id)?
+        };
+        Ok(page)
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -760,7 +775,8 @@ mod tests {
 
     fn tags_tree_lookup(lmdb: &Lmdb, tags_root_id: PageID, tag: TagHash) -> DCBResult<Vec<Position>> {
         // Reuse the iterator to traverse and collect all positions for the tag
-        let iter = TagsTreeIterator::new(lmdb, tags_root_id, tag, Position(0));
+        let dirty = HashMap::new();
+        let iter = TagsTreeIterator::new(lmdb, &dirty, tags_root_id, tag, Position(0));
         Ok(iter.collect())
     }
 
@@ -1454,32 +1470,33 @@ mod tests {
         db.commit(&mut writer).unwrap();
 
         let reader = db.reader().unwrap();
+        let dirty = HashMap::new();
 
         // after = 0 -> all positions
-        let collected_all: Vec<Position> = TagsTreeIterator::new(&db, reader.tags_tree_root_id, tag, Position(0))
+        let collected_all: Vec<Position> = TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, tag, Position(0))
             .collect();
         assert_eq!(collected_all, inserted);
 
         // after = first -> drop first
         let after_first = inserted[0];
-        let collected_after_first: Vec<Position> = TagsTreeIterator::new(&db, reader.tags_tree_root_id, tag, after_first)
+        let collected_after_first: Vec<Position> = TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, tag, after_first)
             .collect();
         assert_eq!(collected_after_first, inserted[1..].to_vec());
 
         // after = middle -> drop up to and including that element
         let after_mid = inserted[2];
-        let collected_after_mid: Vec<Position> = TagsTreeIterator::new(&db, reader.tags_tree_root_id, tag, after_mid)
+        let collected_after_mid: Vec<Position> = TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, tag, after_mid)
             .collect();
         assert_eq!(collected_after_mid, inserted[3..].to_vec());
 
         // after = last -> empty
         let after_last = *inserted.last().unwrap();
-        let collected_empty: Vec<Position> = TagsTreeIterator::new(&db, reader.tags_tree_root_id, tag, after_last)
+        let collected_empty: Vec<Position> = TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, tag, after_last)
             .collect();
         assert!(collected_empty.is_empty());
 
         // non-existent tag yields empty iterator regardless of after
-        let empty_iter = TagsTreeIterator::new(&db, reader.tags_tree_root_id, th(9999), Position(0));
+        let empty_iter = TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, th(9999), Position(0));
         assert_eq!(empty_iter.collect::<Vec<Position>>(), Vec::new());
     }
 

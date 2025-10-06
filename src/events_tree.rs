@@ -51,10 +51,15 @@ fn write_overflow_chain(lmdb: &Lmdb, writer: &mut Writer, data: &[u8]) -> DCBRes
     Ok(next_id)
 }
 
-fn read_overflow_chain(lmdb: &Lmdb, mut page_id: PageID) -> DCBResult<Vec<u8>> {
+fn read_overflow_chain(lmdb: &Lmdb, dirty: &HashMap<PageID, Page>, mut page_id: PageID) -> DCBResult<Vec<u8>> {
     let mut out: Vec<u8> = Vec::new();
     while page_id.0 != 0 {
-        let page = lmdb.read_page(page_id)?;
+        // Prefer the dirty (unflushed) page if present; otherwise read from disk
+        let page = if let Some(p) = dirty.get(&page_id) {
+            p.clone()
+        } else {
+            lmdb.read_page(page_id)?
+        };
         match page.node {
             Node::EventOverflow(node) => {
                 out.extend_from_slice(&node.data);
@@ -70,7 +75,7 @@ fn read_overflow_chain(lmdb: &Lmdb, mut page_id: PageID) -> DCBResult<Vec<u8>> {
     Ok(out)
 }
 
-fn materialize_event_value(lmdb: &Lmdb, value: &EventValue) -> DCBResult<EventRecord> {
+fn materialize_event_value(lmdb: &Lmdb, dirty: &HashMap<PageID, Page>, value: &EventValue) -> DCBResult<EventRecord> {
     match value {
         EventValue::Inline(rec) => Ok(rec.clone()),
         EventValue::Overflow {
@@ -79,7 +84,7 @@ fn materialize_event_value(lmdb: &Lmdb, value: &EventValue) -> DCBResult<EventRe
             tags,
             root_id,
         } => {
-            let data = read_overflow_chain(lmdb, *root_id)?;
+            let data = read_overflow_chain(lmdb, dirty, *root_id)?;
             if (data.len() as u64) != *data_len {
                 return Err(DCBError::DatabaseCorrupted(
                     "Overflow data length mismatch".to_string(),
@@ -392,12 +397,18 @@ pub fn event_tree_append(
 
 pub fn event_tree_lookup(
     lmdb: &Lmdb,
+    dirty: &HashMap<PageID, Page>,
     events_tree_root_id: PageID,
     position: Position,
 ) -> DCBResult<EventRecord> {
     let mut current_page_id: PageID = events_tree_root_id;
     loop {
-        let page = lmdb.read_page(current_page_id)?;
+        // Prefer the dirty (unflushed) page if present; otherwise read from disk
+        let page = if let Some(p) = dirty.get(&current_page_id) {
+            p.clone()
+        } else {
+            lmdb.read_page(current_page_id)?
+        };
         match &page.node {
             Node::EventInternal(internal) => {
                 // Choose child based on upper bound of position in separator keys
@@ -414,7 +425,7 @@ pub fn event_tree_lookup(
             }
             Node::EventLeaf(leaf) => match leaf.keys.binary_search(&position) {
                 Ok(i) => {
-                    let rec = materialize_event_value(lmdb, &leaf.values[i])?;
+                    let rec = materialize_event_value(lmdb, dirty,&leaf.values[i])?;
                     return Ok(rec);
                 }
                 Err(_) => {
@@ -434,17 +445,19 @@ pub fn event_tree_lookup(
 
 pub struct EventIterator<'a> {
     pub db: &'a Lmdb,
+    pub dirty: &'a HashMap<PageID, Page>,
     pub stack: Vec<(PageID, usize)>,
     pub page_cache: HashMap<PageID, Page>,
     pub after: Position,
 }
 
 impl<'a> EventIterator<'a> {
-    pub fn new(db: &'a Lmdb, events_tree_root_id: PageID, after: Option<Position>) -> Self {
+    pub fn new(db: &'a Lmdb, dirty: &'a HashMap<PageID, Page>, events_tree_root_id: PageID, after: Option<Position>) -> Self {
         let next_position = (events_tree_root_id, 0);
         let after = after.unwrap_or(Position(0));
         Self {
             db,
+            dirty,
             stack: vec![next_position],
             page_cache: HashMap::new(),
             after,
@@ -469,7 +482,9 @@ impl<'a> EventIterator<'a> {
 
             {
                 // Obtain the current page from cache (deserialize at most once)
-                let page_ref: &Page = if let Some(p) = self.page_cache.get(&page_id) {
+                let page_ref: &Page = if let Some(p) = self.dirty.get(&page_id) {
+                    p
+                } else if let Some(p) = self.page_cache.get(&page_id) {
                     p
                 } else {
                     let page = self.db.read_page(page_id)?;
@@ -527,7 +542,7 @@ impl<'a> EventIterator<'a> {
                                 remove_page = true;
                             }
                             let pos = leaf.keys[item_idx];
-                            let rec = materialize_event_value(self.db, &leaf.values[item_idx])?;
+                            let rec = materialize_event_value(self.db, self.dirty, &leaf.values[item_idx])?;
                             if pos > self.after {
                                 emit = Some((pos, rec));
                             } else {
@@ -1022,7 +1037,8 @@ mod tests {
         let events_tree_root_id = reader.events_tree_root_id;
         let reader_tsn = reader.tsn;
 
-        let mut events_iterator = EventIterator::new(&db, events_tree_root_id, None);
+        let dirty = HashMap::new();
+        let mut events_iterator = EventIterator::new(&db, &dirty, events_tree_root_id, None);
 
         // Ensure the reader's tsn is registered while the iterator is alive
         {
@@ -1057,8 +1073,9 @@ mod tests {
         }
 
         // Additionally, validate lookup_event for each appended position using the existing reader in the iterator
+        let dirty = HashMap::new();
         for (pos, expected_rec) in copy_inserted.iter() {
-            let found = event_tree_lookup(&db, events_tree_root_id, *pos).unwrap();
+            let found = event_tree_lookup(&db, &dirty, events_tree_root_id, *pos).unwrap();
             assert_eq!(expected_rec, &found);
         }
 
@@ -1145,7 +1162,8 @@ mod tests {
         let reader = db.reader().unwrap();
         let events_tree_root_id = reader.events_tree_root_id;
         let reader_tsn = reader.tsn;
-        let mut events_iterator = EventIterator::new(&db, events_tree_root_id, Some(after_pos));
+        let dirty = HashMap::new();
+        let mut events_iterator = EventIterator::new(&db, &dirty, events_tree_root_id, Some(after_pos));
 
         // Ensure the reader's tsn is registered while the iterator is alive
         {
@@ -1216,7 +1234,8 @@ mod tests {
 
         // Lookup should return identical payload
         let reader = db.reader().unwrap();
-        let got = event_tree_lookup(&db, reader.events_tree_root_id, pos).unwrap();
+        let dirty = HashMap::new();
+        let got = event_tree_lookup(&db, &dirty, reader.events_tree_root_id, pos).unwrap();
         assert_eq!(event, got);
 
         // Ensure an overflow page is used for storage
@@ -1262,7 +1281,8 @@ mod tests {
 
         // Lookup
         let reader = db.reader().unwrap();
-        let got = event_tree_lookup(&db, reader.events_tree_root_id, pos).unwrap();
+        let dirty = HashMap::new();
+        let got = event_tree_lookup(&db, &dirty, reader.events_tree_root_id, pos).unwrap();
         assert_eq!(event, got);
 
         // Ensure overflow in leaf
@@ -1319,8 +1339,9 @@ mod tests {
             // Lookup phase
             let reader = db.reader().unwrap();
             let start_lookup = std::time::Instant::now();
+            let dirty = HashMap::new();
             for &pos in &positions {
-                let rec = event_tree_lookup(&db, reader.events_tree_root_id, pos).unwrap();
+                let rec = event_tree_lookup(&db, &dirty, reader.events_tree_root_id, pos).unwrap();
                 std::hint::black_box(&rec);
             }
             let lookup_elapsed = start_lookup.elapsed();

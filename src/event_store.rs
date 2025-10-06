@@ -971,4 +971,45 @@ mod tests {
         assert_eq!(events[1].event.data, e3.data);
         assert_eq!(head, Some(2));
     }
+
+    #[test]
+    fn test_append_batch_dirty_visibility_with_tags() {
+        let temp_dir = tempdir().unwrap();
+        let store = EventStore::new(temp_dir.path()).unwrap();
+
+        // Item1 introduces tag "x"; Item2 condition queries tag "x" and must see it via dirty tags tree; Item3 uses after to ignore it
+        let e1 = DCBEvent { event_type: "T".into(), data: b"one".to_vec(), tags: vec!["x".into()] };
+        let e2 = DCBEvent { event_type: "T".into(), data: b"two".to_vec(), tags: vec!["y".into()] };
+        let e3 = DCBEvent { event_type: "T".into(), data: b"three".to_vec(), tags: vec!["z".into()] };
+
+        let query_tag_x = DCBQuery { items: vec![DCBQueryItem { types: vec![], tags: vec!["x".into()] }] };
+
+        let items = vec![
+            // 1) Append e1 (tag x)
+            (vec![e1.clone()], None),
+            // 2) Attempt append e2, but fail if any events with tag x exist after None (i.e., from the start); should fail due to e1 in dirty pages
+            (vec![e2.clone()], Some(DCBAppendCondition { fail_if_events_match: query_tag_x.clone(), after: None })),
+            // 3) Append e3 with condition that ignores position 1 by using after=Some(1); should pass
+            (vec![e3.clone()], Some(DCBAppendCondition { fail_if_events_match: query_tag_x.clone(), after: Some(1) })),
+        ];
+
+        let results = store.append_batch(items).unwrap();
+
+        assert_eq!(results.len(), 3);
+        match &results[0] { Ok(pos) => assert_eq!(*pos, 1), Err(e) => panic!("unexpected error for first item: {:?}", e) }
+        match &results[1] { Ok(pos) => panic!("expected integrity error, got Ok({})", pos), Err(e) => assert!(matches!(e, DCBError::IntegrityError)) }
+        match &results[2] { Ok(pos) => assert_eq!(*pos, 2), Err(e) => panic!("unexpected error for third item: {:?}", e) }
+
+        // Verify committed state and tag index behavior
+        let (events, head) = store.read_with_head(None, None, None).unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event.data, e1.data);
+        assert_eq!(events[1].event.data, e3.data);
+        assert_eq!(head, Some(2));
+
+        // Query by tag x returns only the first event
+        let (tagx_events, _) = store.read_with_head(Some(query_tag_x.clone()), None, None).unwrap();
+        assert_eq!(tagx_events.len(), 1);
+        assert_eq!(tagx_events[0].event.data, e1.data);
+    }
 }

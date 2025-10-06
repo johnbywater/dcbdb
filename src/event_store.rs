@@ -11,6 +11,7 @@ use crate::dcbapi::{
 use crate::events_tree::{EventIterator, event_tree_append, event_tree_lookup};
 use crate::events_tree_nodes::EventRecord;
 use crate::lmdb::{Lmdb, Writer};
+use crate::page::Page;
 use crate::tags_tree::{tags_tree_insert, TagsTreeIterator};
 use crate::tags_tree_nodes::TagHash;
 
@@ -123,6 +124,7 @@ pub fn unconditional_append(lmdb: &Lmdb, writer: &mut Writer, events: Vec<DCBEve
 /// filtering by tag and type matches, and then looking up the event record.
 pub fn read_conditional(
     lmdb: &Lmdb,
+    _dirty: &HashMap<PageID, Page>,
     events_tree_root_id: PageID,
     tags_tree_root_id: PageID,
     query: DCBQuery,
@@ -389,7 +391,7 @@ impl DCBEventStore for EventStore {
         let after_pos = Position(after.unwrap_or(0));
 
         // Delegate to read_conditional
-        let events = read_conditional(lmdb, reader.events_tree_root_id, reader.tags_tree_root_id, q, after_pos, limit)?;
+        let events = read_conditional(lmdb, &HashMap::new(), reader.events_tree_root_id, reader.tags_tree_root_id, q, after_pos, limit)?;
 
         // Compute head according to semantics
         let head = if limit.is_none() {
@@ -427,7 +429,7 @@ impl DCBEventStore for EventStore {
         // Check condition using read_conditional (limit 1), starting after the provided position
         if let Some(cond) = condition {
             let after = Position(cond.after.unwrap_or(0));
-            let found = read_conditional(lmdb, writer.events_tree_root_id, writer.tags_tree_root_id, cond.fail_if_events_match.clone(), after, Some(1))?;
+            let found = read_conditional(lmdb, &writer.dirty, writer.events_tree_root_id, writer.tags_tree_root_id, cond.fail_if_events_match.clone(), after, Some(1))?;
             if !found.is_empty() {
                 return Err(DCBError::IntegrityError);
             }
@@ -449,8 +451,30 @@ impl DCBEventStore for EventStore {
 mod tests {
     use super::*;
     use crate::dcbapi::{DCBAppendCondition, DCBError, DCBQuery, DCBQueryItem};
+    use crate::page::Page;
+    use std::collections::HashMap;
     use serial_test::serial;
     use tempfile::tempdir;
+
+    // Backward-compatible wrapper for tests: call new read_conditional with an empty dirty map
+    fn read_conditional(
+        lmdb: &Lmdb,
+        events_tree_root_id: PageID,
+        tags_tree_root_id: PageID,
+        query: DCBQuery,
+        after: Position,
+        limit: Option<usize>,
+    ) -> DCBResult<Vec<DCBSequencedEvent>> {
+        super::read_conditional(
+            lmdb,
+            &HashMap::<PageID, Page>::new(),
+            events_tree_root_id,
+            tags_tree_root_id,
+            query,
+            after,
+            limit,
+        )
+    }
 
     static VERBOSE: bool = false;
 
@@ -507,24 +531,24 @@ mod tests {
         // after = first -> tail
         let first = all[0].position;
         let tail =
-            read_conditional(&mut lmdb, reader.events_tree_root_id, reader.tags_tree_root_id,DCBQuery { items: vec![] }, Position(first), None).unwrap();
+            read_conditional(&mut lmdb, reader.events_tree_root_id, reader.tags_tree_root_id, DCBQuery { items: vec![] }, Position(first), None).unwrap();
         assert_eq!(tail.len(), input.len() - 1);
 
         // after = last -> empty
         let last = all.last().unwrap().position;
         let none =
-            read_conditional(&mut lmdb, reader.events_tree_root_id, reader.tags_tree_root_id,DCBQuery { items: vec![] }, Position(last), None).unwrap();
+            read_conditional(&mut lmdb, reader.events_tree_root_id, reader.tags_tree_root_id, DCBQuery { items: vec![] }, Position(last), None).unwrap();
         assert!(none.is_empty());
 
         // limits
         let lim0 =
-            read_conditional(&mut lmdb, reader.events_tree_root_id, reader.tags_tree_root_id,DCBQuery { items: vec![] }, Position(0), Some(0)).unwrap();
+            read_conditional(&mut lmdb, reader.events_tree_root_id, reader.tags_tree_root_id, DCBQuery { items: vec![] }, Position(0), Some(0)).unwrap();
         assert!(lim0.is_empty());
         let lim3 =
-            read_conditional(&mut lmdb, reader.events_tree_root_id, reader.tags_tree_root_id,DCBQuery { items: vec![] }, Position(0), Some(3)).unwrap();
+            read_conditional(&mut lmdb, reader.events_tree_root_id, reader.tags_tree_root_id, DCBQuery { items: vec![] }, Position(0), Some(3)).unwrap();
         assert_eq!(lim3.len(), 3);
         let lim20 =
-            read_conditional(&mut lmdb, reader.events_tree_root_id, reader.tags_tree_root_id,DCBQuery { items: vec![] }, Position(0), Some(20)).unwrap();
+            read_conditional(&mut lmdb, reader.events_tree_root_id, reader.tags_tree_root_id, DCBQuery { items: vec![] }, Position(0), Some(20)).unwrap();
         assert_eq!(lim20.len(), input.len());
     }
 

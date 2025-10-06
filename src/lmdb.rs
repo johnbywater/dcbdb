@@ -311,7 +311,7 @@ impl Lmdb {
             }
         }
 
-        // Write all dirty pages in a single file lock
+        // Write all dirty pages (except for the header page) to the file
         if !writer.dirty.is_empty() {
             let mut serialized_pages: Vec<(PageID, Vec<u8>)> = Vec::with_capacity(writer.dirty.len());
             for page in writer.dirty.values() {
@@ -324,10 +324,10 @@ impl Lmdb {
             }
         }
 
-        // Flush changes to disk
+        // Flush the file to disk
         self.flush()?;
 
-        // Write the new header page
+        // Write the new header page to the file
         let header_page_id = if writer.header_page_id == self.header_page_id0 {
             self.header_page_id1
         } else {
@@ -346,7 +346,7 @@ impl Lmdb {
         let header_page = Page::new(header_page_id, Node::Header(header_node));
         self.write_page(&header_page)?;
 
-        // Flush changes to disk
+        // Flush the file to disk
         self.flush()?;
 
         if self.verbose {

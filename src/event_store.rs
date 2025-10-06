@@ -438,7 +438,7 @@ impl DCBEventStore for EventStore {
             return Ok(0);
         }
 
-        // Append unconditionally using provided writer pattern; commit after
+        // Append unconditionally then commit
         let last = unconditional_append(lmdb, &mut writer, events)?;
         lmdb.commit(&mut writer)?;
         Ok(last)

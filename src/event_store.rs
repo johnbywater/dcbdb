@@ -1012,4 +1012,63 @@ mod tests {
         assert_eq!(tagx_events.len(), 1);
         assert_eq!(tagx_events[0].event.data, e1.data);
     }
+
+    #[test]
+    fn test_append_batch_dirty_visibility_with_types_small_and_big_overflow() {
+        let temp_dir = tempdir().unwrap();
+        let store = EventStore::new(temp_dir.path()).unwrap();
+
+        // Prepare events
+        let small = DCBEvent { event_type: "S".into(), data: b"sm".to_vec(), tags: vec!["tS".into()] };
+        // Large data to ensure it spills into event overflow pages
+        let big_data_len = super::DEFAULT_PAGE_SIZE * 3; // 3 pages worth to be safe
+        let big = DCBEvent { event_type: "B".into(), data: vec![0xAB; big_data_len], tags: vec!["tB".into()] };
+        let filler1 = DCBEvent { event_type: "X".into(), data: b"x".to_vec(), tags: vec![] };
+        let filler2 = DCBEvent { event_type: "Y".into(), data: b"y".to_vec(), tags: vec![] };
+        let final_ok = DCBEvent { event_type: "C".into(), data: b"c".to_vec(), tags: vec![] };
+
+        // Queries by type only (no tags) to force fallback path over events tree (which reads from dirty pages)
+        let q_type_s = DCBQuery { items: vec![DCBQueryItem { types: vec!["S".into()], tags: vec![] }] };
+        let q_type_b = DCBQuery { items: vec![DCBQueryItem { types: vec!["B".into()], tags: vec![] }] };
+
+        let items = vec![
+            // 1) Append small S
+            (vec![small.clone()], None),
+            // 2) Should fail because type S exists in dirty pages (after None)
+            (vec![filler1.clone()], Some(DCBAppendCondition { fail_if_events_match: q_type_s.clone(), after: None })),
+            // 3) Append big B (overflow)
+            (vec![big.clone()], None),
+            // 4) Should fail because type B exists in dirty pages (after None)
+            (vec![filler2.clone()], Some(DCBAppendCondition { fail_if_events_match: q_type_b.clone(), after: None })),
+            // 5) Should succeed because after=Some(2) ignores positions <= 2 (small at 1, big at 2)
+            (vec![final_ok.clone()], Some(DCBAppendCondition { fail_if_events_match: q_type_b.clone(), after: Some(2) })),
+        ];
+
+        let results = store.append_batch(items).unwrap();
+        assert_eq!(results.len(), 5);
+        match &results[0] { Ok(pos) => assert_eq!(*pos, 1), other => panic!("unexpected for item0: {:?}", other) }
+        match &results[1] { Err(DCBError::IntegrityError) => {}, other => panic!("expected IntegrityError for item1, got {:?}", other) }
+        match &results[2] { Ok(pos) => assert_eq!(*pos, 2), other => panic!("unexpected for item2: {:?}", other) }
+        match &results[3] { Err(DCBError::IntegrityError) => {}, other => panic!("expected IntegrityError for item3, got {:?}", other) }
+        match &results[4] { Ok(pos) => assert_eq!(*pos, 3), other => panic!("unexpected for item4: {:?}", other) }
+
+        // Verify committed state: we should have small (pos1), big (pos2), final_ok (pos3)
+        let (events, head) = store.read_with_head(None, None, None).unwrap();
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].event.event_type, small.event_type);
+        assert_eq!(events[1].event.event_type, big.event_type);
+        assert_eq!(events[2].event.event_type, final_ok.event_type);
+        assert_eq!(head, Some(3));
+
+        // Check type queries and large data integrity
+        let (small_by_type, _) = store.read_with_head(Some(q_type_s.clone()), None, None).unwrap();
+        assert_eq!(small_by_type.len(), 1);
+        assert_eq!(small_by_type[0].event.event_type, "S");
+
+        let (big_by_type, _) = store.read_with_head(Some(q_type_b.clone()), None, None).unwrap();
+        assert_eq!(big_by_type.len(), 1);
+        assert_eq!(big_by_type[0].event.event_type, "B");
+        assert_eq!(big_by_type[0].event.data.len(), big_data_len);
+        assert!(big_by_type[0].event.data.iter().all(|&b| b == 0xAB));
+    }
 }

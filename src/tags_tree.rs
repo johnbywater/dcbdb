@@ -735,15 +735,6 @@ impl<'a> Iterator for TagsTreeIterator<'a> {
     }
 }
 
-// Create an iterator over positions that have been inserted for the given tag
-pub fn tags_tree_iter<'a>(
-    db: &'a Lmdb,
-    reader: &'a Reader,
-    tag: TagHash,
-    after: Position,
-) -> DCBResult<TagsTreeIterator<'a>> {
-    Ok(TagsTreeIterator::new(db, reader, tag, after))
-}
 
 #[cfg(test)]
 mod tests {
@@ -769,7 +760,7 @@ mod tests {
 
     fn tags_tree_lookup(lmdb: &Lmdb, reader: &Reader, tag: TagHash) -> DCBResult<Vec<Position>> {
         // Reuse the iterator to traverse and collect all positions for the tag
-        let iter = tags_tree_iter(lmdb, reader, tag, Position(0))?;
+        let iter = TagsTreeIterator::new(lmdb, reader, tag, Position(0));
         Ok(iter.collect())
     }
 
@@ -1465,34 +1456,30 @@ mod tests {
         let reader = db.reader().unwrap();
 
         // after = 0 -> all positions
-        let collected_all: Vec<Position> = tags_tree_iter(&db, &reader, tag, Position(0))
-            .unwrap()
+        let collected_all: Vec<Position> = TagsTreeIterator::new(&db, &reader, tag, Position(0))
             .collect();
         assert_eq!(collected_all, inserted);
 
         // after = first -> drop first
         let after_first = inserted[0];
-        let collected_after_first: Vec<Position> = tags_tree_iter(&db, &reader, tag, after_first)
-            .unwrap()
+        let collected_after_first: Vec<Position> = TagsTreeIterator::new(&db, &reader, tag, after_first)
             .collect();
         assert_eq!(collected_after_first, inserted[1..].to_vec());
 
         // after = middle -> drop up to and including that element
         let after_mid = inserted[2];
-        let collected_after_mid: Vec<Position> = tags_tree_iter(&db, &reader, tag, after_mid)
-            .unwrap()
+        let collected_after_mid: Vec<Position> = TagsTreeIterator::new(&db, &reader, tag, after_mid)
             .collect();
         assert_eq!(collected_after_mid, inserted[3..].to_vec());
 
         // after = last -> empty
         let after_last = *inserted.last().unwrap();
-        let collected_empty: Vec<Position> = tags_tree_iter(&db, &reader, tag, after_last)
-            .unwrap()
+        let collected_empty: Vec<Position> = TagsTreeIterator::new(&db, &reader, tag, after_last)
             .collect();
         assert!(collected_empty.is_empty());
 
         // non-existent tag yields empty iterator regardless of after
-        let empty_iter = tags_tree_iter(&db, &reader, th(9999), Position(0)).unwrap();
+        let empty_iter = TagsTreeIterator::new(&db, &reader, th(9999), Position(0));
         assert_eq!(empty_iter.collect::<Vec<Position>>(), Vec::new());
     }
 

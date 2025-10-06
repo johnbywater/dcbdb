@@ -11,7 +11,7 @@ use crate::dcbapi::{
 use crate::events_tree::{EventIterator, event_tree_append, event_tree_lookup};
 use crate::events_tree_nodes::EventRecord;
 use crate::lmdb::Lmdb;
-use crate::tags_tree::{tags_tree_insert, tags_tree_iter};
+use crate::tags_tree::{tags_tree_insert, TagsTreeIterator};
 use crate::tags_tree_nodes::TagHash;
 
 static DEFAULT_PAGE_SIZE: usize = 4096;
@@ -259,7 +259,7 @@ pub fn read_conditional(
     let mut tag_iters: Vec<PositionTagQiidIterator<_>> = Vec::new();
     for (tag, qiids) in tag_qiis.iter() {
         let tag_hash: TagHash = tag_to_hash(tag);
-        let positions_iter = tags_tree_iter(lmdb, &reader, tag_hash, after)?; // yields positions for tag
+        let positions_iter = TagsTreeIterator::new(lmdb, &reader, tag_hash, after); // yields positions for tag
         tag_iters.push(PositionTagQiidIterator::new(
             positions_iter,
             tag.clone(),

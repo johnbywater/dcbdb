@@ -324,6 +324,10 @@ impl EventStoreService for GrpcEventStoreServer {
             let mut next_after = after;
             let mut sent_any = false;
             let mut remaining = limit;
+            // If overall read is unlimited, compute global head once to preserve semantics
+            let global_head = if remaining.is_none() {
+                match event_store.head().await { Ok(h) => h, Err(_) => None }
+            } else { None };
             // Server-side batch cap to ensure streaming in multiple messages
             const SERVER_BATCH_SIZE: usize = 100;
             loop {
@@ -334,15 +338,8 @@ impl EventStoreService for GrpcEventStoreServer {
                         if events.is_empty() {
                             // Only send an empty batch to communicate head if this is the first batch
                             if !sent_any {
-                                // For unlimited overall reads, compute the global head explicitly to preserve semantics
-                                let head_to_send = if remaining.is_none() {
-                                    match event_store.head().await {
-                                        Ok(h) => h,
-                                        Err(_) => head,
-                                    }
-                                } else {
-                                    head
-                                };
+                                // For unlimited overall reads, use precomputed global head
+                                let head_to_send = if remaining.is_none() { global_head } else { head };
                                 let batch = SequencedEventBatchProto { events: vec![], head: head_to_send };
                                 let response = ReadResponseProto { batch: Some(batch) };
                                 let _ = tx.send(Ok(response)).await;
@@ -351,9 +348,10 @@ impl EventStoreService for GrpcEventStoreServer {
                         }
 
                         // Prepare and send this non-empty batch
+                        let batch_head = if remaining.is_none() { global_head } else { head };
                         let batch = SequencedEventBatchProto {
                             events: events.iter().cloned().map(|e| e.into()).collect(),
-                            head,
+                            head: batch_head,
                         };
                         let response = ReadResponseProto { batch: Some(batch) };
 

@@ -1,6 +1,21 @@
 # DCBDB - Event Store for Dynamic Consistency Boundaries
 
-DCBDB is an event store designed for dynamic consistency boundaries with a gRPC interface. It provides a robust foundation for event-driven architectures where consistency boundaries may shift based on business requirements.
+DCBDB is an event store designed for dynamic consistency boundaries with a gRPC interface. It
+provides a robust foundation for event-driven architectures where consistency boundaries may
+shift based on business requirements.
+
+## Database Design
+
+DCBDB stores data in a single paged file with fixed-size pages and an MVCC, copy-on-write update
+strategy. A small header node records the transaction sequence number (TSN), the next free PageID,
+and the roots for three B+ trees: the events tree (ordered by monotonically increasing Position),
+the tags tree (for tag-based indexing), and the free-lists tree (for reusable page IDs). Writers
+never mutate pages in place: they allocate new pages, write modified nodes, and on commit atomically
+publish a new header that points to the new roots; readers hold a TSN and can continue traversing the
+old roots safely. Large event payloads are split across overflow pages and referenced from leaf records,
+while small payloads are stored inline. This design yields crash-safe commits, concurrent readers without
+blocking, and efficient space reuse via the free-lists tree.
+
 
 ## Quick Start
 

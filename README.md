@@ -9,22 +9,17 @@ DCBDB is an event store designed for dynamic consistency boundaries with a gRPC 
    cargo build --release
    ```
 
-2. Generate example data (1,000,000 events) into a store path (optional utility):
-   ```bash
-   cargo run --bin generate_million -- --path /path/to/event-store --batch-size 10000
-   ```
-
-3. Start the gRPC server:
+2. Start the gRPC server:
    ```bash
    cargo run --bin grpc_server -- --path /path/to/event-store
    ```
 
-4. In another terminal, run the example client:
+3. In another terminal, run the example client:
    ```bash
    cargo run --bin example_client
    ```
 
-This will (optionally) create a database with 1,000,000 events, start a server, connect to it with the example client, append an event, and read it back.
+This will start a server, connect to it with the example client, append an event, and read it back.
 
 ## Building the Project
 

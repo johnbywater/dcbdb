@@ -116,8 +116,8 @@ pub enum DCBError {
     Serialization(#[from] bincode::error::EncodeError),
 
     // DCB domain errors
-    #[error("Integrity error: condition failed")]
-    IntegrityError,
+    #[error("Integrity error: condition failed: {0}")]
+    IntegrityError(String),
     #[error("Corruption detected: {0}")]
     Corruption(String),
 

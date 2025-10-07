@@ -430,8 +430,9 @@ impl DCBEventStore for EventStore {
         if let Some(cond) = condition {
             let after = Position(cond.after.unwrap_or(0));
             let found = read_conditional(lmdb, &writer.dirty, writer.events_tree_root_id, writer.tags_tree_root_id, cond.fail_if_events_match.clone(), after, Some(1))?;
-            if !found.is_empty() {
-                return Err(DCBError::IntegrityError);
+            if let Some(matched) = found.first() {
+                let msg = format!("matching event: {:?} condition: {:?}", matched, cond.fail_if_events_match);
+                return Err(DCBError::IntegrityError(msg));
             }
         }
 
@@ -479,8 +480,9 @@ impl EventStore {
                 );
                 match found {
                     Ok(found_vec) => {
-                        if !found_vec.is_empty() {
-                            results.push(Err(DCBError::IntegrityError));
+                        if let Some(matched) = found_vec.first() {
+                            let msg = format!("matching event: {:?}, condition: {:?}", matched, cond.fail_if_events_match.clone());
+                            results.push(Err(DCBError::IntegrityError(msg)));
                             continue;
                         }
                     }
@@ -918,7 +920,7 @@ mod tests {
             Some(cond_fail),
         );
         match res {
-            Err(DCBError::IntegrityError) => {}
+            Err(DCBError::IntegrityError(_)) => {}
             other => panic!("Expected IntegrityError, got {:?}", other),
         }
         // Ensure head unchanged after failed append
@@ -958,7 +960,7 @@ mod tests {
         // Second item should fail integrity
         match &results[1] {
             Ok(pos) => panic!("expected integrity error, got Ok({})", pos),
-            Err(e) => assert!(matches!(e, DCBError::IntegrityError)),
+            Err(e) => assert!(matches!(e, DCBError::IntegrityError(_))),
         }
         // Third item should succeed with last position 2 (since second didn't append)
         match &results[2] {
@@ -999,7 +1001,7 @@ mod tests {
 
         assert_eq!(results.len(), 3);
         match &results[0] { Ok(pos) => assert_eq!(*pos, 1), Err(e) => panic!("unexpected error for first item: {:?}", e) }
-        match &results[1] { Ok(pos) => panic!("expected integrity error, got Ok({})", pos), Err(e) => assert!(matches!(e, DCBError::IntegrityError)) }
+        match &results[1] { Ok(pos) => panic!("expected integrity error, got Ok({})", pos), Err(e) => assert!(matches!(e, DCBError::IntegrityError(_))) }
         match &results[2] { Ok(pos) => assert_eq!(*pos, 2), Err(e) => panic!("unexpected error for third item: {:?}", e) }
 
         // Verify committed state and tag index behavior
@@ -1049,9 +1051,9 @@ mod tests {
         let results = store.append_batch(items).unwrap();
         assert_eq!(results.len(), 5);
         match &results[0] { Ok(pos) => assert_eq!(*pos, 1), other => panic!("unexpected for item0: {:?}", other) }
-        match &results[1] { Err(DCBError::IntegrityError) => {}, other => panic!("expected IntegrityError for item1, got {:?}", other) }
+        match &results[1] { Err(DCBError::IntegrityError(_)) => {}, other => panic!("expected IntegrityError for item1, got {:?}", other) }
         match &results[2] { Ok(pos) => assert_eq!(*pos, 2), other => panic!("unexpected for item2: {:?}", other) }
-        match &results[3] { Err(DCBError::IntegrityError) => {}, other => panic!("expected IntegrityError for item3, got {:?}", other) }
+        match &results[3] { Err(DCBError::IntegrityError(_)) => {}, other => panic!("expected IntegrityError for item3, got {:?}", other) }
         match &results[4] { Ok(pos) => assert_eq!(*pos, 3), other => panic!("unexpected for item4: {:?}", other) }
 
         // Verify committed state: we should have small (pos1), big (pos2), final_ok (pos3)
@@ -1109,9 +1111,9 @@ mod tests {
         let results = store.append_batch(items).unwrap();
         assert_eq!(results.len(), 5);
         match &results[0] { Ok(pos) => assert_eq!(*pos, 1), other => panic!("unexpected for item0: {:?}", other) }
-        match &results[1] { Err(DCBError::IntegrityError) => {}, other => panic!("expected IntegrityError for item1, got {:?}", other) }
+        match &results[1] { Err(DCBError::IntegrityError(_)) => {}, other => panic!("expected IntegrityError for item1, got {:?}", other) }
         match &results[2] { Ok(pos) => assert_eq!(*pos, 2), other => panic!("unexpected for item2: {:?}", other) }
-        match &results[3] { Err(DCBError::IntegrityError) => {}, other => panic!("expected IntegrityError for item3, got {:?}", other) }
+        match &results[3] { Err(DCBError::IntegrityError(_)) => {}, other => panic!("expected IntegrityError for item3, got {:?}", other) }
         match &results[4] { Ok(pos) => assert_eq!(*pos, 3), other => panic!("unexpected for item4: {:?}", other) }
 
         // Verify committed state and order

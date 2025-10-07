@@ -365,8 +365,8 @@ impl EventStoreService for GrpcEventStoreServer {
             Err(e) => {
                 // Convert the error to a gRPC status with specific error type information
                 match e {
-                    DCBError::IntegrityError => Err(Status::failed_precondition(
-                        "Integrity error: condition failed",
+                    DCBError::IntegrityError(_) => Err(Status::failed_precondition(
+                        format!("Integrity error: condition failed: {e:?}"),
                     )),
                     _ => Err(Status::internal(format!("Append error: {e:?}"))),
                 }
@@ -537,7 +537,7 @@ impl DCBEventStore for GrpcEventStoreClient {
             Err(status) => {
                 // Check if the error message indicates an integrity error
                 if status.message().contains("Integrity error") {
-                    Err(DCBError::IntegrityError)
+                    Err(DCBError::IntegrityError(status.message().to_string()))
                 } else {
                     Err(DCBError::Io(std::io::Error::other(format!(
                         "gRPC append error: {status}"

@@ -434,7 +434,7 @@ pub fn run_event_store_test<T: DCBEventStore>(event_store: &T) {
     // Fail because condition matches all.
     let new = vec![event4.clone()];
     let result = event_store.append(new.clone(), Some(DCBAppendCondition::default()));
-    assert!(matches!(result, Err(DCBError::IntegrityError)));
+    assert!(matches!(result, Err(DCBError::IntegrityError(_))));
 
     // Fail because condition matches all after 1.
     let result = event_store.append(
@@ -444,7 +444,7 @@ pub fn run_event_store_test<T: DCBEventStore>(event_store: &T) {
             after: Some(1),
         }),
     );
-    assert!(matches!(result, Err(DCBError::IntegrityError)));
+    assert!(matches!(result, Err(DCBError::IntegrityError(_))));
 
     // Fail because condition matches type1.
     let result = event_store.append(
@@ -454,7 +454,7 @@ pub fn run_event_store_test<T: DCBEventStore>(event_store: &T) {
             after: None,
         }),
     );
-    assert!(matches!(result, Err(DCBError::IntegrityError)));
+    assert!(matches!(result, Err(DCBError::IntegrityError(_))));
 
     // Fail because condition matches type2 after 1.
     let result = event_store.append(
@@ -464,7 +464,7 @@ pub fn run_event_store_test<T: DCBEventStore>(event_store: &T) {
             after: Some(1),
         }),
     );
-    assert!(matches!(result, Err(DCBError::IntegrityError)));
+    assert!(matches!(result, Err(DCBError::IntegrityError(_))));
 
     // Fail because condition matches tagX.
     let result = event_store.append(
@@ -474,7 +474,7 @@ pub fn run_event_store_test<T: DCBEventStore>(event_store: &T) {
             after: None,
         }),
     );
-    assert!(matches!(result, Err(DCBError::IntegrityError)));
+    assert!(matches!(result, Err(DCBError::IntegrityError(_))));
 
     // Fail because condition matches tagA after 1.
     let result = event_store.append(
@@ -484,7 +484,7 @@ pub fn run_event_store_test<T: DCBEventStore>(event_store: &T) {
             after: Some(1),
         }),
     );
-    assert!(matches!(result, Err(DCBError::IntegrityError)));
+    assert!(matches!(result, Err(DCBError::IntegrityError(_))));
 
     // Fail because condition matches type1 and tagX.
     let result = event_store.append(
@@ -494,7 +494,7 @@ pub fn run_event_store_test<T: DCBEventStore>(event_store: &T) {
             after: None,
         }),
     );
-    assert!(matches!(result, Err(DCBError::IntegrityError)));
+    assert!(matches!(result, Err(DCBError::IntegrityError(_))));
 
     // Fail because condition matches type2 and tagA after 1.
     let result = event_store.append(
@@ -504,7 +504,7 @@ pub fn run_event_store_test<T: DCBEventStore>(event_store: &T) {
             after: Some(1),
         }),
     );
-    assert!(matches!(result, Err(DCBError::IntegrityError)));
+    assert!(matches!(result, Err(DCBError::IntegrityError(_))));
 
     // Fail because condition matches tagA and tagB.
     let result = event_store.append(
@@ -514,7 +514,7 @@ pub fn run_event_store_test<T: DCBEventStore>(event_store: &T) {
             after: None,
         }),
     );
-    assert!(matches!(result, Err(DCBError::IntegrityError)));
+    assert!(matches!(result, Err(DCBError::IntegrityError(_))));
 
     // Fail because condition matches tagB or tagC.
     let result = event_store.append(
@@ -524,7 +524,7 @@ pub fn run_event_store_test<T: DCBEventStore>(event_store: &T) {
             after: None,
         }),
     );
-    assert!(matches!(result, Err(DCBError::IntegrityError)));
+    assert!(matches!(result, Err(DCBError::IntegrityError(_))));
 
     // Fail because condition matches tagX or tagY.
     let result = event_store.append(
@@ -534,7 +534,7 @@ pub fn run_event_store_test<T: DCBEventStore>(event_store: &T) {
             after: None,
         }),
     );
-    assert!(matches!(result, Err(DCBError::IntegrityError)));
+    assert!(matches!(result, Err(DCBError::IntegrityError(_))));
 
     // Fail because condition matches with type2 and tagB, or with type3 and tagC.
     let result = event_store.append(
@@ -544,7 +544,7 @@ pub fn run_event_store_test<T: DCBEventStore>(event_store: &T) {
             after: None,
         }),
     );
-    assert!(matches!(result, Err(DCBError::IntegrityError)));
+    assert!(matches!(result, Err(DCBError::IntegrityError(_))));
 
     // Can append after 3.
     let position = event_store.append(new.clone(), None).unwrap();

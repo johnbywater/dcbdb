@@ -74,7 +74,7 @@ impl DCBReadResponse for ReadResponse {
 }
 
 /// Compute a TagHash ([u8; 8]) from a tag string using a stable 64-bit hash.
-fn tag_to_hash(tag: &str) -> TagHash {
+pub fn tag_to_hash(tag: &str) -> TagHash {
     // Build a 64-bit value by combining two crc32 hashes for stability and simplicity.
     let mut hasher1 = crc32fast::Hasher::new();
     hasher1.update(tag.as_bytes());

@@ -26,15 +26,15 @@ blocking, and efficient space reuse via the free-lists tree.
 
 2. Start the gRPC server:
    ```bash
-   cargo run --bin grpc_server -- --path /path/to/event-store
+   ./target/release/grpc_server --path /path/to/event-store
    ```
 
 3. In another terminal, run the example client:
    ```bash
-   cargo run --bin example_client
+   ./target/release/example_client
    ```
 
-This will start a server, connect to it with the example client, append an event, and read it back.
+This will start a server, connect to it with the example client, append an event, and then read all events in the database.
 
 ## Building the Project
 
@@ -56,7 +56,7 @@ The gRPC server can be started using the `grpc_server` binary. You can run it di
 ./target/release/grpc_server --path /path/to/event-store --address 127.0.0.1:50051
 ```
 
-Or you can use `cargo run`:
+Or you can use `cargo run` (dev build, slower):
 
 ```bash
 cargo run --bin grpc_server -- --path /path/to/event-store --address 127.0.0.1:50051

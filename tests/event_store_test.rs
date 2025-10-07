@@ -886,3 +886,82 @@ pub fn run_event_store_test<T: DCBEventStore>(event_store: &T) {
     let head_position = event_store.head().unwrap();
     assert_eq!(Some(13), head_position);
 }
+
+
+#[test]
+fn test_tag_hash_collision() {
+    // Known colliding tags (by the system's tag hashing scheme)
+    let student_tag = "student-1a5c7f43-c0cb-465f-a9ad-8e452cce2b38".to_string();
+    let course_tag = "course-2b99b9c4-9031-43fd-a7e5-dceda7cab3ea".to_string();
+
+    // Use a local EventStore backed by a temporary directory
+    let temp_dir = tempdir().unwrap();
+    let store = EventStore::new(temp_dir.path()).unwrap();
+
+    // Append two events, one per colliding tag
+    let ev_student = DCBEvent {
+        event_type: "StudentEvent".to_string(),
+        data: b"student-data".to_vec(),
+        tags: vec![student_tag.clone()],
+    };
+    let ev_course = DCBEvent {
+        event_type: "CourseEvent".to_string(),
+        data: b"course-data".to_vec(),
+        tags: vec![course_tag.clone()],
+    };
+
+    let _ = store.append(vec![ev_student.clone()], None).unwrap();
+    let _ = store.append(vec![ev_course.clone()], None).unwrap();
+
+    // Query by student tag: should return only the student event
+    let (result, _head) = store
+        .read_with_head(
+            Some(DCBQuery {
+                items: vec![DCBQueryItem {
+                    types: vec![],
+                    tags: vec![student_tag.clone()],
+                }],
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(1, result.len(), "Query by student tag should return exactly 1 event");
+    assert_eq!(ev_student.event_type, result[0].event.event_type);
+    assert_eq!(ev_student.tags, result[0].event.tags);
+
+    // Query by course tag: should return only the course event
+    let (result, _head) = store
+        .read_with_head(
+            Some(DCBQuery {
+                items: vec![DCBQueryItem {
+                    types: vec![],
+                    tags: vec![course_tag.clone()],
+                }],
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(1, result.len(), "Query by course tag should return exactly 1 event");
+    assert_eq!(ev_course.event_type, result[0].event.event_type);
+    assert_eq!(ev_course.tags, result[0].event.tags);
+
+    // Query with two items (student tag OR course tag): should return both events
+    let (result, _head) = store
+        .read_with_head(
+            Some(DCBQuery {
+                items: vec![
+                    DCBQueryItem { types: vec![], tags: vec![student_tag.clone()] },
+                    DCBQueryItem { types: vec![], tags: vec![course_tag.clone()] },
+                ],
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(2, result.len(), "OR query across both tags should return 2 events");
+    let types: Vec<String> = result.into_iter().map(|e| e.event.event_type).collect();
+    assert!(types.contains(&"StudentEvent".to_string()));
+    assert!(types.contains(&"CourseEvent".to_string()));
+}

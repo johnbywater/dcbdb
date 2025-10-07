@@ -342,16 +342,21 @@ pub fn read_conditional(
         // Lookup the event record at position
         let rec = event_tree_lookup(lmdb, dirty, events_tree_root_id, pos)?;
 
-        // Check type matching against any of the matching items
-        let mut type_ok = false;
-        'typecheck: for qii in matching_qiis.iter().copied() {
+        // Check type and actual tag matching against any of the matching items to avoid hash-collision false positives
+        let mut match_ok = false;
+        'matchcheck: for qii in matching_qiis.iter().copied() {
             let item = &query.items[qii];
-            if item.types.is_empty() || item.types.iter().any(|t| t == &rec.event_type) {
-                type_ok = true;
-                break 'typecheck;
+            // Type must match (or be unspecified)
+            let type_ok = item.types.is_empty() || item.types.iter().any(|t| t == &rec.event_type);
+            if !type_ok { continue; }
+            // Verify actual event tags contain all item tags (guards against tag-hash collisions)
+            let tags_ok = item.tags.iter().all(|t| rec.tags.iter().any(|et| et == t));
+            if tags_ok {
+                match_ok = true;
+                break 'matchcheck;
             }
         }
-        if !type_ok {
+        if !match_ok {
             continue;
         }
 

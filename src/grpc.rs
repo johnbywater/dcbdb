@@ -347,10 +347,34 @@ impl EventStoreService for GrpcEventStoreServer {
                             break;
                         }
 
-                        // Prepare and send this non-empty batch
+                        // For unlimited overall reads, clamp events to the starting global head
+                        let (events_to_send, reached_end) = if remaining.is_none() {
+                            if let Some(h) = global_head {
+                                let trimmed: Vec<_> = events.iter().cloned().take_while(|e| e.position <= h).collect();
+                                let hit_boundary = trimmed.len() < events.len();
+                                (trimmed, hit_boundary)
+                            } else {
+                                (events.clone(), false)
+                            }
+                        } else {
+                            (events.clone(), false)
+                        };
+
+                        if events_to_send.is_empty() {
+                            // If we haven't sent anything yet, still send an empty batch with head to convey metadata
+                            if !sent_any {
+                                let head_to_send = if remaining.is_none() { global_head } else { head };
+                                let batch = SequencedEventBatchProto { events: vec![], head: head_to_send };
+                                let response = ReadResponseProto { batch: Some(batch) };
+                                let _ = tx.send(Ok(response)).await;
+                            }
+                            break;
+                        }
+
+                        // Prepare and send this non-empty (possibly trimmed) batch
                         let batch_head = if remaining.is_none() { global_head } else { head };
                         let batch = SequencedEventBatchProto {
-                            events: events.iter().cloned().map(|e| e.into()).collect(),
+                            events: events_to_send.iter().cloned().map(|e| e.into()).collect(),
                             head: batch_head,
                         };
                         let response = ReadResponseProto { batch: Some(batch) };
@@ -361,14 +385,19 @@ impl EventStoreService for GrpcEventStoreServer {
                         sent_any = true;
 
                         // Advance the cursor (use a new reader on the next loop iteration)
-                        next_after = events.last().map(|e| e.position);
+                        next_after = events_to_send.last().map(|e| e.position);
+
+                        // If we reached the captured head boundary, stop streaming further
+                        if reached_end && remaining.is_none() {
+                            break;
+                        }
 
                         // Decrease remaining overall limit if any, and stop if reached
                         if let Some(rem) = remaining.as_mut() {
-                            if *rem <= events.len() {
+                            if *rem <= events_to_send.len() {
                                 *rem = 0;
                             } else {
-                                *rem -= events.len();
+                                *rem -= events_to_send.len();
                             }
                             if *rem == 0 {
                                 break;

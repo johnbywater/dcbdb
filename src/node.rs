@@ -47,6 +47,21 @@ impl Node {
         }
     }
 
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Node::Header(_) => "Header",
+            Node::FreeListLeaf(_) => "FreeListLeaf",
+            Node::FreeListInternal(_) => "FreeListInternal",
+            Node::EventLeaf(_) => "EventLeaf",
+            Node::EventInternal(_) => "EventInternal",
+            Node::EventOverflow(_) => "EventOverflow",
+            Node::TagsLeaf(_) => "TagsLeaf",
+            Node::TagsInternal(_) => "TagsInternal",
+            Node::TagLeaf(_) => "TagLeaf",
+            Node::TagInternal(_) => "TagInternal",
+        }
+    }
+
     pub fn calc_serialized_size(&self) -> usize {
         match self {
             Node::Header(_) => 48, // HeaderNode has a fixed size of 48 bytes (includes root_tags_tree_id and next_position)

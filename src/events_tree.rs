@@ -436,7 +436,10 @@ pub fn event_tree_lookup(
             },
             _ => {
                 return Err(DCBError::DatabaseCorrupted(
-                    "Expected EventInternal or EventLeaf node in event tree".to_string(),
+                    format!(
+                        "Expected EventInternal or EventLeaf node in event tree, got {}",
+                        page.node.type_name()
+                    ),
                 ));
             }
         }
@@ -556,7 +559,10 @@ impl<'a> EventIterator<'a> {
                     }
                     _ => {
                         return Err(DCBError::DatabaseCorrupted(
-                            "Expected EventInternal or EventLeaf node in event tree".to_string(),
+                            format!(
+                                "Expected EventInternal or EventLeaf node in event tree, got {}",
+                                page_ref.node.type_name()
+                            ),
                         ));
                     }
                 }

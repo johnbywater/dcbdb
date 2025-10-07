@@ -34,7 +34,7 @@ fn test_grpc_event_store() {
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
 
     // Start the gRPC server in a separate thread
-    let server_addr = "127.0.0.1:50051";
+    let server_addr = "127.0.0.1:50070";
     let server_thread = thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {

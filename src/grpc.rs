@@ -309,7 +309,7 @@ impl EventStoreService for GrpcEventStoreServer {
         let req = request.into_inner();
 
         // Convert proto types to API types
-        let query = req.query.map(|q| q.into());
+        let mut query: Option<DCBQuery> = req.query.map(|q| q.into());
         let after = req.after;
         let limit = req.limit.map(|l| l as usize);
 
@@ -317,25 +317,72 @@ impl EventStoreService for GrpcEventStoreServer {
         let (tx, rx) = mpsc::channel(128);
         let event_store = self.event_store.clone();
 
-        // Spawn a task to handle the read operation
+        // Spawn a task to handle the read operation and stream multiple batches
         tokio::spawn(async move {
-            match event_store.read(query, after, limit).await {
-                Ok((events, head)) => {
-                    // Create a batch of events
-                    let batch = SequencedEventBatchProto {
-                        events: events.into_iter().map(|e| e.into()).collect(),
-                        head,
-                    };
+            // Ensure we can reuse the same query across batches
+            let query_clone = query.take();
+            let mut next_after = after;
+            let mut sent_any = false;
+            let mut remaining = limit;
+            // Server-side batch cap to ensure streaming in multiple messages
+            const SERVER_BATCH_SIZE: usize = 100;
+            loop {
+                // Determine per-iteration limit: don't exceed remaining (if any), and cap by server batch size
+                let per_iter_limit = Some(remaining.unwrap_or(usize::MAX).min(SERVER_BATCH_SIZE));
+                match event_store.read(query_clone.clone(), next_after, per_iter_limit).await {
+                    Ok((events, head)) => {
+                        if events.is_empty() {
+                            // Only send an empty batch to communicate head if this is the first batch
+                            if !sent_any {
+                                // For unlimited overall reads, compute the global head explicitly to preserve semantics
+                                let head_to_send = if remaining.is_none() {
+                                    match event_store.head().await {
+                                        Ok(h) => h,
+                                        Err(_) => head,
+                                    }
+                                } else {
+                                    head
+                                };
+                                let batch = SequencedEventBatchProto { events: vec![], head: head_to_send };
+                                let response = ReadResponseProto { batch: Some(batch) };
+                                let _ = tx.send(Ok(response)).await;
+                            }
+                            break;
+                        }
 
-                    // Send the batch as a response
-                    let response = ReadResponseProto { batch: Some(batch) };
+                        // Prepare and send this non-empty batch
+                        let batch = SequencedEventBatchProto {
+                            events: events.iter().cloned().map(|e| e.into()).collect(),
+                            head,
+                        };
+                        let response = ReadResponseProto { batch: Some(batch) };
 
-                    let _ = tx.send(Ok(response)).await;
-                }
-                Err(e) => {
-                    let _ = tx
-                        .send(Err(Status::internal(format!("Read error: {e:?}"))))
-                        .await;
+                        if tx.send(Ok(response)).await.is_err() {
+                            break;
+                        }
+                        sent_any = true;
+
+                        // Advance the cursor (use a new reader on the next loop iteration)
+                        next_after = events.last().map(|e| e.position);
+
+                        // Decrease remaining overall limit if any, and stop if reached
+                        if let Some(rem) = remaining.as_mut() {
+                            if *rem <= events.len() {
+                                *rem = 0;
+                            } else {
+                                *rem -= events.len();
+                            }
+                            if *rem == 0 {
+                                break;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx
+                            .send(Err(Status::internal(format!("Read error: {e:?}"))))
+                            .await;
+                        break;
+                    }
                 }
             }
         });

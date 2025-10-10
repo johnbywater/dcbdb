@@ -141,7 +141,7 @@ pub fn read_conditional(
         let mut iter = EventIterator::new(lmdb, dirty, events_tree_root_id, Some(after));
         let mut out: Vec<DCBSequencedEvent> = Vec::new();
         'outer_all: loop {
-            let batch = iter.next_batch(64)?;
+            let batch = iter.next_batch(limit.unwrap_or(64))?;
             if batch.is_empty() {
                 break;
             }

@@ -329,10 +329,10 @@ impl EventStoreService for GrpcEventStoreServer {
                 match event_store.head().await { Ok(h) => h, Err(_) => None }
             } else { None };
             // Server-side batch cap to ensure streaming in multiple messages
-            const SERVER_BATCH_SIZE: usize = 100;
+            const GRPC_BATCH_SIZE: usize = 500;
             loop {
                 // Determine per-iteration limit: don't exceed remaining (if any), and cap by server batch size
-                let per_iter_limit = Some(remaining.unwrap_or(usize::MAX).min(SERVER_BATCH_SIZE));
+                let per_iter_limit = Some(remaining.unwrap_or(usize::MAX).min(GRPC_BATCH_SIZE));
                 match event_store.read(query_clone.clone(), next_after, per_iter_limit).await {
                     Ok((events, head)) => {
                         if events.is_empty() {

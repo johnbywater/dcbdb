@@ -1,9 +1,9 @@
 use std::cmp::max;
 use clap::Parser;
-use dcbdb::dcbapi::{DCBEvent, DCBEventStore};
-// use dcbdb::dcbapi::{DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem};
+use dcbdb::dcbapi::{DCBEvent, DCBEventStoreAsync};
 use dcbdb::grpc::GrpcEventStoreClient;
 use std::time::Instant;
+use futures::StreamExt;
 
 #[derive(Parser)]
 #[command(author, version, about = "DCBDB Example Client", long_about = None)]
@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let events_to_append = vec![event.clone(), event.clone(), event.clone(), event.clone(), event.clone()];
     let events_len = events_to_append.len();
     let t_append = Instant::now();
-    let position = client.append(events_to_append, None)?;
+    let position = <GrpcEventStoreClient as DCBEventStoreAsync>::append(&client, events_to_append, None).await?;
     let append_elapsed = t_append.elapsed();
     let append_eps = if append_elapsed.as_secs_f64() > 0.0 {
         events_len as f64 / append_elapsed.as_secs_f64()
@@ -61,23 +61,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tail: usize = 1000;
     println!("Reading last {tail} events...");
     let t_read = Instant::now();
-    let read_after_position = max(client.head().unwrap().unwrap().saturating_sub(tail as u64), 0);
-    let response = client.read(None, Some(read_after_position), Some(tail), false)?;
+    let head_opt = <GrpcEventStoreClient as DCBEventStoreAsync>::head(&client).await?;
+    let read_after_position = max(head_opt.unwrap_or(0).saturating_sub(tail as u64), 0);
+    let mut stream = <GrpcEventStoreClient as DCBEventStoreAsync>::read_stream(
+        &client,
+        None,
+        Some(read_after_position),
+        Some(tail),
+        false,
+    )
+    .await?;
 
-    // Iterate through the events
-    // println!("Events:");
+    // Iterate through the events from the async stream
     let mut ev_count = 0usize;
     let mut total_bytes = 0usize;
-    for event in response {
-        ev_count += 1;
-        total_bytes += event.event.data.len();
-        // println!(
-        //     "  Position {}: Type={}, Tags={:?}, Data={:?}",
-        //     event.position,
-        //     event.event.event_type,
-        //     event.event.tags,
-        //     String::from_utf8_lossy(&event.event.data)
-        // );
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(event) => {
+                ev_count += 1;
+                total_bytes += event.event.data.len();
+            }
+            Err(e) => {
+                eprintln!("Stream error: {:?}", e);
+                break;
+            }
+        }
     }
     let read_elapsed = t_read.elapsed();
     let read_eps = if read_elapsed.as_secs_f64() > 0.0 {

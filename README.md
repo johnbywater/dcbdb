@@ -97,7 +97,7 @@ The example client:
 DCBDB provides a Rust client that you can use to interact with the gRPC server in your own code. Here's an example of how to use it:
 
 ```rust
-use dcbdb::api::{DCBEvent, DCBEventStoreAPI, DCBQuery, DCBQueryItem};
+use dcbdb::dcbapi::{DCBEvent, DCBEventStoreAsync, DCBQuery, DCBQueryItem};
 use dcbdb::grpc::GrpcEventStoreClient;
 
 #[tokio::main]
@@ -111,7 +111,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tags: vec!["tag1".to_string(), "tag2".to_string()],
         data: b"Hello, world!".to_vec(),
     };
-    let position = client.append(vec![event], None)?;
+    let position = <GrpcEventStoreClient as DCBEventStoreAsync>::append(&client, vec![event], None).await?;
     println!("Appended event at position: {}", position);
 
     // Read events
@@ -121,11 +121,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tags: vec!["tag1".to_string()],
         }],
     };
-    let response = client.read(Some(query), None, None)?;
+    let mut stream = <GrpcEventStoreClient as DCBEventStoreAsync>::read_stream(&client, Some(query), None, None, false).await?;
 
-    // Iterate through the events
-    for event in response {
-        println!("Event at position {}: {:?}", event.position, event.event);
+    // Iterate through the events from the async stream
+    use futures::StreamExt;
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(event) => println!("Event at position {}: {:?}", event.position, event.event),
+            Err(e) => {
+                eprintln!("Stream error: {:?}", e);
+                break;
+            }
+        }
     }
 
     Ok(())

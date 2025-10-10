@@ -247,3 +247,118 @@ fn grpc_subscription_catch_up_and_continue() {
     let _ = shutdown_tx.send(());
     let _ = server_handle.join();
 }
+
+#[test]
+fn grpc_subscription_multithreaded_catch_up_and_continue() {
+    // Arrange: start a gRPC server backed by a temporary directory
+    let temp_dir = tempdir().unwrap();
+    let db_path = temp_dir.path().to_path_buf();
+    let addr = "127.0.0.1:50074"; // multi-threaded subscription test port
+    let addr_http = format!("http://{}", addr);
+
+    // Channel to shutdown the server
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+
+    // Spawn a thread to run the server on a Tokio runtime
+    let server_handle = thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            // Ignore result on shutdown
+            let _ = start_grpc_server_with_shutdown(db_path, &addr, shutdown_rx).await;
+        });
+    });
+
+    // Give the server a moment to start
+    thread::sleep(Duration::from_millis(200));
+
+    // Synchronization channels
+    let (first10_done_tx, first10_done_rx) = std::sync::mpsc::channel::<()>();
+    let (sub_got_one_tx, sub_got_one_rx) = std::sync::mpsc::channel::<()>();
+
+    let start = std::time::Instant::now();
+    
+    // Spawn writer thread
+    let addr_http_writer = addr_http.clone();
+    let writer_handle = thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let client = rt
+            .block_on(async { GrpcEventStoreClient::connect(addr_http_writer).await })
+            .expect("writer client connect");
+
+        // Write first 10 events
+        let batch1: Vec<DCBEvent> = (0..10u64)
+            .map(|i| DCBEvent {
+                event_type: "MTEvent".to_string(),
+                data: format!("mt-{i}").into_bytes(),
+                tags: vec!["grpc-sub-mt".to_string()],
+            })
+            .collect();
+        let last1 = client.append(batch1, None).expect("append first 10");
+        assert!(last1 >= 10);
+        // Notify that first 10 are written
+        first10_done_tx.send(()).expect("notify first10 done");
+
+        // Wait until subscriber has received at least one event
+        sub_got_one_rx.recv().expect("wait for sub got one");
+
+        // Write next 10 events
+        for i in 10..20u64 {
+            let event = DCBEvent {
+                event_type: "MTEvent".to_string(),
+                data: format!("mt-{i}").into_bytes(),
+                tags: vec!["grpc-sub-mt".to_string()],
+            };
+            let expected_position = i + 1;
+            println!("(duration since start: {:?}) appending event: {expected_position:?}", start.elapsed());
+            let last = client.append(vec![event], None).expect("append event");
+            println!("(duration since start: {:?}) appended event: {last:?}", start.elapsed());
+
+            assert!(last >= i + 1);
+        }
+        // Writer exits
+    });
+
+    // Wait for the first 10 to exist before starting subscription thread
+    first10_done_rx.recv().expect("wait for first10 done");
+
+    // Spawn subscription thread
+    let addr_http_sub = addr_http.clone();
+    let sub_handle = thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let client = rt
+            .block_on(async { GrpcEventStoreClient::connect(addr_http_sub).await })
+            .expect("subscriber client connect");
+
+        let mut response = client
+            .read(None, None, None, true)
+            .expect("subscription read response");
+
+        let mut received = 0usize;
+        let mut signaled = false;
+
+        while received < 20 {
+            if let Some(ev) = response.next() {
+                // On first received event, notify writer to proceed
+                if !signaled {
+                    sub_got_one_tx.send(()).expect("notify sub got one");
+                    signaled = true;
+                }
+                assert!(ev.event.tags.iter().any(|t| t == "grpc-sub-mt"));
+                let event_position = ev.position;
+                println!("(duration since start: {:?}) subscription received event: {event_position:?}", start.elapsed());
+                received += 1;
+            } else {
+                panic!("subscription ended unexpectedly before receiving 20 events");
+            }
+        }
+        // Exit without blocking for more events
+    });
+
+    // Wait for both threads to finish
+    let _ = writer_handle.join();
+    let _ = sub_handle.join();
+
+    // Shutdown server and exit gracefully
+    let _ = shutdown_tx.send(());
+    let _ = server_handle.join();
+}

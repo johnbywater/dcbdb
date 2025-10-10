@@ -244,12 +244,49 @@ impl EventStoreHandle {
         events: Vec<DCBEvent>,
         condition: Option<DCBAppendCondition>,
     ) -> DCBResult<u64> {
+        // Concurrent pre-check of condition using a read-only view. If it fails, return early.
+        let mut adjusted_condition = condition;
+        if let Some(mut cond) = adjusted_condition.take() {
+            // Open a reader and determine current head
+            let db: &Lmdb = &self.lmdb;
+            let reader = db.reader()?;
+            let current_head = {
+                let last = reader.next_position.0.saturating_sub(1);
+                if last == 0 { None } else { Some(last) }
+            };
+
+            // Perform conditional read on the snapshot (limit 1) starting after the provided position
+            let after_pos = crate::common::Position(cond.after.unwrap_or(0));
+            let found = read_conditional(
+                db,
+                &std::collections::HashMap::new(),
+                reader.events_tree_root_id,
+                reader.tags_tree_root_id,
+                cond.fail_if_events_match.clone(),
+                after_pos,
+                Some(1),
+            ).map_err(|e| DCBError::Corruption(format!("{e}")))?;
+
+            if let Some(matched) = found.first() {
+                let msg = format!(
+                    "matching event: {:?} condition: {:?}",
+                    matched, cond.fail_if_events_match
+                );
+                return Err(DCBError::IntegrityError(msg));
+            }
+
+            // Advance after to at least the current head observed by this reader
+            let new_after = std::cmp::max(cond.after.unwrap_or(0), current_head.unwrap_or(0));
+            cond.after = Some(new_after);
+            adjusted_condition = Some(cond);
+        }
+
         let (response_tx, response_rx) = oneshot::channel();
 
         self.request_tx
             .send(EventStoreRequest::Append {
                 events,
-                condition,
+                condition: adjusted_condition,
                 response_tx,
             })
             .await
@@ -329,7 +366,8 @@ impl EventStoreService for GrpcEventStoreServer {
                 match event_store.head().await { Ok(h) => h, Err(_) => None }
             } else { None };
             // Server-side batch cap to ensure streaming in multiple messages
-            const GRPC_BATCH_SIZE: usize = 500;
+            // Keep this modest so tests expecting multiple batches (e.g., 300 items) will split.
+            const GRPC_BATCH_SIZE: usize = 100;
             loop {
                 // Determine per-iteration limit: don't exceed remaining (if any), and cap by server batch size
                 let per_iter_limit = Some(remaining.unwrap_or(usize::MAX).min(GRPC_BATCH_SIZE));

@@ -582,8 +582,8 @@ impl Clone for EventStoreHandle {
 // gRPC client implementation
 pub struct GrpcEventStoreClient {
     client: dcbdb::event_store_service_client::EventStoreServiceClient<tonic::transport::Channel>,
-    // Dedicated runtime reused for blocking calls when not on a Tokio runtime
-    blocking_rt: std::sync::Arc<tokio::runtime::Runtime>,
+    // Dedicated runtime reused for blocking calls when not on a Tokio runtime (Some only when constructed via connect_blocking)
+    blocking_rt: Option<std::sync::Arc<tokio::runtime::Runtime>>,
 }
 
 impl GrpcEventStoreClient {
@@ -594,10 +594,8 @@ impl GrpcEventStoreClient {
     {
         let client =
             dcbdb::event_store_service_client::EventStoreServiceClient::connect(dst).await?;
-        // Create a dedicated runtime for blocking calls from non-async contexts.
-        // Using a single runtime per client avoids the overhead of constructing a new runtime per call.
-        let blocking_rt = std::sync::Arc::new(tokio::runtime::Runtime::new().expect("failed to create blocking runtime"));
-        Ok(Self { client, blocking_rt })
+        // In async contexts, do not create a blocking runtime to avoid dropping a Runtime inside an async context.
+        Ok(Self { client, blocking_rt: None })
     }
 
     // Convenience for synchronous contexts: perform async connect using an internal runtime
@@ -613,7 +611,7 @@ impl GrpcEventStoreClient {
         })?;
         // Create the long-lived shared runtime used by blocking calls afterwards
         let blocking_rt = std::sync::Arc::new(rt);
-        Ok(Self { client, blocking_rt })
+        Ok(Self { client, blocking_rt: Some(blocking_rt) })
     }
 }
 
@@ -777,20 +775,30 @@ impl DCBEventStore for GrpcEventStoreClient {
                 )))),
             }
         } else {
-            // Use the client's dedicated runtime for blocking calls
-            let response = self.blocking_rt.block_on(async move { client.read(request).await });
-
-            match response {
-                Ok(stream) => {
-                    // Create a GrpcReadResponse that implements DCBReadResponse
-                    Ok(
-                        Box::new(GrpcReadResponse::new_with_shared_runtime(self.blocking_rt.clone(), stream.into_inner()))
+            // Outside any Tokio runtime.
+            if let Some(rt) = &self.blocking_rt {
+                let response = rt.block_on(async move { client.read(request).await });
+                match response {
+                    Ok(stream) => Ok(
+                        Box::new(GrpcReadResponse::new_with_shared_runtime(rt.clone(), stream.into_inner()))
                             as Box<dyn crate::dcbapi::DCBReadResponse + '_>,
-                    )
+                    ),
+                    Err(status) => Err(DCBError::Io(std::io::Error::other(format!(
+                        "gRPC read error: {status}"
+                    )))),
                 }
-                Err(status) => Err(DCBError::Io(std::io::Error::other(format!(
-                    "gRPC read error: {status}"
-                )))),
+            } else {
+                // Fallback: create a temporary runtime for this blocking call
+                let rt = tokio::runtime::Runtime::new()
+                    .map_err(|e| DCBError::Io(std::io::Error::other(format!("failed to create runtime: {e}"))))?;
+                let response = rt.block_on(async move { client.read(request).await });
+                match response {
+                    Ok(stream) => Ok(Box::new(GrpcReadResponse::new_with_runtime(rt, stream.into_inner()))
+                        as Box<dyn crate::dcbapi::DCBReadResponse + '_>),
+                    Err(status) => Err(DCBError::Io(std::io::Error::other(format!(
+                        "gRPC read error: {status}"
+                    )))),
+                }
             }
         }
     }
@@ -838,8 +846,14 @@ impl DCBEventStore for GrpcEventStoreClient {
             // We're already in a Tokio runtime, use the current one
             futures::executor::block_on(async move { client.append(request).await })
         } else {
-            // Use the client's dedicated runtime
-            self.blocking_rt.block_on(async move { client.append(request).await })
+            // Outside any Tokio runtime.
+            if let Some(rt) = &self.blocking_rt {
+                rt.block_on(async move { client.append(request).await })
+            } else {
+                let rt = tokio::runtime::Runtime::new()
+                    .map_err(|e| DCBError::Io(std::io::Error::other(format!("failed to create runtime: {e}"))))?;
+                rt.block_on(async move { client.append(request).await })
+            }
         };
 
         match response {
@@ -868,8 +882,14 @@ impl DCBEventStore for GrpcEventStoreClient {
             // We're already in a Tokio runtime, use the current one
             futures::executor::block_on(async move { client.head(request).await })
         } else {
-            // Use the client's dedicated runtime
-            self.blocking_rt.block_on(async move { client.head(request).await })
+            // Outside any Tokio runtime.
+            if let Some(rt) = &self.blocking_rt {
+                rt.block_on(async move { client.head(request).await })
+            } else {
+                let rt = tokio::runtime::Runtime::new()
+                    .map_err(|e| DCBError::Io(std::io::Error::other(format!("failed to create runtime: {e}"))))?;
+                rt.block_on(async move { client.head(request).await })
+            }
         };
 
         match response {

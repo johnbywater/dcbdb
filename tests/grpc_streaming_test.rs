@@ -243,10 +243,7 @@ fn grpc_subscription_catch_up_and_continue() {
     assert_eq!(new_count, collected_new.len(), "should receive all newly appended events via subscription");
     assert!(collected_new.iter().all(|e| e.event.tags.iter().any(|t| t == "grpc-sub")), "all new events should have grpc-sub tag");
 
-    // Cleanup: explicitly drop the open subscription stream and client to allow server to exit gracefully
-    drop(response);
-    drop(client);
+    // Shutdown server and exit gracefully
     let _ = shutdown_tx.send(());
-    thread::sleep(Duration::from_millis(100));
     let _ = server_handle.join();
 }

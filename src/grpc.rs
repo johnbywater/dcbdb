@@ -340,12 +340,19 @@ impl EventStoreHandle {
 // gRPC server implementation
 pub struct GrpcEventStoreServer {
     event_store: EventStoreHandle,
+    shutdown_rx: watch::Receiver<bool>,
 }
 
 impl GrpcEventStoreServer {
     pub fn new<P: AsRef<Path> + Send + 'static>(path: P) -> std::io::Result<Self> {
         let event_store = EventStoreHandle::new(path)?;
-        Ok(Self { event_store })
+        let (_tx, rx) = watch::channel(false);
+        Ok(Self { event_store, shutdown_rx: rx })
+    }
+
+    pub fn new_with_shutdown<P: AsRef<Path> + Send + 'static>(path: P, shutdown_rx: watch::Receiver<bool>) -> std::io::Result<Self> {
+        let event_store = EventStoreHandle::new(path)?;
+        Ok(Self { event_store, shutdown_rx })
     }
 
     pub fn into_service(self) -> EventStoreServiceServer<Self> {
@@ -372,6 +379,7 @@ impl EventStoreService for GrpcEventStoreServer {
         // Create a channel for streaming responses
         let (tx, rx) = mpsc::channel(128);
         let event_store = self.event_store.clone();
+        let mut shutdown_rx = self.shutdown_rx.clone();
 
         // Spawn a task to handle the read operation and stream multiple batches
         tokio::spawn(async move {
@@ -391,6 +399,11 @@ impl EventStoreService for GrpcEventStoreServer {
             // Keep this modest so tests expecting multiple batches (e.g., 300 items) will split.
             const GRPC_BATCH_SIZE: usize = 100;
             loop {
+                // If this is a subscription, exit if client has gone away or server is shutting down
+                if subscribe {
+                    if tx.is_closed() { break; }
+                    if *shutdown_rx.borrow() { break; }
+                }
                 // Determine per-iteration limit: don't exceed remaining (if any), and cap by server batch size
                 let per_iter_limit = Some(remaining.unwrap_or(usize::MAX).min(GRPC_BATCH_SIZE));
                 // If subscription and remaining exhausted (limit reached), terminate
@@ -419,8 +432,19 @@ impl EventStoreService for GrpcEventStoreServer {
                                     if current_head.map(|h| h > na).unwrap_or(false) {
                                         break; // new events available
                                     }
-                                    if head_rx.changed().await.is_err() {
-                                        break; // sender dropped
+                                    // Wait for either a new head or a server shutdown signal
+                                    tokio::select! {
+                                        res = head_rx.changed() => {
+                                            if res.is_err() { break; }
+                                        }
+                                        res2 = shutdown_rx.changed() => {
+                                            if res2.is_ok() {
+                                                // If shutdown flag set to true, exit
+                                                if *shutdown_rx.borrow() { break; }
+                                            } else {
+                                                break; // sender dropped
+                                            }
+                                        }
                                     }
                                 }
                                 continue;
@@ -891,13 +915,18 @@ pub async fn start_grpc_server_with_shutdown<P: AsRef<Path> + Send + 'static>(
     shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let addr = addr.parse()?;
-    let server = GrpcEventStoreServer::new(path)?;
+    // Create a shutdown broadcast channel for terminating ongoing subscriptions
+    let (srv_shutdown_tx, srv_shutdown_rx) = watch::channel(false);
+    let server = GrpcEventStoreServer::new_with_shutdown(path, srv_shutdown_rx)?;
     println!("gRPC server listening on {addr}");
 
     Server::builder()
         .add_service(server.into_service())
-        .serve_with_shutdown(addr, async {
-            shutdown_rx.await.ok();
+        .serve_with_shutdown(addr, async move {
+            // Wait for external shutdown trigger
+            let _ = shutdown_rx.await;
+            // Broadcast shutdown to all subscription tasks
+            let _ = srv_shutdown_tx.send(true);
             println!("gRPC server shutdown complete");
         })
         .await?;

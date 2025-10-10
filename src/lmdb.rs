@@ -600,7 +600,7 @@ impl Writer {
                     println!("{:?} is internal node", current_page_ref.page_id);
                 }
                 stack.push(current_page_id);
-                current_page_id = *internal_node.child_ids.last().unwrap();
+                current_page_id = *internal_node.child_ids.last().expect("FreeListInternal node should have a child");
             } else {
                 return Err(DCBError::DatabaseCorrupted(
                     "Expected FreeListInternal node".to_string(),
@@ -755,7 +755,7 @@ impl Writer {
 
                     // Move the right-most key to a new node. Promote the next right-most key.
                     let (promoted_key, new_keys, new_child_ids) =
-                        dirty_internal_node.split_off().unwrap();
+                        dirty_internal_node.split_off()?;
 
                     // Ensure old node maintain the B-tree invariant: n keys should have n+1 child pointers
                     assert_eq!(

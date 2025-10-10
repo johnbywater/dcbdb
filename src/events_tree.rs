@@ -130,7 +130,7 @@ pub fn event_tree_append(
                 println!("{:?} is internal node", current_page_ref.page_id);
             }
             stack.push(current_page_id);
-            current_page_id = *internal_node.child_ids.last().unwrap();
+            current_page_id = *internal_node.child_ids.last().expect("Internal node should have some children");
         } else {
             return Err(DCBError::DatabaseCorrupted(
                 "Expected EventInternal node".to_string(),
@@ -318,7 +318,7 @@ pub fn event_tree_append(
 
                 // Move the right-most key to a new node. Promote the next right-most key.
                 let (promoted_key, new_keys, new_child_ids) =
-                    dirty_internal_node.split_off().unwrap();
+                    dirty_internal_node.split_off()?;
 
                 // Ensure old node maintain the B-tree invariant: n keys should have n+1 child pointers
                 assert_eq!(
@@ -492,7 +492,7 @@ impl<'a> EventIterator<'a> {
                 } else {
                     let page = self.db.read_page(page_id)?;
                     self.page_cache.insert(page_id, page);
-                    self.page_cache.get(&page_id).unwrap()
+                    self.page_cache.get(&page_id).expect("page should be in cache")
                 };
 
                 match &page_ref.node {

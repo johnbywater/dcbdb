@@ -540,7 +540,7 @@ impl DCBEventStore for GrpcEventStoreClient {
             }
         } else {
             // No Tokio runtime, create a new one
-            let rt = tokio::runtime::Runtime::new().unwrap();
+            let rt = tokio::runtime::Runtime::new()?;
             let response = rt.block_on(async move { client.read(request).await });
 
             match response {
@@ -602,7 +602,7 @@ impl DCBEventStore for GrpcEventStoreClient {
             futures::executor::block_on(async move { client.append(request).await })
         } else {
             // No Tokio runtime, create a new one
-            let rt = tokio::runtime::Runtime::new().unwrap();
+            let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(async move { client.append(request).await })
         };
 
@@ -633,7 +633,7 @@ impl DCBEventStore for GrpcEventStoreClient {
             futures::executor::block_on(async move { client.head(request).await })
         } else {
             // No Tokio runtime, create a new one
-            let rt = tokio::runtime::Runtime::new().unwrap();
+            let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(async move { client.head(request).await })
         };
 
@@ -704,7 +704,7 @@ impl GrpcReadResponse {
                         .events
                         .into_iter()
                         .map(|e| {
-                            let event_proto = e.event.unwrap();
+                            let event_proto = e.event.expect("SequencedEventProto should have an EventProto");
                             DCBSequencedEvent {
                                 position: e.position,
                                 event: DCBEvent {

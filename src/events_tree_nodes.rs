@@ -391,8 +391,8 @@ impl EventLeafNode {
     }
 
     pub fn pop_last_key_and_value(&mut self) -> DCBResult<(Position, EventValue)> {
-        let last_key = self.keys.pop().unwrap();
-        let last_value = self.values.pop().unwrap();
+        let last_key = self.keys.pop().expect("EventLeafNode should have some keys");
+        let last_value = self.values.pop().expect("EventLeafNode should have some values");
         Ok((last_key, last_value))
     }
 }

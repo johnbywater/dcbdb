@@ -15,7 +15,7 @@ use crate::page::Page;
 use crate::tags_tree::{tags_tree_insert, TagsTreeIterator};
 use crate::tags_tree_nodes::TagHash;
 
-static DEFAULT_PAGE_SIZE: usize = 4096;
+pub static DEFAULT_PAGE_SIZE: usize = 4096;
 
 /// LMDB-backed EventStore implementing the DCBEventStore
 pub struct EventStore {

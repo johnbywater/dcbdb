@@ -218,8 +218,8 @@ impl FreeListLeafNode {
     }
 
     pub fn pop_last_key_and_value(&mut self) -> DCBResult<(Tsn, FreeListLeafValue)> {
-        let last_key = self.keys.pop().unwrap();
-        let last_value = self.values.pop().unwrap();
+        let last_key = self.keys.pop().expect("FreeListLeafNode should have at least one key");
+        let last_value = self.values.pop().expect("FreeListLeafNode should have at least one value");
         Ok((last_key, last_value))
     }
 }

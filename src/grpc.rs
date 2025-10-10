@@ -10,7 +10,7 @@ use crate::dcbapi::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem, DCBResult,
     DCBSequencedEvent,
 };
-use crate::event_store::{EventStore, read_conditional};
+use crate::event_store::{EventStore, read_conditional, DEFAULT_PAGE_SIZE};
 use crate::lmdb::Lmdb;
 
 // Include the generated proto code
@@ -118,7 +118,7 @@ impl EventStoreHandle {
         let p = path.as_ref();
         let file_path = if p.is_dir() { p.join("dcb.db") } else { p.to_path_buf() };
         let lmdb = std::sync::Arc::new(
-            Lmdb::new(&file_path, 4096, false)
+            Lmdb::new(&file_path, DEFAULT_PAGE_SIZE, false)
                 .map_err(|e| std::io::Error::other(format!("Failed to init LMDB: {e:?}")))?,
         );
 

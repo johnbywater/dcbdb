@@ -76,6 +76,7 @@ pub trait DCBEventStore {
         query: Option<DCBQuery>,
         after: Option<u64>,
         limit: Option<usize>,
+        subscribe: bool,
     ) -> DCBResult<Box<dyn DCBReadResponse + '_>>;
 
     /// Reads events from the store and returns them as a tuple of (Vec<DCBSequencedEvent>, Option<u64>)
@@ -85,7 +86,7 @@ pub trait DCBEventStore {
         after: Option<u64>,
         limit: Option<usize>,
     ) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
-        let mut response = self.read(query, after, limit)?;
+        let mut response = self.read(query, after, limit, false)?;
         Ok(response.collect_with_head())
     }
 

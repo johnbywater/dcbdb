@@ -43,6 +43,7 @@ message ReadRequestProto {
   optional QueryProto query = 1;
   optional uint64 after = 2;
   optional uint32 limit = 3;
+  optional bool subscribe = 4;
 }
 
 // Read response message

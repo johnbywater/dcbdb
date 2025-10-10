@@ -384,6 +384,7 @@ impl DCBEventStore for EventStore {
         query: Option<DCBQuery>,
         after: Option<u64>,
         limit: Option<usize>,
+        _subscribe: bool,
     ) -> DCBResult<Box<dyn DCBReadResponse + '_>> {
         let lmdb = &self.lmdb;
         let reader = lmdb.reader()?;
@@ -849,7 +850,7 @@ mod tests {
         assert_eq!(store.head().unwrap(), Some(last));
 
         // Read all
-        let mut resp = store.read(None, None, None).unwrap();
+        let mut resp = store.read(None, None, None, false).unwrap();
         let (all, head) = resp.collect_with_head();
         assert_eq!(head, Some(last));
         assert_eq!(all.len(), 2);
@@ -857,7 +858,7 @@ mod tests {
         assert_eq!(all[1].event.event_type, "TypeB");
 
         // Limit semantics: only first event returned and head equals that position
-        let mut resp_lim1 = store.read(None, None, Some(1)).unwrap();
+        let mut resp_lim1 = store.read(None, None, Some(1), false).unwrap();
         let (only_one, head_lim1) = resp_lim1.collect_with_head();
         assert_eq!(only_one.len(), 1);
         assert_eq!(only_one[0].event.event_type, "TypeA");
@@ -870,14 +871,14 @@ mod tests {
                 tags: vec!["foo".to_string()],
             }],
         };
-        let mut resp2 = store.read(Some(query), None, None).unwrap();
+        let mut resp2 = store.read(Some(query), None, None, false).unwrap();
         let out2 = resp2.next_batch().unwrap();
         assert_eq!(out2.len(), 2);
         assert!(out2.iter().all(|e| e.event.tags.iter().any(|t| t == "foo")));
 
         // After semantics: skip the first event
         let first_pos = all[0].position;
-        let mut resp3 = store.read(None, Some(first_pos), None).unwrap();
+        let mut resp3 = store.read(None, Some(first_pos), None, false).unwrap();
         let out3 = resp3.next_batch().unwrap();
         assert_eq!(out3.len(), 1);
         assert_eq!(out3[0].event.event_type, "TypeB");

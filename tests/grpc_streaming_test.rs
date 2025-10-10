@@ -47,7 +47,7 @@ fn grpc_streams_many_batches_for_large_reads() {
 
     // Act: read with a small limit to force multiple batches
     let mut response = client
-        .read(None, None, None)
+        .read(None, None, None, false)
         .expect("read response");
 
     let mut total = 0usize;
@@ -116,7 +116,7 @@ fn grpc_does_not_stream_past_starting_head() {
 
     // Start a streaming read with no limit to get multiple batches and capture starting head semantics
     let mut response = client
-        .read(None, None, None)
+        .read(None, None, None, false)
         .expect("read response");
 
     // Consume the first batch to ensure the stream has begun

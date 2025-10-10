@@ -62,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Reading last {tail} events...");
     let t_read = Instant::now();
     let read_after_position = max(client.head().unwrap().unwrap().saturating_sub(tail as u64), 0);
-    let response = client.read(None, Some(read_after_position), Some(tail))?;
+    let response = client.read(None, Some(read_after_position), Some(tail), false)?;
 
     // Iterate through the events
     // println!("Events:");

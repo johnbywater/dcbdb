@@ -2,7 +2,7 @@ use futures::Stream;
 use std::path::Path;
 use std::pin::Pin;
 use std::thread;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, transport::Server};
 
@@ -107,6 +107,7 @@ enum EventStoreRequest {
 struct EventStoreHandle {
     request_tx: mpsc::Sender<EventStoreRequest>,
     lmdb: std::sync::Arc<crate::lmdb::Lmdb>,
+    head_tx: watch::Sender<Option<u64>>,
 }
 
 impl EventStoreHandle {
@@ -122,8 +123,19 @@ impl EventStoreHandle {
                 .map_err(|e| std::io::Error::other(format!("Failed to init LMDB: {e:?}")))?,
         );
 
+        // Initialize head watch channel with current head
+        let init_head = {
+            let (_, header) = lmdb
+                .get_latest_header()
+                .map_err(|e| std::io::Error::other(format!("Failed to read header: {e:?}")))?;
+            let last = header.next_position.0.saturating_sub(1);
+            if last == 0 { None } else { Some(last) }
+        };
+        let (head_tx, _head_rx) = watch::channel::<Option<u64>>(init_head);
+
         // Spawn a thread to run the EventStore for serialized write operations
         let lmdb_for_writer = lmdb.clone();
+        let head_tx_writer = head_tx.clone();
         thread::spawn(move || {
             let event_store = EventStore::from_arc(lmdb_for_writer);
 
@@ -174,6 +186,9 @@ impl EventStoreHandle {
                                     for (res, tx) in results.into_iter().zip(responders.into_iter()) {
                                         let _ = tx.send(res);
                                     }
+                                    // After successful batch commit, publish updated head
+                                    let new_head = event_store.head().ok().flatten();
+                                    let _ = head_tx_writer.send(new_head);
                                 }
                                 Err(e) => {
                                     // If the batch failed as a whole (e.g., commit failed), propagate an error to all responders
@@ -207,7 +222,7 @@ impl EventStoreHandle {
             });
         });
 
-        Ok(Self { request_tx, lmdb })
+        Ok(Self { request_tx, lmdb, head_tx })
     }
 
     async fn read(
@@ -303,6 +318,10 @@ impl EventStoreHandle {
         })?
     }
 
+    fn watch_head(&self) -> watch::Receiver<Option<u64>> {
+        self.head_tx.subscribe()
+    }
+
     async fn head(&self) -> DCBResult<Option<u64>> {
         let db: &Lmdb = &self.lmdb;
         let (_, header) = db
@@ -361,8 +380,11 @@ impl EventStoreService for GrpcEventStoreServer {
             let mut next_after = after;
             let mut sent_any = false;
             let mut remaining = limit;
+            let subscribe = req.subscribe.unwrap_or(false);
+            // Create a watch receiver for head updates (for subscriptions)
+            let mut head_rx = event_store.watch_head();
             // If overall read is unlimited, compute global head once to preserve semantics
-            let global_head = if remaining.is_none() {
+            let global_head = if remaining.is_none() && !subscribe {
                 match event_store.head().await { Ok(h) => h, Err(_) => None }
             } else { None };
             // Server-side batch cap to ensure streaming in multiple messages
@@ -371,16 +393,37 @@ impl EventStoreService for GrpcEventStoreServer {
             loop {
                 // Determine per-iteration limit: don't exceed remaining (if any), and cap by server batch size
                 let per_iter_limit = Some(remaining.unwrap_or(usize::MAX).min(GRPC_BATCH_SIZE));
+                // If subscription and remaining exhausted (limit reached), terminate
+                if subscribe {
+                    if let Some(rem) = remaining { if rem == 0 { break; } }
+                }
                 match event_store.read(query_clone.clone(), next_after, per_iter_limit).await {
                     Ok((events, head)) => {
                         if events.is_empty() {
                             // Only send an empty batch to communicate head if this is the first batch
                             if !sent_any {
-                                // For unlimited overall reads, use precomputed global head
-                                let head_to_send = if remaining.is_none() { global_head } else { head };
+                                // For unlimited overall reads, use precomputed global head (non-subscribe)
+                                let head_to_send = if remaining.is_none() && !subscribe { global_head } else { head };
                                 let batch = SequencedEventBatchProto { events: vec![], head: head_to_send };
                                 let response = ReadResponseProto { batch: Some(batch) };
                                 let _ = tx.send(Ok(response)).await;
+                            }
+                            // For subscriptions, wait for new events instead of terminating
+                            if subscribe {
+                                // Wait while head <= next_after (or None)
+                                loop {
+                                    // If channel closed, stop
+                                    if tx.is_closed() { break; }
+                                    let current_head = *head_rx.borrow();
+                                    let na = next_after.unwrap_or(0);
+                                    if current_head.map(|h| h > na).unwrap_or(false) {
+                                        break; // new events available
+                                    }
+                                    if head_rx.changed().await.is_err() {
+                                        break; // sender dropped
+                                    }
+                                }
+                                continue;
                             }
                             break;
                         }
@@ -425,8 +468,8 @@ impl EventStoreService for GrpcEventStoreServer {
                         // Advance the cursor (use a new reader on the next loop iteration)
                         next_after = events_to_send.last().map(|e| e.position);
 
-                        // If we reached the captured head boundary, stop streaming further
-                        if reached_end && remaining.is_none() {
+                        // If we reached the captured head boundary on non-subscribe, stop streaming further
+                        if reached_end && remaining.is_none() && !subscribe {
                             break;
                         }
 
@@ -507,6 +550,7 @@ impl Clone for EventStoreHandle {
         Self {
             request_tx: self.request_tx.clone(),
             lmdb: self.lmdb.clone(),
+            head_tx: self.head_tx.clone(),
         }
     }
 }
@@ -535,6 +579,7 @@ impl DCBEventStore for GrpcEventStoreClient {
         query: Option<DCBQuery>,
         after: Option<u64>,
         limit: Option<usize>,
+        subscribe: bool,
     ) -> DCBResult<Box<dyn crate::dcbapi::DCBReadResponse + '_>> {
         // Convert API types to proto types
         let query_proto = query.map(|q| QueryProto {
@@ -555,6 +600,7 @@ impl DCBEventStore for GrpcEventStoreClient {
             query: query_proto,
             after,
             limit: limit_proto,
+            subscribe: Some(subscribe),
         };
 
         // Execute the read operation

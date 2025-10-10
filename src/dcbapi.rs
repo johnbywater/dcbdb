@@ -7,6 +7,28 @@ use crate::common::PageID;
 use std::iter::Iterator;
 use thiserror::Error;
 
+// Async DCB API (coexists with the sync API for backward compatibility)
+#[async_trait::async_trait]
+pub trait DCBEventStoreAsync {
+    type ReadStream: futures::Stream<Item = DCBResult<DCBSequencedEvent>> + Send + Unpin + 'static;
+
+    async fn read_stream(
+        &self,
+        query: Option<DCBQuery>,
+        after: Option<u64>,
+        limit: Option<usize>,
+        subscribe: bool,
+    ) -> DCBResult<Self::ReadStream>;
+
+    async fn append(
+        &self,
+        events: Vec<DCBEvent>,
+        condition: Option<DCBAppendCondition>,
+    ) -> DCBResult<u64>;
+
+    async fn head(&self) -> DCBResult<Option<u64>>;
+}
+
 /// Represents a query item for filtering events
 #[derive(Debug, Clone, Default)]
 pub struct DCBQueryItem {

@@ -599,6 +599,131 @@ impl GrpcEventStoreClient {
         let blocking_rt = std::sync::Arc::new(tokio::runtime::Runtime::new().expect("failed to create blocking runtime"));
         Ok(Self { client, blocking_rt })
     }
+
+    // Convenience for synchronous contexts: perform async connect using an internal runtime
+    pub fn connect_blocking<D>(dst: D) -> Result<Self, tonic::transport::Error>
+    where
+        D: std::convert::TryInto<tonic::transport::Endpoint>,
+        D::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    {
+        // Build a temporary runtime just to create the underlying tonic client
+        let rt = tokio::runtime::Runtime::new().expect("failed to create runtime for connect_blocking");
+        let client = rt.block_on(async {
+            dcbdb::event_store_service_client::EventStoreServiceClient::connect(dst).await
+        })?;
+        // Create the long-lived shared runtime used by blocking calls afterwards
+        let blocking_rt = std::sync::Arc::new(rt);
+        Ok(Self { client, blocking_rt })
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::dcbapi::DCBEventStoreAsync for GrpcEventStoreClient {
+    type ReadStream = Pin<Box<dyn futures::Stream<Item = crate::dcbapi::DCBResult<crate::dcbapi::DCBSequencedEvent>> + Send>>;
+
+    async fn read_stream(
+        &self,
+        query: Option<DCBQuery>,
+        after: Option<u64>,
+        limit: Option<usize>,
+        subscribe: bool,
+    ) -> DCBResult<Self::ReadStream> {
+        // Convert API types to proto types
+        let query_proto = query.map(|q| QueryProto {
+            items: q
+                .items
+                .into_iter()
+                .map(|item| QueryItemProto {
+                    types: item.types,
+                    tags: item.tags,
+                })
+                .collect(),
+        });
+        let limit_proto = limit.map(|l| l as u32);
+        let request = ReadRequestProto { query: query_proto, after, limit: limit_proto, subscribe: Some(subscribe) };
+
+        let mut client = self.client.clone();
+        let response = client.read(request).await.map_err(|status| {
+            DCBError::Io(std::io::Error::other(format!("gRPC read error: {status}")))
+        })?;
+        let mut stream = response.into_inner();
+
+        let (tx, rx) = mpsc::channel::<DCBResult<DCBSequencedEvent>>(128);
+        tokio::spawn(async move {
+            loop {
+                match stream.message().await {
+                    Ok(Some(resp)) => {
+                        if let Some(batch) = resp.batch {
+                            for e in batch.events.into_iter() {
+                                if let Some(ev) = e.event {
+                                    let out = DCBSequencedEvent {
+                                        position: e.position,
+                                        event: DCBEvent { event_type: ev.event_type, tags: ev.tags, data: ev.data },
+                                    };
+                                    if tx.send(Ok(out)).await.is_err() { return; }
+                                }
+                            }
+                        }
+                    }
+                    Ok(None) => { break; }
+                    Err(status) => {
+                        let _ = tx.send(Err(DCBError::Io(std::io::Error::other(format!("gRPC stream error: {status}"))))).await;
+                        break;
+                    }
+                }
+            }
+        });
+
+        Ok(Box::pin(ReceiverStream::new(rx)))
+    }
+
+    async fn append(
+        &self,
+        events: Vec<DCBEvent>,
+        condition: Option<DCBAppendCondition>,
+    ) -> DCBResult<u64> {
+        let events_proto: Vec<EventProto> = events
+            .into_iter()
+            .map(|e| EventProto {
+                event_type: e.event_type,
+                tags: e.tags,
+                data: e.data,
+            })
+            .collect();
+
+        let condition_proto = condition.map(|c| AppendConditionProto {
+            fail_if_events_match: Some(QueryProto {
+                items: c
+                    .fail_if_events_match
+                    .items
+                    .into_iter()
+                    .map(|item| QueryItemProto { types: item.types, tags: item.tags })
+                    .collect(),
+            }),
+            after: c.after,
+        });
+
+        let request = AppendRequestProto { events: events_proto, condition: condition_proto };
+        let mut client = self.client.clone();
+        match client.append(request).await {
+            Ok(response) => Ok(response.into_inner().position),
+            Err(status) => {
+                if status.message().contains("Integrity error") {
+                    Err(DCBError::IntegrityError(status.message().to_string()))
+                } else {
+                    Err(DCBError::Io(std::io::Error::other(format!("gRPC append error: {status}"))))
+                }
+            }
+        }
+    }
+
+    async fn head(&self) -> DCBResult<Option<u64>> {
+        let mut client = self.client.clone();
+        match client.head(HeadRequestProto {}).await {
+            Ok(response) => Ok(response.into_inner().position),
+            Err(status) => Err(DCBError::Io(std::io::Error::other(format!("gRPC head error: {status}")))),
+        }
+    }
 }
 
 #[async_trait::async_trait]

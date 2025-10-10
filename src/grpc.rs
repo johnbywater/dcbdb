@@ -113,7 +113,7 @@ struct EventStoreHandle {
 impl EventStoreHandle {
     fn new<P: AsRef<Path> + Send + 'static>(path: P) -> std::io::Result<Self> {
         // Create a channel for sending requests to the EventStore thread (for writes)
-        let (request_tx, mut request_rx) = mpsc::channel::<EventStoreRequest>(32);
+        let (request_tx, mut request_rx) = mpsc::channel::<EventStoreRequest>(1024);
 
         // Build a shared LMDB instance (Arc) upfront so reads can proceed concurrently on this thread
         let p = path.as_ref();
@@ -582,6 +582,8 @@ impl Clone for EventStoreHandle {
 // gRPC client implementation
 pub struct GrpcEventStoreClient {
     client: dcbdb::event_store_service_client::EventStoreServiceClient<tonic::transport::Channel>,
+    // Dedicated runtime reused for blocking calls when not on a Tokio runtime
+    blocking_rt: std::sync::Arc<tokio::runtime::Runtime>,
 }
 
 impl GrpcEventStoreClient {
@@ -592,7 +594,10 @@ impl GrpcEventStoreClient {
     {
         let client =
             dcbdb::event_store_service_client::EventStoreServiceClient::connect(dst).await?;
-        Ok(Self { client })
+        // Create a dedicated runtime for blocking calls from non-async contexts.
+        // Using a single runtime per client avoids the overhead of constructing a new runtime per call.
+        let blocking_rt = std::sync::Arc::new(tokio::runtime::Runtime::new().expect("failed to create blocking runtime"));
+        Ok(Self { client, blocking_rt })
     }
 }
 
@@ -647,15 +652,14 @@ impl DCBEventStore for GrpcEventStoreClient {
                 )))),
             }
         } else {
-            // No Tokio runtime, create a new one
-            let rt = tokio::runtime::Runtime::new()?;
-            let response = rt.block_on(async move { client.read(request).await });
+            // Use the client's dedicated runtime for blocking calls
+            let response = self.blocking_rt.block_on(async move { client.read(request).await });
 
             match response {
                 Ok(stream) => {
                     // Create a GrpcReadResponse that implements DCBReadResponse
                     Ok(
-                        Box::new(GrpcReadResponse::new_with_runtime(rt, stream.into_inner()))
+                        Box::new(GrpcReadResponse::new_with_shared_runtime(self.blocking_rt.clone(), stream.into_inner()))
                             as Box<dyn crate::dcbapi::DCBReadResponse + '_>,
                     )
                 }
@@ -709,9 +713,8 @@ impl DCBEventStore for GrpcEventStoreClient {
             // We're already in a Tokio runtime, use the current one
             futures::executor::block_on(async move { client.append(request).await })
         } else {
-            // No Tokio runtime, create a new one
-            let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(async move { client.append(request).await })
+            // Use the client's dedicated runtime
+            self.blocking_rt.block_on(async move { client.append(request).await })
         };
 
         match response {
@@ -740,9 +743,8 @@ impl DCBEventStore for GrpcEventStoreClient {
             // We're already in a Tokio runtime, use the current one
             futures::executor::block_on(async move { client.head(request).await })
         } else {
-            // No Tokio runtime, create a new one
-            let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(async move { client.head(request).await })
+            // Use the client's dedicated runtime
+            self.blocking_rt.block_on(async move { client.head(request).await })
         };
 
         match response {
@@ -757,6 +759,7 @@ impl DCBEventStore for GrpcEventStoreClient {
 // Implementation of DCBReadResponse for the gRPC client
 enum RuntimeType {
     Owned(tokio::runtime::Runtime),
+    Shared(std::sync::Arc<tokio::runtime::Runtime>),
     Current,
 }
 
@@ -792,6 +795,19 @@ impl GrpcReadResponse {
         }
     }
 
+    fn new_with_shared_runtime(
+        rt: std::sync::Arc<tokio::runtime::Runtime>,
+        stream: tonic::codec::Streaming<ReadResponseProto>,
+    ) -> Self {
+        Self {
+            runtime_type: RuntimeType::Shared(rt),
+            stream,
+            events: Vec::new(),
+            current_index: 0,
+            head: None,
+        }
+    }
+
     fn fetch_next_batch(&mut self) -> DCBResult<()> {
         // Use the appropriate method to get the next message from the stream
         let next_message = match &mut self.runtime_type {
@@ -799,6 +815,7 @@ impl GrpcReadResponse {
             RuntimeType::Current => {
                 futures::executor::block_on(async { self.stream.message().await })
             }
+            RuntimeType::Shared(rt) => rt.block_on(async { self.stream.message().await }),
         };
 
         match next_message {

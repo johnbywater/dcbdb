@@ -399,20 +399,20 @@ async fn grpc_async_stream_catch_up_and_continue() {
             tags: vec!["grpc-async".to_string()],
         })
         .collect();
-    let _ = <GrpcEventStoreClient as DCBEventStoreAsync>::append(&client, initial_events, None)
+    let _ = client.append_async(initial_events, None)
         .await
         .expect("append initial events");
 
     // Start a subscription stream that should first catch up existing events
-    let mut stream = <GrpcEventStoreClient as DCBEventStoreAsync>::read_stream(
-        &client,
-        None,
-        None,
-        None,
-        true,
-    )
-    .await
-    .expect("read_stream");
+    let mut stream = client
+        .read_stream(
+            None,
+            None,
+            None,
+            true,
+        )
+        .await
+        .expect("read_stream");
 
     // Receive exactly the initial events
     let mut received = Vec::new();
@@ -435,7 +435,7 @@ async fn grpc_async_stream_catch_up_and_continue() {
             tags: vec!["grpc-async".to_string()],
         })
         .collect();
-    let _ = <GrpcEventStoreClient as DCBEventStoreAsync>::append(&client, new_events, None)
+    let _ = client.append_async(new_events, None)
         .await
         .expect("append new events");
 

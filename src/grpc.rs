@@ -675,7 +675,7 @@ impl crate::dcbapi::DCBEventStoreAsync for GrpcEventStoreClient {
         Ok(Box::pin(ReceiverStream::new(rx)))
     }
 
-    async fn append(
+    async fn append_async(
         &self,
         events: Vec<DCBEvent>,
         condition: Option<DCBAppendCondition>,
@@ -715,7 +715,7 @@ impl crate::dcbapi::DCBEventStoreAsync for GrpcEventStoreClient {
         }
     }
 
-    async fn head(&self) -> DCBResult<Option<u64>> {
+    async fn head_async(&self) -> DCBResult<Option<u64>> {
         let mut client = self.client.clone();
         match client.head(HeadRequestProto {}).await {
             Ok(response) => Ok(response.into_inner().position),

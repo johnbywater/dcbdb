@@ -111,7 +111,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tags: vec!["tag1".to_string(), "tag2".to_string()],
         data: b"Hello, world!".to_vec(),
     };
-    let position = <GrpcEventStoreClient as DCBEventStoreAsync>::append(&client, vec![event], None).await?;
+    let position = client.append_async(vec![event], None).await?;
     println!("Appended event at position: {}", position);
 
     // Read events
@@ -121,7 +121,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tags: vec!["tag1".to_string()],
         }],
     };
-    let mut stream = <GrpcEventStoreClient as DCBEventStoreAsync>::read_stream(&client, Some(query), None, None, false).await?;
+    let mut stream = client.read_stream(Some(query), None, None, false).await?;
 
     // Iterate through the events from the async stream
     use futures::StreamExt;

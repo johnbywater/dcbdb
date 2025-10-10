@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let events_to_append = vec![event.clone(), event.clone(), event.clone(), event.clone(), event.clone()];
     let events_len = events_to_append.len();
     let t_append = Instant::now();
-    let position = <GrpcEventStoreClient as DCBEventStoreAsync>::append(&client, events_to_append, None).await?;
+    let position = client.append_async(events_to_append, None).await?;
     let append_elapsed = t_append.elapsed();
     let append_eps = if append_elapsed.as_secs_f64() > 0.0 {
         events_len as f64 / append_elapsed.as_secs_f64()
@@ -61,10 +61,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tail: usize = 1000;
     println!("Reading last {tail} events...");
     let t_read = Instant::now();
-    let head_opt = <GrpcEventStoreClient as DCBEventStoreAsync>::head(&client).await?;
+    let head_opt = client.head_async().await?;
     let read_after_position = max(head_opt.unwrap_or(0).saturating_sub(tail as u64), 0);
-    let mut stream = <GrpcEventStoreClient as DCBEventStoreAsync>::read_stream(
-        &client,
+    let mut stream = client.read_stream(
         None,
         Some(read_after_position),
         Some(tail),

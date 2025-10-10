@@ -20,13 +20,13 @@ pub trait DCBEventStoreAsync {
         subscribe: bool,
     ) -> DCBResult<Self::ReadStream>;
 
-    async fn append(
+    async fn append_async(
         &self,
         events: Vec<DCBEvent>,
         condition: Option<DCBAppendCondition>,
     ) -> DCBResult<u64>;
 
-    async fn head(&self) -> DCBResult<Option<u64>>;
+    async fn head_async(&self) -> DCBResult<Option<u64>>;
 }
 
 /// Represents a query item for filtering events

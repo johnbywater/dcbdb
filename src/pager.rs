@@ -7,6 +7,7 @@ use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use memmap2::{Mmap, MmapOptions};
+// use memmap2::{Advice, Mmap, MmapOptions};
 
 // Pager for file I/O
 pub struct Pager {
@@ -336,6 +337,8 @@ impl Pager {
                 .len(max_len as usize)
                 .map(&*file)?
         };
+        // mmap_new.advise(Advice::Random)?;
+        // mmap_new.advise(Advice::WillNeed)?;
         let mmap_arc = {
             let mut maps = self.mmaps.lock().unwrap();
             // Another thread could have inserted meanwhile

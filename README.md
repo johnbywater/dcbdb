@@ -34,7 +34,7 @@ blocking, and efficient space reuse via the free-lists tree.
    ./target/release/example_client
    ```
 
-This will start a server, connect to it with the example client, append an event, and then read all events in the database.
+This will start a server, connect to it with the example client, append an event, and then read events from the event store.
 
 ## Building the Project
 

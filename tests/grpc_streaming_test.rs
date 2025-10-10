@@ -362,3 +362,96 @@ fn grpc_subscription_multithreaded_catch_up_and_continue() {
     let _ = shutdown_tx.send(());
     let _ = server_handle.join();
 }
+
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn grpc_async_stream_catch_up_and_continue() {
+    use dcbdb::dcbapi::DCBEventStoreAsync;
+    use futures::StreamExt;
+    use tokio::time::{sleep, Duration as TokioDuration};
+
+    // Arrange: start a gRPC server backed by a temporary directory
+    let temp_dir = tempfile::tempdir().unwrap();
+    let db_path = temp_dir.path().to_path_buf();
+    let addr = "127.0.0.1:50075"; // async API test port
+    let addr_http = format!("http://{}", addr);
+
+    // Channel to shutdown the server
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+
+    // Spawn the server in this runtime
+    let server_task = tokio::spawn(async move {
+        let _ = start_grpc_server_with_shutdown(db_path, &addr, shutdown_rx).await;
+    });
+
+    // Give the server a brief moment to start listening
+    sleep(TokioDuration::from_millis(200)).await;
+
+    // Connect the async client
+    let client = GrpcEventStoreClient::connect(addr_http).await.expect("client connect");
+
+    // Append initial events via async API
+    let initial_count = 15usize;
+    let initial_events: Vec<DCBEvent> = (0..initial_count as u64)
+        .map(|i| DCBEvent {
+            event_type: "AsyncEvent".to_string(),
+            data: format!("init-{i}").into_bytes(),
+            tags: vec!["grpc-async".to_string()],
+        })
+        .collect();
+    let _ = <GrpcEventStoreClient as DCBEventStoreAsync>::append(&client, initial_events, None)
+        .await
+        .expect("append initial events");
+
+    // Start a subscription stream that should first catch up existing events
+    let mut stream = <GrpcEventStoreClient as DCBEventStoreAsync>::read_stream(
+        &client,
+        None,
+        None,
+        None,
+        true,
+    )
+    .await
+    .expect("read_stream");
+
+    // Receive exactly the initial events
+    let mut received = Vec::new();
+    while received.len() < initial_count {
+        match stream.next().await {
+            Some(Ok(ev)) => {
+                assert!(ev.event.tags.iter().any(|t| t == "grpc-async"));
+                received.push(ev);
+            }
+            other => panic!("unexpected stream state while catching up: {:?}", other),
+        }
+    }
+
+    // Append more events via async API
+    let new_count = 7usize;
+    let new_events: Vec<DCBEvent> = (0..new_count as u64)
+        .map(|i| DCBEvent {
+            event_type: "AsyncEvent2".to_string(),
+            data: format!("new-{i}").into_bytes(),
+            tags: vec!["grpc-async".to_string()],
+        })
+        .collect();
+    let _ = <GrpcEventStoreClient as DCBEventStoreAsync>::append(&client, new_events, None)
+        .await
+        .expect("append new events");
+
+    // Continue receiving the newly appended events
+    let mut received_new = 0usize;
+    while received_new < new_count {
+        match stream.next().await {
+            Some(Ok(ev)) => {
+                assert!(ev.event.tags.iter().any(|t| t == "grpc-async"));
+                received_new += 1;
+            }
+            other => panic!("unexpected stream end before receiving new events: {:?}", other),
+        }
+    }
+
+    // Cleanup: shutdown server and wait for it to exit
+    let _ = shutdown_tx.send(());
+    let _ = server_task.await;
+}

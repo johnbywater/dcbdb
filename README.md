@@ -139,6 +139,75 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## Subscriptions (catch-up and continue)
+
+DCBDB supports catch-up subscriptions over gRPC. A subscription behaves like a normal read until it reaches the end of the currently recorded events, at which point it blocks instead of terminating and then continues delivering newly appended events.
+
+Key semantics:
+- Normal read (subscribe = false):
+  - For unlimited reads (limit = None), the server captures a starting head boundary and will not stream past it. If new events are appended after the read starts, they are not included; the stream ends at the boundary.
+  - For limited reads (limit = Some(n)), the stream ends after n matching events are sent.
+- Subscription read (subscribe = true):
+  - First delivers all existing matching events (respecting after/limit), then blocks when it reaches the current end.
+  - When new matching events are appended, the stream resumes and continues delivering them.
+  - If a limit is provided, the stream terminates after that many events even in subscription mode.
+  - If the client drops the stream or the server shuts down, the stream terminates. The server actively signals shutdown to terminate ongoing subscriptions gracefully.
+- Batch sizing: you can pass an optional batch_size hint; the server will cap it to its configured maximum.
+
+Example: simple subscription from the beginning
+
+```rust
+use dcbdb::grpc::GrpcEventStoreClient;
+use dcbdb::dcbapi::DCBEvent;
+use futures::StreamExt;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = GrpcEventStoreClient::connect("http://127.0.0.1:50051").await?;
+
+    // Start a subscription: catch up all events and continue with new ones
+    let mut stream = client.read(None, None, None, true, None).await?;
+
+    // Consume events as they arrive
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(se) => println!("event {} type={} tags={:?}", se.position, se.event.event_type, se.event.tags),
+            Err(e) => {
+                eprintln!("subscription error: {e:?}");
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+```
+
+Example: subscribe from current head (tail)
+
+```rust
+use dcbdb::grpc::GrpcEventStoreClient;
+use futures::StreamExt;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = GrpcEventStoreClient::connect("http://127.0.0.1:50051").await?;
+
+    // Find current head, then subscribe to only future events
+    let head = client.head().await?.unwrap_or(0);
+    let mut stream = client.read(None, Some(head), None, true, None).await?;
+
+    while let Some(item) = stream.next().await {
+        println!("new event: {:?}", item?);
+    }
+    Ok(())
+}
+```
+
+Notes:
+- The async client’s streaming API yields events only (it flattens batches). If you need the starting head value for boundary-aware logic in non-subscription reads, you can call client.head() before starting the read.
+- Server shutdown: When the server is asked to shut down, it signals all active subscription tasks so they terminate promptly. Your client iterator/stream will end.
+- Performance: You can tune per-message batch size with the optional batch_size argument to client.read(...). The server caps this to a safe maximum.
+
 ### Using Other gRPC Clients
 
 You can also use other gRPC clients to interact with the server. The protocol definition is in the `proto/event_store.proto` file.

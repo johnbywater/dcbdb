@@ -7,26 +7,69 @@ use crate::common::PageID;
 use std::iter::Iterator;
 use thiserror::Error;
 
-// Async DCB API (coexists with the sync API for backward compatibility)
-#[async_trait::async_trait]
-pub trait DCBEventStoreAsync {
-    type ReadStream: futures::Stream<Item = DCBResult<DCBSequencedEvent>> + Send + Unpin + 'static;
-
-    async fn read_stream(
+/// Interface for recording and retrieving events
+pub trait DCBEventStore {
+    /// Reads events from the store based on the provided query and constraints
+    ///
+    /// Returns a DCBReadResponse that provides an iterator over all events,
+    /// unless 'after' is given then only those with position greater than 'after',
+    /// and unless any query items are given, then only those that match at least one
+    /// query item. An event matches a query item if its type is in the item types or
+    /// there are no item types, and if all the item tags are in the event tags.
+    fn read(
         &self,
         query: Option<DCBQuery>,
         after: Option<u64>,
         limit: Option<usize>,
         subscribe: bool,
-    ) -> DCBResult<Self::ReadStream>;
+    ) -> DCBResult<Box<dyn DCBReadResponse + '_>>;
 
-    async fn append_async(
+    /// Reads events from the store and returns them as a tuple of (Vec<DCBSequencedEvent>, Option<u64>)
+    fn read_with_head(
+        &self,
+        query: Option<DCBQuery>,
+        after: Option<u64>,
+        limit: Option<usize>,
+    ) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
+        let mut response = self.read(query, after, limit, false)?;
+        Ok(response.collect_with_head())
+    }
+
+    /// Returns the current head position of the event store, or None if empty
+    ///
+    /// Returns the value of last_committed_position, or None if last_committed_position is zero
+    fn head(&self) -> DCBResult<Option<u64>>;
+
+    /// Appends given events to the event store, unless the condition fails
+    ///
+    /// Returns the position of the last appended event
+    fn append(
+        &self,
+        events: Vec<DCBEvent>,
+        condition: Option<DCBAppendCondition>,
+    ) -> DCBResult<u64>;
+}
+
+// Async DCB API (coexists with the sync API for backward compatibility)
+#[async_trait::async_trait]
+pub trait DCBEventStoreAsync {
+    type ReadResponseAsync: futures::Stream<Item = DCBResult<DCBSequencedEvent>> + Send + Unpin + 'static;
+
+    async fn read(
+        &self,
+        query: Option<DCBQuery>,
+        after: Option<u64>,
+        limit: Option<usize>,
+        subscribe: bool,
+    ) -> DCBResult<Self::ReadResponseAsync>;
+
+    async fn append(
         &self,
         events: Vec<DCBEvent>,
         condition: Option<DCBAppendCondition>,
     ) -> DCBResult<u64>;
 
-    async fn head_async(&self) -> DCBResult<Option<u64>>;
+    async fn head(&self) -> DCBResult<Option<u64>>;
 }
 
 /// Represents a query item for filtering events
@@ -82,49 +125,6 @@ pub trait DCBReadResponse: Iterator<Item = DCBSequencedEvent> {
     fn collect_with_head(&mut self) -> (Vec<DCBSequencedEvent>, Option<u64>);
     /// Returns a batch of events, updating head with the last event in the batch if there is one and if limit.is_some() is true
     fn next_batch(&mut self) -> DCBResult<Vec<DCBSequencedEvent>>;
-}
-
-/// Interface for recording and retrieving events
-pub trait DCBEventStore {
-    /// Reads events from the store based on the provided query and constraints
-    ///
-    /// Returns a DCBReadResponse that provides an iterator over all events,
-    /// unless 'after' is given then only those with position greater than 'after',
-    /// and unless any query items are given, then only those that match at least one
-    /// query item. An event matches a query item if its type is in the item types or
-    /// there are no item types, and if all the item tags are in the event tags.
-    fn read(
-        &self,
-        query: Option<DCBQuery>,
-        after: Option<u64>,
-        limit: Option<usize>,
-        subscribe: bool,
-    ) -> DCBResult<Box<dyn DCBReadResponse + '_>>;
-
-    /// Reads events from the store and returns them as a tuple of (Vec<DCBSequencedEvent>, Option<u64>)
-    fn read_with_head(
-        &self,
-        query: Option<DCBQuery>,
-        after: Option<u64>,
-        limit: Option<usize>,
-    ) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
-        let mut response = self.read(query, after, limit, false)?;
-        Ok(response.collect_with_head())
-    }
-
-    /// Returns the current head position of the event store, or None if empty
-    ///
-    /// Returns the value of last_committed_position, or None if last_committed_position is zero
-    fn head(&self) -> DCBResult<Option<u64>>;
-
-    /// Appends given events to the event store, unless the condition fails
-    ///
-    /// Returns the position of the last appended event
-    fn append(
-        &self,
-        events: Vec<DCBEvent>,
-        condition: Option<DCBAppendCondition>,
-    ) -> DCBResult<u64>;
 }
 
 // Error types

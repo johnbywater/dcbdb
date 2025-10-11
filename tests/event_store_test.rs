@@ -3,8 +3,6 @@ use dcbdb::dcbapi::{
 };
 // gRPC client sync trait support has been removed; tests use the local EventStore
 use dcbdb::event_store::EventStore;
-use std::thread;
-use std::time::Duration;
 use tempfile::tempdir;
 use uuid::Uuid;
 // Import the EventStore and related types from the main crate

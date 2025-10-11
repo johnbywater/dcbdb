@@ -599,15 +599,15 @@ impl GrpcEventStoreClient {
 
 #[async_trait::async_trait]
 impl crate::dcbapi::DCBEventStoreAsync for GrpcEventStoreClient {
-    type ReadStream = Pin<Box<dyn futures::Stream<Item = crate::dcbapi::DCBResult<crate::dcbapi::DCBSequencedEvent>> + Send>>;
+    type ReadResponseAsync = Pin<Box<dyn futures::Stream<Item = crate::dcbapi::DCBResult<crate::dcbapi::DCBSequencedEvent>> + Send>>;
 
-    async fn read_stream(
+    async fn read(
         &self,
         query: Option<DCBQuery>,
         after: Option<u64>,
         limit: Option<usize>,
         subscribe: bool,
-    ) -> DCBResult<Self::ReadStream> {
+    ) -> DCBResult<Self::ReadResponseAsync> {
         // Convert API types to proto types
         let query_proto = query.map(|q| QueryProto {
             items: q
@@ -657,7 +657,7 @@ impl crate::dcbapi::DCBEventStoreAsync for GrpcEventStoreClient {
         Ok(Box::pin(ReceiverStream::new(rx)))
     }
 
-    async fn append_async(
+    async fn append(
         &self,
         events: Vec<DCBEvent>,
         condition: Option<DCBAppendCondition>,
@@ -697,7 +697,7 @@ impl crate::dcbapi::DCBEventStoreAsync for GrpcEventStoreClient {
         }
     }
 
-    async fn head_async(&self) -> DCBResult<Option<u64>> {
+    async fn head(&self) -> DCBResult<Option<u64>> {
         let mut client = self.client.clone();
         match client.head(HeadRequestProto {}).await {
             Ok(response) => Ok(response.into_inner().position),

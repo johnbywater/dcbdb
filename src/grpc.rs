@@ -4,7 +4,7 @@ use std::pin::Pin;
 use std::thread;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_stream::wrappers::ReceiverStream;
-use tonic::{Request, Response, Status, transport::Server};
+use tonic::{Request, Response, Status, Code, transport::Server};
 
 use crate::dcbapi::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem, DCBResult,
@@ -18,7 +18,11 @@ pub mod dcbdb {
     tonic::include_proto!("dcbdb");
 }
 
+use prost::Message;
+use prost::bytes::Bytes;
+
 use dcbdb::{
+    ErrorResponseProto,
     AppendConditionProto, AppendRequestProto, AppendResponseProto, EventProto, HeadRequestProto,
     HeadResponseProto, QueryItemProto, QueryProto, ReadRequestProto, ReadResponseProto,
     SequencedEventBatchProto, SequencedEventProto,
@@ -337,6 +341,43 @@ impl EventStoreHandle {
     }
 }
 
+// Helper: map DCBError -> tonic::Status with structured details
+fn status_from_dcb_error(e: &DCBError) -> Status {
+    let (code, error_type) = match e {
+            DCBError::IntegrityError(_) => (Code::FailedPrecondition, dcbdb::error_response_proto::ErrorType::Integrity as i32),
+            DCBError::Corruption(_) | DCBError::DatabaseCorrupted(_) | DCBError::DeserializationError(_) => (Code::DataLoss, dcbdb::error_response_proto::ErrorType::Corruption as i32),
+            DCBError::SerializationError(_) | DCBError::Serialization(_) => (Code::Internal, dcbdb::error_response_proto::ErrorType::Serialization as i32),
+            _ => (Code::Internal, dcbdb::error_response_proto::ErrorType::Io as i32),
+        };
+    let msg = e.to_string();
+    let detail = ErrorResponseProto { message: msg.clone(), error_type };
+    let bytes = detail.encode_to_vec();
+    Status::with_details(code, msg, Bytes::from(bytes))
+}
+
+// Helper: map tonic::Status -> DCBError by decoding details
+fn dcb_error_from_status(status: Status) -> DCBError {
+    let details = status.details();
+    // Try to decode ErrorResponseProto directly from details
+    if !details.is_empty() {
+        if let Ok(err) = ErrorResponseProto::decode(details) {
+            return match err.error_type {
+                x if x == dcbdb::error_response_proto::ErrorType::Integrity as i32 => DCBError::IntegrityError(err.message),
+                x if x == dcbdb::error_response_proto::ErrorType::Corruption as i32 => DCBError::Corruption(err.message),
+                x if x == dcbdb::error_response_proto::ErrorType::Serialization as i32 => DCBError::SerializationError(err.message),
+                _ => DCBError::Io(std::io::Error::other(err.message)),
+            };
+        }
+    }
+    // Fallback: infer from gRPC code
+    match status.code() {
+        Code::FailedPrecondition => DCBError::IntegrityError(status.message().to_string()),
+        Code::DataLoss => DCBError::Corruption(status.message().to_string()),
+        Code::Internal => DCBError::Io(std::io::Error::other(status.message().to_string())),
+        _ => DCBError::Io(std::io::Error::other(format!("gRPC error: {}", status))),
+    }
+}
+
 // gRPC server implementation
 pub struct GrpcEventStoreServer {
     event_store: EventStoreHandle,
@@ -515,7 +556,7 @@ impl EventStoreService for GrpcEventStoreServer {
                     }
                     Err(e) => {
                         let _ = tx
-                            .send(Err(Status::internal(format!("Read error: {e:?}"))))
+                            .send(Err(status_from_dcb_error(&e)))
                             .await;
                         break;
                     }
@@ -541,19 +582,8 @@ impl EventStoreService for GrpcEventStoreServer {
 
         // Call the event store append method
         match self.event_store.append(events, condition).await {
-            Ok(position) => {
-                // Return the position as a response
-                Ok(Response::new(AppendResponseProto { position }))
-            }
-            Err(e) => {
-                // Convert the error to a gRPC status with specific error type information
-                match e {
-                    DCBError::IntegrityError(_) => Err(Status::failed_precondition(
-                        format!("Integrity error: condition failed: {e:?}"),
-                    )),
-                    _ => Err(Status::internal(format!("Append error: {e:?}"))),
-                }
-            }
+            Ok(position) => Ok(Response::new(AppendResponseProto { position })),
+            Err(e) => Err(status_from_dcb_error(&e)),
         }
     }
 
@@ -567,7 +597,7 @@ impl EventStoreService for GrpcEventStoreServer {
                 // Return the position as a response
                 Ok(Response::new(HeadResponseProto { position }))
             }
-            Err(e) => Err(Status::internal(format!("Head error: {e:?}"))),
+            Err(e) => Err(status_from_dcb_error(&e)),
         }
     }
 }
@@ -620,9 +650,7 @@ impl GrpcEventStoreClient {
         let request = ReadRequestProto { query: query_proto, after, limit: limit_proto, subscribe: Some(subscribe), batch_size: batch_size.map(|b| b as u32) };
 
         let mut client = self.client.clone();
-        let response = client.read(request).await.map_err(|status| {
-            crate::dcbapi::DCBError::Io(std::io::Error::other(format!("gRPC read error: {status}")))
-        })?;
+        let response = client.read(request).await.map_err(|status| dcb_error_from_status(status))?;
         let mut stream = response.into_inner();
 
         let (tx, rx) = mpsc::channel::<crate::dcbapi::DCBResult<crate::dcbapi::DCBSequencedEvent>>(128);
@@ -644,7 +672,7 @@ impl GrpcEventStoreClient {
                     }
                     Ok(None) => { break; }
                     Err(status) => {
-                        let _ = tx.send(Err(crate::dcbapi::DCBError::Io(std::io::Error::other(format!("gRPC stream error: {status}"))))).await;
+                        let _ = tx.send(Err(dcb_error_from_status(status))).await;
                         break;
                     }
                 }
@@ -680,13 +708,7 @@ impl GrpcEventStoreClient {
         let mut client = self.client.clone();
         match client.append(request).await {
             Ok(response) => Ok(response.into_inner().position),
-            Err(status) => {
-                if status.message().contains("Integrity error") {
-                    Err(crate::dcbapi::DCBError::IntegrityError(status.message().to_string()))
-                } else {
-                    Err(crate::dcbapi::DCBError::Io(std::io::Error::other(format!("gRPC append error: {status}"))))
-                }
-            }
+            Err(status) => Err(dcb_error_from_status(status)),
         }
     }
 
@@ -694,7 +716,7 @@ impl GrpcEventStoreClient {
         let mut client = self.client.clone();
         match client.head(HeadRequestProto {}).await {
             Ok(response) => Ok(response.into_inner().position),
-            Err(status) => Err(crate::dcbapi::DCBError::Io(std::io::Error::other(format!("gRPC head error: {status}")))),
+            Err(status) => Err(dcb_error_from_status(status)),
         }
     }
 }

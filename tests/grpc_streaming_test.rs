@@ -1,4 +1,4 @@
-use dcbdb::dcbapi::{DCBEvent, DCBEventStoreAsync};
+use dcbdb::dcbapi::DCBEvent;
 use dcbdb::grpc::{start_grpc_server_with_shutdown, GrpcEventStoreClient};
 use futures::StreamExt;
 

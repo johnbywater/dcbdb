@@ -1,6 +1,6 @@
 use std::cmp::max;
 use clap::Parser;
-use dcbdb::dcbapi::{DCBEvent, DCBEventStoreAsync};
+use dcbdb::dcbapi::DCBEvent;
 use dcbdb::grpc::GrpcEventStoreClient;
 use std::time::Instant;
 use futures::StreamExt;

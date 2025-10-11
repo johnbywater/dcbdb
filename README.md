@@ -97,7 +97,7 @@ The example client:
 DCBDB provides a Rust client that you can use to interact with the gRPC server in your own code. Here's an example of how to use it:
 
 ```rust
-use dcbdb::dcbapi::{DCBEvent, DCBEventStoreAsync, DCBQuery, DCBQueryItem};
+use dcbdb::dcbapi::{DCBEvent, DCBQuery, DCBQueryItem};
 use dcbdb::grpc::GrpcEventStoreClient;
 
 #[tokio::main]
@@ -111,7 +111,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tags: vec!["tag1".to_string(), "tag2".to_string()],
         data: b"Hello, world!".to_vec(),
     };
-    let position = client.append_async(vec![event], None).await?;
+    let position = client.append(vec![event], None).await?;
     println!("Appended event at position: {}", position);
 
     // Read events
@@ -121,7 +121,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tags: vec!["tag1".to_string()],
         }],
     };
-    let mut stream = client.read_stream(Some(query), None, None, false).await?;
+    let mut stream = client.read(Some(query), None, None, false).await?;
 
     // Iterate through the events from the async stream
     use futures::StreamExt;

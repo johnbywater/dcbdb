@@ -595,28 +595,20 @@ impl GrpcEventStoreClient {
         Ok(Self { client })
     }
 
-}
-
-#[async_trait::async_trait]
-impl crate::dcbapi::DCBEventStoreAsync for GrpcEventStoreClient {
-    type ReadResponseAsync = Pin<Box<dyn futures::Stream<Item = crate::dcbapi::DCBResult<crate::dcbapi::DCBSequencedEvent>> + Send>>;
-
-    async fn read(
+    // Async inherent methods: use the gRPC client directly (no trait required)
+    pub async fn read(
         &self,
-        query: Option<DCBQuery>,
+        query: Option<crate::dcbapi::DCBQuery>,
         after: Option<u64>,
         limit: Option<usize>,
         subscribe: bool,
-    ) -> DCBResult<Self::ReadResponseAsync> {
+    ) -> crate::dcbapi::DCBResult<Pin<Box<dyn futures::Stream<Item = crate::dcbapi::DCBResult<crate::dcbapi::DCBSequencedEvent>> + Send>>> {
         // Convert API types to proto types
         let query_proto = query.map(|q| QueryProto {
             items: q
                 .items
                 .into_iter()
-                .map(|item| QueryItemProto {
-                    types: item.types,
-                    tags: item.tags,
-                })
+                .map(|item| QueryItemProto { types: item.types, tags: item.tags })
                 .collect(),
         });
         let limit_proto = limit.map(|l| l as u32);
@@ -624,11 +616,11 @@ impl crate::dcbapi::DCBEventStoreAsync for GrpcEventStoreClient {
 
         let mut client = self.client.clone();
         let response = client.read(request).await.map_err(|status| {
-            DCBError::Io(std::io::Error::other(format!("gRPC read error: {status}")))
+            crate::dcbapi::DCBError::Io(std::io::Error::other(format!("gRPC read error: {status}")))
         })?;
         let mut stream = response.into_inner();
 
-        let (tx, rx) = mpsc::channel::<DCBResult<DCBSequencedEvent>>(128);
+        let (tx, rx) = mpsc::channel::<crate::dcbapi::DCBResult<crate::dcbapi::DCBSequencedEvent>>(128);
         tokio::spawn(async move {
             loop {
                 match stream.message().await {
@@ -636,9 +628,9 @@ impl crate::dcbapi::DCBEventStoreAsync for GrpcEventStoreClient {
                         if let Some(batch) = resp.batch {
                             for e in batch.events.into_iter() {
                                 if let Some(ev) = e.event {
-                                    let out = DCBSequencedEvent {
+                                    let out = crate::dcbapi::DCBSequencedEvent {
                                         position: e.position,
-                                        event: DCBEvent { event_type: ev.event_type, tags: ev.tags, data: ev.data },
+                                        event: crate::dcbapi::DCBEvent { event_type: ev.event_type, tags: ev.tags, data: ev.data },
                                     };
                                     if tx.send(Ok(out)).await.is_err() { return; }
                                 }
@@ -647,7 +639,7 @@ impl crate::dcbapi::DCBEventStoreAsync for GrpcEventStoreClient {
                     }
                     Ok(None) => { break; }
                     Err(status) => {
-                        let _ = tx.send(Err(DCBError::Io(std::io::Error::other(format!("gRPC stream error: {status}"))))).await;
+                        let _ = tx.send(Err(crate::dcbapi::DCBError::Io(std::io::Error::other(format!("gRPC stream error: {status}"))))).await;
                         break;
                     }
                 }
@@ -657,18 +649,14 @@ impl crate::dcbapi::DCBEventStoreAsync for GrpcEventStoreClient {
         Ok(Box::pin(ReceiverStream::new(rx)))
     }
 
-    async fn append(
+    pub async fn append(
         &self,
-        events: Vec<DCBEvent>,
-        condition: Option<DCBAppendCondition>,
-    ) -> DCBResult<u64> {
+        events: Vec<crate::dcbapi::DCBEvent>,
+        condition: Option<crate::dcbapi::DCBAppendCondition>,
+    ) -> crate::dcbapi::DCBResult<u64> {
         let events_proto: Vec<EventProto> = events
             .into_iter()
-            .map(|e| EventProto {
-                event_type: e.event_type,
-                tags: e.tags,
-                data: e.data,
-            })
+            .map(|e| EventProto { event_type: e.event_type, tags: e.tags, data: e.data })
             .collect();
 
         let condition_proto = condition.map(|c| AppendConditionProto {
@@ -689,22 +677,23 @@ impl crate::dcbapi::DCBEventStoreAsync for GrpcEventStoreClient {
             Ok(response) => Ok(response.into_inner().position),
             Err(status) => {
                 if status.message().contains("Integrity error") {
-                    Err(DCBError::IntegrityError(status.message().to_string()))
+                    Err(crate::dcbapi::DCBError::IntegrityError(status.message().to_string()))
                 } else {
-                    Err(DCBError::Io(std::io::Error::other(format!("gRPC append error: {status}"))))
+                    Err(crate::dcbapi::DCBError::Io(std::io::Error::other(format!("gRPC append error: {status}"))))
                 }
             }
         }
     }
 
-    async fn head(&self) -> DCBResult<Option<u64>> {
+    pub async fn head(&self) -> crate::dcbapi::DCBResult<Option<u64>> {
         let mut client = self.client.clone();
         match client.head(HeadRequestProto {}).await {
             Ok(response) => Ok(response.into_inner().position),
-            Err(status) => Err(DCBError::Io(std::io::Error::other(format!("gRPC head error: {status}")))),
+            Err(status) => Err(crate::dcbapi::DCBError::Io(std::io::Error::other(format!("gRPC head error: {status}")))),
         }
     }
 }
+
 
 
 // Function to start the gRPC server

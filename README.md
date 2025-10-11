@@ -121,7 +121,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tags: vec!["tag1".to_string()],
         }],
     };
-    let mut stream = client.read(Some(query), None, None, false).await?;
+    let mut stream = client.read(Some(query), None, None, false, None).await?;
 
     // Iterate through the events from the async stream
     use futures::StreamExt;

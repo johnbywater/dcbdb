@@ -397,15 +397,19 @@ impl EventStoreService for GrpcEventStoreServer {
             } else { None };
             // Server-side batch cap to ensure streaming in multiple messages
             // Keep this modest so tests expecting multiple batches (e.g., 300 items) will split.
-            const GRPC_BATCH_SIZE: usize = 100;
+            const GRPC_BATCH_SIZE_DEFAULT: u32 = 100;
+            const GRPC_BATCH_SIZE_MAX: u32 = 5000;
             loop {
                 // If this is a subscription, exit if client has gone away or server is shutting down
                 if subscribe {
                     if tx.is_closed() { break; }
                     if *shutdown_rx.borrow() { break; }
                 }
-                // Determine per-iteration limit: don't exceed remaining (if any), and cap by server batch size
-                let per_iter_limit = Some(remaining.unwrap_or(usize::MAX).min(GRPC_BATCH_SIZE));
+                // Determine per-iteration limit: take requested batch size (if any), cap to GRPC_BATCH_SIZE, ensure >= 1, then don't exceed remaining (if any)
+                let requested_bs = req.batch_size.unwrap_or(GRPC_BATCH_SIZE_DEFAULT);
+                let capped_bs = requested_bs.min(GRPC_BATCH_SIZE_MAX);
+                let per_iter_limit = Some(remaining.unwrap_or(usize::MAX).min(capped_bs as usize));
+                // println!("Per iter limit: {per_iter_limit:?}");
                 // If subscription and remaining exhausted (limit reached), terminate
                 if subscribe {
                     if let Some(rem) = remaining { if rem == 0 { break; } }
@@ -602,6 +606,7 @@ impl GrpcEventStoreClient {
         after: Option<u64>,
         limit: Option<usize>,
         subscribe: bool,
+        batch_size: Option<usize>,
     ) -> crate::dcbapi::DCBResult<Pin<Box<dyn futures::Stream<Item = crate::dcbapi::DCBResult<crate::dcbapi::DCBSequencedEvent>> + Send>>> {
         // Convert API types to proto types
         let query_proto = query.map(|q| QueryProto {
@@ -612,7 +617,7 @@ impl GrpcEventStoreClient {
                 .collect(),
         });
         let limit_proto = limit.map(|l| l as u32);
-        let request = ReadRequestProto { query: query_proto, after, limit: limit_proto, subscribe: Some(subscribe) };
+        let request = ReadRequestProto { query: query_proto, after, limit: limit_proto, subscribe: Some(subscribe), batch_size: batch_size.map(|b| b as u32) };
 
         let mut client = self.client.clone();
         let response = client.read(request).await.map_err(|status| {

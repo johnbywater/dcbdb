@@ -44,6 +44,7 @@ message ReadRequestProto {
   optional uint64 after = 2;
   optional uint32 limit = 3;
   optional bool subscribe = 4;
+  optional uint32 batch_size = 5;
 }
 
 // Read response message

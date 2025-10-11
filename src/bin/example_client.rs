@@ -58,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //     }],
     // };
 
-    let tail: usize = 1000;
+    let tail: usize = 1000000;
     println!("Reading last {tail} events...");
     let t_read = Instant::now();
     let head_opt = client.head().await?;
@@ -68,6 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(read_after_position),
         Some(tail),
         false,
+        Some(500),
     )
     .await?;
 

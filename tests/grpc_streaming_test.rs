@@ -27,7 +27,7 @@ async fn grpc_async_streams_large_reads_total_count() {
     assert!(last_pos >= 1000);
 
     // Act: stream all events and count them
-    let mut stream = client.read(None, None, None, false).await.expect("read_stream");
+    let mut stream = client.read(None, None, None, false, None).await.expect("read_stream");
     let mut total = 0usize;
     while let Some(item) = stream.next().await {
         match item {
@@ -66,7 +66,7 @@ async fn grpc_async_does_not_stream_past_starting_head() {
     let _ = client.append(initial_events, None).await.expect("append initial events");
 
     // Start streaming read with no limit to capture starting head semantics
-    let mut stream = client.read(None, None, None, false).await.expect("read_stream");
+    let mut stream = client.read(None, None, None, false, None).await.expect("read_stream");
 
     // Append 50 more events AFTER the read has started
     let new_events: Vec<DCBEvent> = (0..50)
@@ -113,7 +113,7 @@ async fn grpc_async_subscription_catch_up_and_continue() {
     let _ = client.append(initial_events, None).await.expect("append initial events");
 
     // Start a subscription stream that should catch up existing events and then continue
-    let mut stream = client.read(None, None, None, true).await.expect("subscription stream");
+    let mut stream = client.read(None, None, None, true, None).await.expect("subscription stream");
 
     // Collect exactly initial_count events
     let mut collected_initial = 0usize;
@@ -175,7 +175,7 @@ async fn grpc_async_stream_catch_up_and_continue() {
         .collect();
     let _ = client.append(initial_events, None).await.expect("append initial events");
 
-    let mut stream = client.read(None, None, None, true).await.expect("read_stream");
+    let mut stream = client.read(None, None, None, true, None).await.expect("read_stream");
 
     let mut received = 0usize;
     while received < initial_count {

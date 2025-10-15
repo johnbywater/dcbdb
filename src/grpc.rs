@@ -109,9 +109,9 @@ enum EventStoreRequest {
 
 // Thread-safe wrapper for EventStore
 struct EventStoreHandle {
-    request_tx: mpsc::Sender<EventStoreRequest>,
-    lmdb: std::sync::Arc<crate::lmdb::Lmdb>,
+    lmdb: std::sync::Arc<Lmdb>,
     head_tx: watch::Sender<Option<u64>>,
+    request_tx: mpsc::Sender<EventStoreRequest>,
 }
 
 impl EventStoreHandle {
@@ -162,6 +162,8 @@ impl EventStoreHandle {
                             let mut items: Vec<(Vec<DCBEvent>, Option<DCBAppendCondition>)> = Vec::new();
                             let mut responders: Vec<oneshot::Sender<DCBResult<u64>>> = Vec::new();
 
+                            let mut total_events = 0;
+                            total_events += events.len();
                             items.push((events, condition));
                             responders.push(response_tx);
 
@@ -169,6 +171,10 @@ impl EventStoreHandle {
                             loop {
                                 match request_rx.try_recv() {
                                     Ok(EventStoreRequest::Append { events, condition, response_tx }) => {
+                                        total_events += events.len();
+                                        if total_events > 100 {
+                                            break;
+                                        }
                                         items.push((events, condition));
                                         responders.push(response_tx);
                                     }
@@ -226,7 +232,7 @@ impl EventStoreHandle {
             });
         });
 
-        Ok(Self { request_tx, lmdb, head_tx })
+        Ok(Self { lmdb, head_tx, request_tx })
     }
 
     async fn read(
@@ -340,6 +346,18 @@ impl EventStoreHandle {
         let _ = self.request_tx.send(EventStoreRequest::Shutdown).await;
     }
 }
+
+// Clone implementation for EventStoreHandle
+impl Clone for EventStoreHandle {
+    fn clone(&self) -> Self {
+        Self {
+            lmdb: self.lmdb.clone(),
+            head_tx: self.head_tx.clone(),
+            request_tx: self.request_tx.clone(),
+        }
+    }
+}
+
 
 // Helper: map DCBError -> tonic::Status with structured details
 fn status_from_dcb_error(e: &DCBError) -> Status {
@@ -598,17 +616,6 @@ impl EventStoreService for GrpcEventStoreServer {
                 Ok(Response::new(HeadResponseProto { position }))
             }
             Err(e) => Err(status_from_dcb_error(&e)),
-        }
-    }
-}
-
-// Clone implementation for EventStoreHandle
-impl Clone for EventStoreHandle {
-    fn clone(&self) -> Self {
-        Self {
-            request_tx: self.request_tx.clone(),
-            lmdb: self.lmdb.clone(),
-            head_tx: self.head_tx.clone(),
         }
     }
 }

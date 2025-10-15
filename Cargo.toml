@@ -30,7 +30,10 @@ serial_test = "2.0.0"
 [build-dependencies]
 tonic-build = "0.13.1"
 
-#[profile.release]
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
 ## Keep DWARF info so perf/dtrace can unwind and symbolize
 #debug = true        # or: debug = 2 (both are accepted; true == 2)
 #

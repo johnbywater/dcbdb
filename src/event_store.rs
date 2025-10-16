@@ -131,6 +131,7 @@ pub fn read_conditional(
     after: Position,
     limit: Option<usize>,
 ) -> DCBResult<Vec<DCBSequencedEvent>> {
+    const SCAN_BATCH_SIZE: usize = 256;
     // Special case: explicit zero limit
     if let Some(0) = limit {
         return Ok(Vec::new());
@@ -141,7 +142,7 @@ pub fn read_conditional(
         let mut iter = EventIterator::new(lmdb, dirty, events_tree_root_id, Some(after));
         let mut out: Vec<DCBSequencedEvent> = Vec::new();
         'outer_all: loop {
-            let batch = iter.next_batch(limit.unwrap_or(64))?;
+            let batch = iter.next_batch(limit.unwrap_or(SCAN_BATCH_SIZE))?;
             if batch.is_empty() {
                 break;
             }
@@ -185,7 +186,7 @@ pub fn read_conditional(
             false
         };
         'outer_fallback: loop {
-            let batch = iter.next_batch(64)?;
+            let batch = iter.next_batch(SCAN_BATCH_SIZE)?;
             if batch.is_empty() {
                 break;
             }
@@ -211,8 +212,8 @@ pub fn read_conditional(
     }
 
     // Invert query: tag -> list of query item indices that require this tag
-    let mut tag_qiis: HashMap<String, Vec<usize>> = HashMap::new();
-    let mut qi_tags: Vec<HashSet<String>> = Vec::new();
+    let mut tag_qiis: HashMap<String, Vec<usize>> = HashMap::with_capacity(query.items.len() * 2);
+    let mut qi_tags: Vec<HashSet<String>> = Vec::with_capacity(query.items.len());
 
     for (qiid, item) in query.items.iter().enumerate() {
         qi_tags.push(item.tags.iter().cloned().collect());

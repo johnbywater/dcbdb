@@ -1,6 +1,7 @@
-use dcbdb::dcbapi::{DCBEvent, DCBEventStore};
+use dcbdb::dcbapi::{DCBAppendCondition, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem};
 use dcbdb::event_store::EventStore;
 use std::env;
+use std::hint::black_box;
 use std::time::Instant;
 use tempfile::tempdir;
 
@@ -11,10 +12,10 @@ use tempfile::tempdir;
 // How to run (ignored by default):
 //   cargo test --test unconditional_append_hotspot -- --ignored --nocapture
 //
-// To adjust how many total events are appended:
-//   APPEND_BATCH=500000 cargo test --test unconditional_append_hotspot -- --ignored --nocapture
+// To control how many append calls run (total events = CALLS_PER_RUN * EVENTS_PER_CALL):
+//   CALLS_PER_RUN=10000 cargo test --test unconditional_append_hotspot -- --ignored --nocapture
 //
-// To control the number of events per append call (default 1):
+// To control the number of events per append call (default 100):
 //   EVENTS_PER_CALL=100 cargo test --test unconditional_append_hotspot -- --ignored --nocapture
 //
 // You can use a profiler around the single test process, e.g.:
@@ -23,25 +24,27 @@ use tempfile::tempdir;
 //   flamegraph:  cargo flamegraph --test unconditional_append_hotspot -- --ignored --nocapture
 #[test]
 #[ignore]
-fn profile_unconditional_append_hotspots() {
-    // Number of events is configurable via env var to allow quick iteration when profiling
-    let batch: usize = env::var("APPEND_BATCH")
+fn profile_event_store_append() {
+    // Control the number of append calls; total events = CALLS_PER_RUN * EVENTS_PER_CALL
+    let calls_per_run: usize = env::var("CALLS_PER_RUN")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(1000000);
+        .unwrap_or(10000);
+
+    // Number of events per append call (default 100)
+    let events_per_call: usize = env::var("EVENTS_PER_CALL")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(1);
 
     // Number of tags per event (1 or 2 is realistic). Using 2 exercises more indexing work.
     let tags_per_event: usize = env::var("TAGS_PER_EVENT")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(2);
+        .unwrap_or(1);
 
-    // Number of events per append call; default to 1 to preserve previous behavior
-    let events_per_call: usize = env::var("EVENTS_PER_CALL")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or(100);
+    let total_events: usize = calls_per_run.saturating_mul(events_per_call);
 
     let tmp = tempdir().expect("create temp dir");
     let store = EventStore::new(tmp.path()).expect("open event store");
@@ -57,48 +60,57 @@ fn profile_unconditional_append_hotspots() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(16);
 
-    let mut i: usize = 0;
-    while i < batch {
-        let take = (batch - i).min(events_per_call);
-        let mut events: Vec<DCBEvent> = Vec::with_capacity(take);
-        for j in 0..take {
-            let idx = i + j;
-            let payload = vec![(idx as u8).wrapping_mul(31); data_size];
 
-            // Generate 1 or 2 tags per event. Tag content is varied to avoid overly uniform hashing.
+    let payload = vec![0u8; data_size];
+    for i in 0..calls_per_run {
+        let mut events: Vec<DCBEvent> = Vec::with_capacity(events_per_call);
+        for j in 0..events_per_call {
+            let idx = i + j;
+
+            // Generate tags. Tag content is varied to avoid overly uniform hashing.
             let mut tags = Vec::with_capacity(tags_per_event);
-            tags.push(format!("tag-{}", idx));
-            if tags_per_event > 1 {
-                tags.push(format!("group-{}", idx % 10));
+            for k in 0..tags_per_event {
+                tags.push(format!("tag-{j}-{k}"));
             }
 
             let event = DCBEvent {
                 event_type: format!("Type{}", idx % 16),
-                data: payload,
+                data: payload.clone(),
                 tags,
             };
             events.push(event);
         }
-        last = store.append(events, None).expect("append ok");
+        let condition = DCBAppendCondition {
+            fail_if_events_match: DCBQuery {
+                items: vec![DCBQueryItem {
+                    types: vec![],
+                    tags: vec!["foo".to_string()],
+                }],
+            },
+            after: Some(0),
+        };
+
+        last = black_box(store.append(black_box(events), black_box(Some(condition))).expect("append ok"));
         appended_calls += 1;
-        i += take;
     }
 
     let elapsed = start.elapsed();
 
     let avg_per_call_us = (elapsed.as_secs_f64() * 1e6) / (appended_calls as f64);
-    let avg_per_event_us = (elapsed.as_secs_f64() * 1e6) / (batch as f64);
+    let avg_per_event_us = (elapsed.as_secs_f64() * 1e6) / (total_events as f64);
+    let events_per_second = total_events as f64 / elapsed.as_secs_f64();
 
     // Print some stats so --nocapture shows useful info during profiling sessions.
     eprintln!(
-        "unconditional_append: appended {} events in {} calls ({} events/call); last position {}; elapsed = {:.3?} (avg {:.3} µs/call, {:.3} µs/event)",
-        batch,
+        "profile_event_store_append: appended {} events in {} calls ({} events/call); last position {}; elapsed = {:.3?} (avg {:.3} µs/call, {:.3} µs/event, {:.1} events/sec)",
+        total_events,
         appended_calls,
         events_per_call,
         last,
         elapsed,
         avg_per_call_us,
         avg_per_event_us,
+        events_per_second,
     );
 
     // Keep tempdir until end of test to ensure DB flush completes before directory removal.

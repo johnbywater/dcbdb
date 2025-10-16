@@ -1312,54 +1312,54 @@ mod tests {
         }
     }
 
-    #[test]
-    fn benchmark_append_and_lookup_varied_sizes() {
-        // Benchmark-like test; prints durations for different sizes. Run with:
-        // cargo test --lib mvcc_event_tree::tests::benchmark_append_and_lookup_varied_sizes -- --nocapture
-        let sizes: [usize; 7] = [1, 10, 100, 1_000, 5_000, 10_000, 50_000];
-        for &size in &sizes {
-            let (_tmp, db) = construct_db(4096);
-
-            // Append phase
-            let mut writer = db.writer().unwrap();
-            let mut positions: Vec<Position> = Vec::with_capacity(size);
-            let start_append = std::time::Instant::now();
-            for n in 0..(size as u64) {
-                let pos = writer.issue_position();
-                let event = EventRecord {
-                    event_type: "E".to_string(),
-                    data: Vec::new(),
-                    tags: Vec::new(),
-                };
-                std::hint::black_box(n);
-                std::hint::black_box(&event);
-                std::hint::black_box(pos);
-                event_tree_append(&db, &mut writer, event, pos).unwrap();
-                positions.push(pos);
-            }
-            let append_elapsed = start_append.elapsed();
-            let start_commit = std::time::Instant::now();
-            db.commit(&mut writer).unwrap();
-            let commit_elapsed = start_commit.elapsed();
-
-            // Lookup phase
-            let reader = db.reader().unwrap();
-            let start_lookup = std::time::Instant::now();
-            let dirty = HashMap::new();
-            for &pos in &positions {
-                let rec = event_tree_lookup(&db, &dirty, reader.events_tree_root_id, pos).unwrap();
-                std::hint::black_box(&rec);
-            }
-            let lookup_elapsed = start_lookup.elapsed();
-
-            let append_avg_us = (append_elapsed.as_secs_f64() * 1_000_000.0) / (size as f64);
-            let commit_avg_us = commit_elapsed.as_secs_f64() * 1_000_000.0;
-            let lookup_avg_us = (lookup_elapsed.as_secs_f64() * 1_000_000.0) / (size as f64);
-
-            println!(
-                "mvcc_event_tree benchmark: size={}, append_us_per_call={:.3}, commit_us={:.3}, lookup_us_per_call={:.3}",
-                size, append_avg_us, commit_avg_us, lookup_avg_us
-            );
-        }
-    }
+    // #[test]
+    // fn benchmark_append_and_lookup_varied_sizes() {
+    //     // Benchmark-like test; prints durations for different sizes. Run with:
+    //     // cargo test --lib mvcc_event_tree::tests::benchmark_append_and_lookup_varied_sizes -- --nocapture
+    //     let sizes: [usize; 7] = [1, 10, 100, 1_000, 5_000, 10_000, 50_000];
+    //     for &size in &sizes {
+    //         let (_tmp, db) = construct_db(4096);
+    //
+    //         // Append phase
+    //         let mut writer = db.writer().unwrap();
+    //         let mut positions: Vec<Position> = Vec::with_capacity(size);
+    //         let start_append = std::time::Instant::now();
+    //         for n in 0..(size as u64) {
+    //             let pos = writer.issue_position();
+    //             let event = EventRecord {
+    //                 event_type: "E".to_string(),
+    //                 data: Vec::new(),
+    //                 tags: Vec::new(),
+    //             };
+    //             std::hint::black_box(n);
+    //             std::hint::black_box(&event);
+    //             std::hint::black_box(pos);
+    //             event_tree_append(&db, &mut writer, event, pos).unwrap();
+    //             positions.push(pos);
+    //         }
+    //         let append_elapsed = start_append.elapsed();
+    //         let start_commit = std::time::Instant::now();
+    //         db.commit(&mut writer).unwrap();
+    //         let commit_elapsed = start_commit.elapsed();
+    //
+    //         // Lookup phase
+    //         let reader = db.reader().unwrap();
+    //         let start_lookup = std::time::Instant::now();
+    //         let dirty = HashMap::new();
+    //         for &pos in &positions {
+    //             let rec = event_tree_lookup(&db, &dirty, reader.events_tree_root_id, pos).unwrap();
+    //             std::hint::black_box(&rec);
+    //         }
+    //         let lookup_elapsed = start_lookup.elapsed();
+    //
+    //         let append_avg_us = (append_elapsed.as_secs_f64() * 1_000_000.0) / (size as f64);
+    //         let commit_avg_us = commit_elapsed.as_secs_f64() * 1_000_000.0;
+    //         let lookup_avg_us = (lookup_elapsed.as_secs_f64() * 1_000_000.0) / (size as f64);
+    //
+    //         println!(
+    //             "mvcc_event_tree benchmark: size={}, append_us_per_call={:.3}, commit_us={:.3}, lookup_us_per_call={:.3}",
+    //             size, append_avg_us, commit_avg_us, lookup_avg_us
+    //         );
+    //     }
+    // }
 }

@@ -1,7 +1,6 @@
 use crate::common::PageID;
 use crate::dcbapi::{DCBError, DCBResult};
 use crate::node::Node;
-use crc32fast::Hasher;
 
 // Page structure
 #[derive(Debug, Clone)]
@@ -19,6 +18,7 @@ impl Page {
         Self { page_id, node }
     }
 
+    #[inline]
     pub fn calc_serialized_size(&self) -> usize {
         // The total serialized size is the size of the page header plus the size of the serialized node
         PAGE_HEADER_SIZE + self.node.calc_serialized_size()
@@ -41,6 +41,7 @@ impl Page {
         Ok(serialized)
     }
 
+    #[inline]
     pub fn deserialize(page_id: PageID, page_data: &[u8]) -> DCBResult<Self> {
         if page_data.len() < PAGE_HEADER_SIZE {
             return Err(DCBError::DatabaseCorrupted(
@@ -48,11 +49,11 @@ impl Page {
             ));
         }
 
-        // Extract header information
-        let node_type = page_data[0];
-        let crc = u32::from_le_bytes([page_data[1], page_data[2], page_data[3], page_data[4]]);
-        let data_len =
-            u32::from_le_bytes([page_data[5], page_data[6], page_data[7], page_data[8]]) as usize;
+        // Extract header information with minimal bounds checks
+        let header = &page_data[..PAGE_HEADER_SIZE];
+        let node_type = header[0];
+        let crc = u32::from_le_bytes(header[1..5].try_into().unwrap());
+        let data_len = u32::from_le_bytes(header[5..9].try_into().unwrap()) as usize;
 
         if PAGE_HEADER_SIZE + data_len > page_data.len() {
             return Err(DCBError::DatabaseCorrupted(
@@ -78,10 +79,9 @@ impl Page {
 }
 
 /// Calculate CRC32 checksum for data
+#[inline(always)]
 pub fn calc_crc(data: &[u8]) -> u32 {
-    let mut hasher = Hasher::new();
-    hasher.update(data);
-    hasher.finalize()
+    crc32fast::hash(data)
 }
 
 #[cfg(test)]

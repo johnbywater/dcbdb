@@ -17,6 +17,7 @@ struct Args {
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // console_subscriber::init();
     let args = Args::parse();
 
     println!("Starting gRPC server for database at {:?}", args.path);

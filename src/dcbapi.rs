@@ -113,10 +113,6 @@ pub enum DCBError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
-    // Bincode-specific serialization error (kept for API completeness)
-    #[error("Serialization error: {0}")]
-    Serialization(#[from] bincode::error::EncodeError),
-
     // DCB domain errors
     #[error("Integrity error: condition failed: {0}")]
     IntegrityError(String),

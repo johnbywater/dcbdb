@@ -241,27 +241,31 @@ impl EventStoreHandle {
         after: Option<u64>,
         limit: Option<usize>,
     ) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
-        // Concurrent read path: use shared LMDB directly
-        let db: &Lmdb = &self.lmdb;
-        let reader = db.reader()?;
-        let last_committed_position = reader.next_position.0.saturating_sub(1);
+        // Offload blocking read to a dedicated threadpool
+        let db = self.lmdb.clone();
+        tokio::task::spawn_blocking(move || -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
+            let reader = db.reader()?;
+            let last_committed_position = reader.next_position.0.saturating_sub(1);
 
-        let q = query.unwrap_or(DCBQuery { items: vec![] });
-        let after_pos = crate::common::Position(after.unwrap_or(0));
-        let events = read_conditional(db, &std::collections::HashMap::new(), reader.events_tree_root_id, reader.tags_tree_root_id, q, after_pos, limit)
-            .map_err(|e| DCBError::Corruption(format!("{e}")))?;
+            let q = query.unwrap_or(DCBQuery { items: vec![] });
+            let after_pos = crate::common::Position(after.unwrap_or(0));
+            let events = read_conditional(&db, &std::collections::HashMap::new(), reader.events_tree_root_id, reader.tags_tree_root_id, q, after_pos, limit)
+                .map_err(|e| DCBError::Corruption(format!("{e}")))?;
 
-        let head = if limit.is_none() {
-            if last_committed_position == 0 {
-                None
+            let head = if limit.is_none() {
+                if last_committed_position == 0 {
+                    None
+                } else {
+                    Some(last_committed_position)
+                }
             } else {
-                Some(last_committed_position)
-            }
-        } else {
-            events.last().map(|e| e.position)
-        };
+                events.last().map(|e| e.position)
+            };
 
-        Ok((events, head))
+            Ok((events, head))
+        })
+        .await
+        .map_err(|e| DCBError::Io(std::io::Error::other(format!("Join error: {e}"))))?
     }
 
     async fn append(
@@ -269,42 +273,45 @@ impl EventStoreHandle {
         events: Vec<DCBEvent>,
         condition: Option<DCBAppendCondition>,
     ) -> DCBResult<u64> {
-        // Concurrent pre-check of condition using a read-only view. If it fails, return early.
-        let mut adjusted_condition = condition;
-        if let Some(mut cond) = adjusted_condition.take() {
-            // Open a reader and determine current head
-            let db: &Lmdb = &self.lmdb;
-            let reader = db.reader()?;
-            let current_head = {
-                let last = reader.next_position.0.saturating_sub(1);
-                if last == 0 { None } else { Some(last) }
-            };
+        // Concurrent pre-check of condition using a read-only view in a blocking thread.
+        let adjusted_condition = if let Some(cond_in) = condition {
+            let db = self.lmdb.clone();
+            tokio::task::spawn_blocking(move || -> DCBResult<Option<DCBAppendCondition>> {
+                let mut cond = cond_in;
+                let reader = db.reader()?;
+                let current_head = {
+                    let last = reader.next_position.0.saturating_sub(1);
+                    if last == 0 { None } else { Some(last) }
+                };
 
-            // Perform conditional read on the snapshot (limit 1) starting after the provided position
-            let after_pos = crate::common::Position(cond.after.unwrap_or(0));
-            let found = read_conditional(
-                db,
-                &std::collections::HashMap::new(),
-                reader.events_tree_root_id,
-                reader.tags_tree_root_id,
-                cond.fail_if_events_match.clone(),
-                after_pos,
-                Some(1),
-            ).map_err(|e| DCBError::Corruption(format!("{e}")))?;
+                // Perform conditional read on the snapshot (limit 1) starting after the provided position
+                let after_pos = crate::common::Position(cond.after.unwrap_or(0));
+                let found = read_conditional(
+                    &db,
+                    &std::collections::HashMap::new(),
+                    reader.events_tree_root_id,
+                    reader.tags_tree_root_id,
+                    cond.fail_if_events_match.clone(),
+                    after_pos,
+                    Some(1),
+                ).map_err(|e| DCBError::Corruption(format!("{e}")))?;
 
-            if let Some(matched) = found.first() {
-                let msg = format!(
-                    "matching event: {:?} condition: {:?}",
-                    matched, cond.fail_if_events_match
-                );
-                return Err(DCBError::IntegrityError(msg));
-            }
+                if let Some(matched) = found.first() {
+                    let msg = format!(
+                        "matching event: {:?} condition: {:?}",
+                        matched, cond.fail_if_events_match
+                    );
+                    return Err(DCBError::IntegrityError(msg));
+                }
 
-            // Advance after to at least the current head observed by this reader
-            let new_after = std::cmp::max(cond.after.unwrap_or(0), current_head.unwrap_or(0));
-            cond.after = Some(new_after);
-            adjusted_condition = Some(cond);
-        }
+                // Advance 'after' to at least the current head observed by this reader
+                let new_after = std::cmp::max(cond.after.unwrap_or(0), current_head.unwrap_or(0));
+                cond.after = Some(new_after);
+                Ok(Some(cond))
+            })
+            .await
+            .map_err(|e| DCBError::Io(std::io::Error::other(format!("Join error: {e}"))))??
+        } else { None };
 
         let (response_tx, response_rx) = oneshot::channel();
 
@@ -333,12 +340,17 @@ impl EventStoreHandle {
     }
 
     async fn head(&self) -> DCBResult<Option<u64>> {
-        let db: &Lmdb = &self.lmdb;
-        let (_, header) = db
-            .get_latest_header()
-            .map_err(|e| DCBError::Corruption(format!("{e}")))?;
-        let last = header.next_position.0.saturating_sub(1);
-        if last == 0 { Ok(None) } else { Ok(Some(last)) }
+        // Offload blocking head read to a dedicated threadpool
+        let db = self.lmdb.clone();
+        tokio::task::spawn_blocking(move || -> DCBResult<Option<u64>> {
+            let (_, header) = db
+                .get_latest_header()
+                .map_err(|e| DCBError::Corruption(format!("{e}")))?;
+            let last = header.next_position.0.saturating_sub(1);
+            if last == 0 { Ok(None) } else { Ok(Some(last)) }
+        })
+        .await
+        .map_err(|e| DCBError::Io(std::io::Error::other(format!("Join error: {e}"))))?
     }
 
     #[allow(dead_code)]
@@ -364,7 +376,6 @@ fn status_from_dcb_error(e: &DCBError) -> Status {
     let (code, error_type) = match e {
             DCBError::IntegrityError(_) => (Code::FailedPrecondition, dcbdb::error_response_proto::ErrorType::Integrity as i32),
             DCBError::Corruption(_) | DCBError::DatabaseCorrupted(_) | DCBError::DeserializationError(_) => (Code::DataLoss, dcbdb::error_response_proto::ErrorType::Corruption as i32),
-            DCBError::SerializationError(_) | DCBError::Serialization(_) => (Code::Internal, dcbdb::error_response_proto::ErrorType::Serialization as i32),
             _ => (Code::Internal, dcbdb::error_response_proto::ErrorType::Io as i32),
         };
     let msg = e.to_string();

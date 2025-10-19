@@ -8,18 +8,12 @@ use uuid::Uuid;
 // Import the EventStore and related types from the main crate
 
 #[test]
-fn test_mvcc_event_store() {
+fn test_direct_event_store() {
     let temp_dir = tempdir().unwrap();
     let event_store = EventStore::new(temp_dir.path()).unwrap();
     run_event_store_test(&event_store);
 }
 
-// #[test]
-// fn test_direct_event_store() {
-//     let temp_dir = tempdir().unwrap();
-//     let event_store = EventStore::new(temp_dir.path()).unwrap();
-//     run_event_store_test(&event_store);
-// }
 
 // Removed: the gRPC client no longer implements the synchronous DCBEventStore trait.
 // To test gRPC paths, see the async streaming tests in grpc_streaming_test.rs.

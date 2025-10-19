@@ -74,20 +74,28 @@ impl DCBReadResponse for ReadResponse {
 }
 
 /// Compute a TagHash ([u8; 8]) from a tag string using a stable 64-bit hash.
+#[inline(always)]
 pub fn tag_to_hash(tag: &str) -> TagHash {
+    const SALT: [u8; 4] = [0x9E, 0x37, 0x79, 0xB9];
     // Build a 64-bit value by combining two crc32 hashes for stability and simplicity.
     let mut hasher1 = crc32fast::Hasher::new();
     hasher1.update(tag.as_bytes());
     let a = hasher1.finalize();
 
     let mut hasher2 = crc32fast::Hasher::new();
+    // Note: Benchmark (benches/tag_hash_bench.rs) shows two update() calls
+    // are consistently faster than concatenating bytes+salt into a buffer
+    // and calling update() once, because concatenation requires allocation
+    // and copying. Keeping the two calls avoids extra work and is at least
+    // as fast across sizes from 0..8192 bytes.
     hasher2.update(tag.as_bytes());
-    hasher2.update(&[0x9E, 0x37, 0x79, 0xB9]);
+    hasher2.update(&SALT);
     let b = hasher2.finalize();
 
     let value = ((a as u64) << 32) | (b as u64);
     value.to_le_bytes()
 }
+
 
 /// Append events unconditionally to the database.
 ///

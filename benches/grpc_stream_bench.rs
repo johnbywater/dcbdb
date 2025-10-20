@@ -96,9 +96,10 @@ pub fn grpc_stream_benchmark(c: &mut Criterion) {
     std::thread::sleep(std::time::Duration::from_millis(200));
 
     let mut group = c.benchmark_group("grpc_stream_read");
-    group.throughput(Throughput::Elements(total_events as u64));
 
-    for &threads in &[1usize, 2, 4, 8, 80] {
+    for &threads in &[1usize, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024] {
+        // Report throughput as the total across all runtime worker threads
+        group.throughput(Throughput::Elements((total_events as u64) * (threads as u64)));
         group.bench_function(BenchmarkId::from_parameter(threads), |b| {
             // Ensure any optimizations don't elide the work
             b.iter(|| {

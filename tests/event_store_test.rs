@@ -1,25 +1,17 @@
 use dcbdb::dcbapi::{
-    DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem,
+    DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem, DCBSequencedEvent,
 };
 // gRPC client sync trait support has been removed; tests use the local EventStore
 use dcbdb::event_store::EventStore;
 use tempfile::tempdir;
 use uuid::Uuid;
+use dcbdb::grpc::{GrpcEventStoreClient, start_grpc_server_with_shutdown};
+use tokio::runtime::Builder as RtBuilder;
+use std::net::TcpListener;
 // Import the EventStore and related types from the main crate
 
-#[test]
-fn test_direct_event_store() {
-    let temp_dir = tempdir().unwrap();
-    let event_store = EventStore::new(temp_dir.path()).unwrap();
-    run_event_store_test(&event_store);
-}
-
-
-// Removed: the gRPC client no longer implements the synchronous DCBEventStore trait.
-// To test gRPC paths, see the async streaming tests in grpc_streaming_test.rs.
-
-// Helper function to run the test with a given EventStoreApi implementation
-pub fn run_event_store_test<T: DCBEventStore>(event_store: &T) {
+// Helper function to run the test with implementations of the DCBEventStore trait
+pub fn dcb_event_store_test<T: DCBEventStore>(event_store: &T) {
     // Test head() method on empty store
     let head_position = event_store.head().unwrap();
     assert_eq!(None, head_position);
@@ -841,6 +833,14 @@ pub fn run_event_store_test<T: DCBEventStore>(event_store: &T) {
 
 
 #[test]
+fn test_direct_event_store() {
+    let temp_dir = tempdir().unwrap();
+    let event_store = EventStore::new(temp_dir.path()).unwrap();
+    dcb_event_store_test(&event_store);
+}
+
+
+#[test]
 fn test_tag_hash_collision() {
     // Known colliding tags (by the system's tag hashing scheme)
     let student_tag = "student-1a5c7f43-c0cb-465f-a9ad-8e452cce2b38".to_string();
@@ -917,3 +917,138 @@ fn test_tag_hash_collision() {
     assert!(types.contains(&"StudentEvent".to_string()));
     assert!(types.contains(&"CourseEvent".to_string()));
 }
+
+// Also test gRPC by wrapping the async client with a small sync adapter used only in tests.
+#[test]
+fn test_grpc_event_store_client() {
+    // Pick a free port
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    let addr_noscheme = format!("{}", addr);
+    let addr_with_scheme = format!("http://{}", addr);
+
+    // Build a multi-threaded runtime for server and client
+    let rt = RtBuilder::new_multi_thread().enable_all().build().unwrap();
+
+    // Prepare shutdown channel for the server
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+
+    // Temporary directory for the database server
+    let temp_dir = tempdir().unwrap();
+
+    // Start the server
+    let data_dir = temp_dir.path().to_path_buf();
+    rt.spawn(async move {
+        let _ = start_grpc_server_with_shutdown(data_dir, &addr_noscheme, shutdown_rx).await;
+    });
+
+    // Connect the client (retry until server is ready)
+    let client = {
+        use std::{thread, time::Duration};
+        let mut attempts = 0;
+        loop {
+            match rt.block_on(GrpcEventStoreClient::connect(addr_with_scheme.clone())) {
+                Ok(c) => break c,
+                Err(e) => {
+                    attempts += 1;
+                    if attempts >= 50 {
+                        panic!("failed to connect to grpc server after retries: {:?}", e);
+                    }
+                    thread::sleep(Duration::from_millis(50));
+                }
+            }
+        }
+    };
+
+    // Wrap with sync adapter and run the standard event store tests
+    let wrapper = SyncGrpcEventStoreClient::new(client, rt);
+    dcb_event_store_test(&wrapper);
+
+    // Shutdown server
+    let _ = shutdown_tx.send(());
+}
+
+// --- Sync wrapper around the async gRPC client for tests ---
+struct SyncGrpcEventStoreClient {
+    rt: tokio::runtime::Runtime,
+    client: GrpcEventStoreClient,
+}
+
+impl SyncGrpcEventStoreClient {
+    fn new(client: GrpcEventStoreClient, rt: tokio::runtime::Runtime) -> Self {
+        Self { rt, client }
+    }
+}
+
+struct SyncReadResponse {
+    events: Vec<DCBSequencedEvent>,
+    idx: usize,
+    head: Option<u64>,
+}
+
+impl Iterator for SyncReadResponse {
+    type Item = DCBSequencedEvent;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.idx < self.events.len() {
+            let ev = self.events[self.idx].clone();
+            self.idx += 1;
+            Some(ev)
+        } else {
+            None
+        }
+    }
+}
+
+impl dcbdb::dcbapi::DCBReadResponse for SyncReadResponse {
+    fn head(&self) -> Option<u64> { self.head }
+    fn collect_with_head(&mut self) -> (Vec<DCBSequencedEvent>, Option<u64>) {
+        let mut out = Vec::with_capacity(self.events.len() - self.idx);
+        while let Some(e) = self.next() { out.push(e); }
+        (out, self.head)
+    }
+    fn next_batch(&mut self) -> Result<Vec<DCBSequencedEvent>, DCBError> {
+        // For this simple wrapper, there is no batching beyond the full collection
+        let mut out = Vec::new();
+        while let Some(e) = self.next() { out.push(e); }
+        Ok(out)
+    }
+}
+
+impl DCBEventStore for SyncGrpcEventStoreClient {
+    fn read(
+        &self,
+        query: Option<DCBQuery>,
+        after: Option<u64>,
+        limit: Option<usize>,
+        subscribe: bool,
+    ) -> Result<Box<dyn dcbdb::dcbapi::DCBReadResponse + '_>, DCBError> {
+        use futures::StreamExt as _;
+        // We only support subscribe=false in this sync wrapper for tests
+        assert!(!subscribe, "SyncGrpcEventStore::read only supports subscribe=false in tests");
+        let mut stream = self.rt.block_on(self.client.read(query, after, limit, false, None))?;
+        let mut events = Vec::new();
+        self.rt.block_on(async {
+            while let Some(item) = stream.next().await {
+                let ev = item?;
+                events.push(ev);
+            }
+            Ok::<(), DCBError>(())
+        })?;
+        let head = match limit {
+            Some(0) => None,
+            Some(_) => events.last().map(|e| e.position),
+            None => self.rt.block_on(self.client.head())?,
+        };
+        Ok(Box::new(SyncReadResponse { events, idx: 0, head }))
+    }
+
+    fn head(&self) -> Result<Option<u64>, DCBError> {
+        self.rt.block_on(self.client.head())
+    }
+
+    fn append(&self, events: Vec<DCBEvent>, condition: Option<DCBAppendCondition>) -> Result<u64, DCBError> {
+        self.rt.block_on(self.client.append(events, condition))
+    }
+}
+

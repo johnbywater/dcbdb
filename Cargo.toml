@@ -64,3 +64,8 @@ strip = "none"      # requires a sufficiently recent Rust toolchain
 ##split-debuginfo = "off"       # Linux
 split-debuginfo = "unpacked" # macOS
 
+
+
+[[bench]]
+name = "grpc_stream_bench"
+harness = false

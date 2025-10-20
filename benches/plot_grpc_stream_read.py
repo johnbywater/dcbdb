@@ -34,6 +34,7 @@ plt.xlabel('Tokio worker threads')
 plt.ylabel('Total throughput (events/sec)')
 plt.title('gRPC stream read: total throughput vs threads')
 plt.grid(True, which='both')
+plt.xticks(x, [str(t) for t in x])
 
 # Optional: annotate points
 for t, eps in zip(x, throughputs):

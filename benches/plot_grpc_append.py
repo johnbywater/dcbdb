@@ -7,7 +7,6 @@ EVENTS_PER_ITER = 1  # number of events appended per iteration by a single clien
 
 # Thread variants you ran (match the bench). Edit if you change the bench.
 threads = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
-# threads = [1, 2, 4, 8, 16]
 
 x = []
 throughputs = []  # events per second (total across threads)

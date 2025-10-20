@@ -41,12 +41,12 @@ fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
 }
 
 
-pub fn grpc_stream_benchmark(c: &mut Criterion) {
-    // Tune read batching to reduce per-message overhead over gRPC
+pub fn grpc_read_benchmark(c: &mut Criterion) {
+    const TOTAL_EVENTS: usize = 10_000;
     const READ_BATCH_SIZE: usize = 1000;
+
     // Initialize DB and server with some events
-    let total_events = 10_000usize;
-    let (_tmp_dir, db_path) = init_db_with_events(total_events);
+    let (_tmp_dir, db_path) = init_db_with_events(TOTAL_EVENTS);
 
     // Find a free localhost port
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind to ephemeral port");
@@ -89,18 +89,17 @@ pub fn grpc_stream_benchmark(c: &mut Criterion) {
         }
     }
 
-    let mut group = c.benchmark_group("grpc_stream_read");
+    let mut group = c.benchmark_group("grpc_read");
     group.sample_size(10);
     group.measurement_time(Duration::from_secs(10));
 
-    // for &threads in &[1usize, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024] {
-    for &threads in &[1usize, 2, 4, 8, 16] {
+    for &threads in &[1usize, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024] {
         // Report throughput as the total across all runtime worker threads
-        group.throughput(Throughput::Elements((total_events as u64) * (threads as u64)));
+        group.throughput(Throughput::Elements((TOTAL_EVENTS as u64) * (threads as u64)));
 
         // Build a Tokio runtime and multiple persistent clients (one per concurrent reader)
         let rt = RtBuilder::new_multi_thread()
-            .worker_threads(threads)
+            .worker_threads(threads + 10)
             .enable_all()
             .build()
             .expect("build tokio rt (client)");
@@ -124,7 +123,7 @@ pub fn grpc_stream_benchmark(c: &mut Criterion) {
                         let client = clients[i].clone();
                         async move {
                             let mut stream = client
-                                .read(None, None, None, false, Some(READ_BATCH_SIZE))
+                                .read(None, None, Some(TOTAL_EVENTS), false, Some(READ_BATCH_SIZE))
                                 .await
                                 .expect("start read stream");
                             let mut count = 0usize;
@@ -132,7 +131,8 @@ pub fn grpc_stream_benchmark(c: &mut Criterion) {
                                 let _evt = black_box(item.expect("stream item ok"));
                                 count += 1;
                             }
-                            assert_eq!(count, total_events, "expected to read all preloaded events");
+                            // tokio::time::sleep(Duration::from_millis(1000)).await;
+                            assert_eq!(count, TOTAL_EVENTS, "expected to read all preloaded events");
                         }
                     });
                     let _ = join_all(futs).await;
@@ -148,5 +148,5 @@ pub fn grpc_stream_benchmark(c: &mut Criterion) {
     let _ = server_thread.join();
 }
 
-criterion_group!(benches, grpc_stream_benchmark);
+criterion_group!(benches, grpc_read_benchmark);
 criterion_main!(benches);

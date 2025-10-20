@@ -167,21 +167,24 @@ impl EventStoreHandle {
                             items.push((events, condition));
                             responders.push(response_tx);
 
-                            // Drain the channel for more pending append requests without awaiting
+                            // Drain the channel for more pending append requests without awaiting.
+                            // Important: do not drop a popped request when hitting the batch limit.
+                            // We stop draining BEFORE attempting to recv if we've reached the limit.
+                            const MAX_BATCH_EVENTS: usize = 200;
                             loop {
+                                if total_events >= MAX_BATCH_EVENTS {
+                                    break;
+                                }
                                 match request_rx.try_recv() {
                                     Ok(EventStoreRequest::Append { events, condition, response_tx }) => {
-                                        total_events += events.len();
-                                        if total_events > 100 {
-                                            break;
-                                        }
+                                        let ev_len = events.len();
                                         items.push((events, condition));
                                         responders.push(response_tx);
+                                        total_events += ev_len;
                                     }
                                     Ok(EventStoreRequest::Shutdown) => {
-                                        // Push back the shutdown signal by breaking and letting outer loop handle after batch
-                                        // We'll process current batch first, then break outer loop on next iteration when channel is empty
-                                        // To ensure shutdown is noticed, we stop draining further
+                                        // Push back the shutdown signal by breaking and letting outer loop handle after batch.
+                                        // We'll process current batch first, then break outer loop on next iteration when channel is empty.
                                         break;
                                     }
                                     Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,

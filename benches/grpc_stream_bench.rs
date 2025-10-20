@@ -80,8 +80,9 @@ pub fn grpc_stream_benchmark(c: &mut Criterion) {
     let addr_clone = addr.clone();
 
     let server_thread = thread::spawn(move || {
+        let server_threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
         let rt = RtBuilder::new_multi_thread()
-            .worker_threads(1)
+            .worker_threads(server_threads)
             .enable_all()
             .build()
             .expect("build tokio rt for server");

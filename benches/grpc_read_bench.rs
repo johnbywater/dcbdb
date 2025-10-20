@@ -41,7 +41,9 @@ fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
 
 
 pub fn grpc_stream_benchmark(c: &mut Criterion) {
-    // Initialize DB and server with 10_000 events
+    // Tune read batching to reduce per-message overhead over gRPC
+    const READ_BATCH_SIZE: usize = 1000;
+    // Initialize DB and server with some events
     let total_events = 5_000usize;
     let (_tmp_dir, db_path) = init_db_with_events(total_events);
 
@@ -93,27 +95,33 @@ pub fn grpc_stream_benchmark(c: &mut Criterion) {
         // Report throughput as the total across all runtime worker threads
         group.throughput(Throughput::Elements((total_events as u64) * (threads as u64)));
 
-        // Build a Tokio runtime and a single persistent client for this variant
+        // Build a Tokio runtime and multiple persistent clients (one per concurrent reader)
         let rt = RtBuilder::new_multi_thread()
             .worker_threads(threads)
             .enable_all()
             .build()
             .expect("build tokio rt (client)");
-        let client = rt
-            .block_on(GrpcEventStoreClient::connect(addr_http.clone()))
-            .expect("connect client");
-        let client = Arc::new(client);
+
+        // Establish independent gRPC connections upfront to avoid contention on a single HTTP/2 channel
+        let mut clients: Vec<Arc<GrpcEventStoreClient>> = Vec::with_capacity(threads);
+        for _ in 0..threads {
+            let c = rt
+                .block_on(GrpcEventStoreClient::connect(addr_http.clone()))
+                .expect("connect client");
+            clients.push(Arc::new(c));
+        }
+        let clients = Arc::new(clients);
 
         group.bench_function(BenchmarkId::from_parameter(threads), move |b| {
-            let client = client.clone();
+            let clients = clients.clone();
             b.iter(|| {
                 rt.block_on(async {
                     // Spawn `threads` concurrent read futures and await them all
-                    let futs = (0..threads).map(|_| {
-                        let client = client.clone();
+                    let futs = (0..threads).map(|i| {
+                        let client = clients[i].clone();
                         async move {
                             let mut stream = client
-                                .read(None, None, None, false, None)
+                                .read(None, None, None, false, Some(READ_BATCH_SIZE))
                                 .await
                                 .expect("start read stream");
                             let mut count = 0usize;

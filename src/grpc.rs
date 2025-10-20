@@ -170,7 +170,7 @@ impl EventStoreHandle {
                             // Drain the channel for more pending append requests without awaiting.
                             // Important: do not drop a popped request when hitting the batch limit.
                             // We stop draining BEFORE attempting to recv if we've reached the limit.
-                            const MAX_BATCH_EVENTS: usize = 200;
+                            const MAX_BATCH_EVENTS: usize = 100;
                             loop {
                                 if total_events >= MAX_BATCH_EVENTS {
                                     break;

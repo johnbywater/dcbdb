@@ -64,7 +64,7 @@ fn run_bench_for_threads(thread_count: usize, addr_http: String, total_events: u
 
 pub fn grpc_stream_benchmark(c: &mut Criterion) {
     // Initialize DB and server with 10_000 events
-    let total_events = 10_000usize;
+    let total_events = 100_000usize;
     let (_tmp_dir, db_path) = init_db_with_events(total_events);
 
     // Find a free localhost port

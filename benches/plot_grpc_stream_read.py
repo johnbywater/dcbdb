@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 # Keep this in sync with benches/grpc_stream_bench.rs
-TOTAL_EVENTS = 10_000
+TOTAL_EVENTS = 100_000
 
 # Thread variants you ran (match the bench). You can edit this if you change the bench.
 threads = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
@@ -30,10 +30,12 @@ plt.figure(figsize=(8, 5))
 plt.plot(x, throughputs, marker='o')
 plt.xscale('log')
 plt.yscale('log')
-plt.xlabel('Tokio worker threads')
+plt.xlabel('Clients')
 plt.ylabel('Total throughput (events/sec)')
-plt.title('gRPC stream read: total throughput vs threads')
-plt.grid(True, which='both')
+plt.title('DCBDB gRPC read: total throughput vs clients')
+# Show y-axis grid lines and x-axis grid lines only at major ticks (the labeled x ticks)
+plt.grid(True, which='both', axis='y')
+plt.grid(True, which='major', axis='x')
 plt.xticks(x, [str(t) for t in x])
 
 # Optional: annotate points

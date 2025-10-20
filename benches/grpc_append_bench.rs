@@ -86,6 +86,7 @@ pub fn grpc_append_benchmark(c: &mut Criterion) {
     }
 
     let mut group = c.benchmark_group("grpc_append");
+    group.sample_size(40);
 
     // Number of events appended per iteration by a single runtime
     let events_per_iter = 1usize;
@@ -95,19 +96,23 @@ pub fn grpc_append_benchmark(c: &mut Criterion) {
         // Report throughput as the total across all runtime worker threads (informational)
         group.throughput(Throughput::Elements((events_per_iter as u64) * (threads as u64)));
 
-        // Build a Tokio runtime and a single persistent client for this variant
+        // Build a Tokio runtime and multiple persistent clients (one per concurrent writer)
         let rt = RtBuilder::new_multi_thread()
             .worker_threads(threads)
             .enable_all()
             .build()
             .expect("build tokio rt (client)");
-        let client = rt
-            .block_on(GrpcEventStoreClient::connect(addr_http.clone()))
-            .expect("connect client");
-        let client = Arc::new(client);
+        let mut clients: Vec<Arc<GrpcEventStoreClient>> = Vec::with_capacity(threads);
+        for _ in 0..threads {
+            let c = rt
+                .block_on(GrpcEventStoreClient::connect(addr_http.clone()))
+                .expect("connect client");
+            clients.push(Arc::new(c));
+        }
+        let clients = Arc::new(clients);
 
         group.bench_function(BenchmarkId::from_parameter(threads), move |b| {
-            let client = client.clone();
+            let clients = clients.clone();
             b.iter(|| {
                 // Build the batch of events per iteration (per task)
                 let events: Vec<DCBEvent> = (0..events_per_iter)
@@ -120,8 +125,8 @@ pub fn grpc_append_benchmark(c: &mut Criterion) {
 
                 rt.block_on(async {
                     // Spawn `threads` concurrent append futures and await them all
-                    let futs = (0..threads).map(|_| {
-                        let client = client.clone();
+                    let futs = (0..threads).map(|i| {
+                        let client = clients[i].clone();
                         let evs = events.clone();
                         async move {
                             let _ = black_box(client.append(black_box(evs), None).await.expect("append events"));

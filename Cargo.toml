@@ -73,3 +73,7 @@ harness = false
 [[bench]]
 name = "grpc_append_bench"
 harness = false
+
+[[bench]]
+name = "grpc_read_with_writers_bench"
+harness = false

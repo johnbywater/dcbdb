@@ -2,7 +2,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-# Keep this in sync with benches/grpc_stream_bench.rs
+# Keep this in sync with benches/grpc_read_bench
 TOTAL_EVENTS = 100_000
 
 # Thread variants you ran (match the bench). You can edit this if you change the bench.

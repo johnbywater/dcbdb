@@ -67,7 +67,7 @@ split-debuginfo = "unpacked" # macOS
 
 
 [[bench]]
-name = "grpc_stream_bench"
+name = "grpc_read_bench"
 harness = false
 
 [[bench]]

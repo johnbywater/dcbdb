@@ -2,7 +2,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-# Keep this in sync with benches/grpc_append_bench.rs
+# Keep this in sync with benches/grpc_append
 EVENTS_PER_ITER = 1  # number of events appended per iteration by a single client runtime
 
 # Thread variants you ran (match the bench). Edit if you change the bench.

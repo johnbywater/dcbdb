@@ -650,6 +650,25 @@ impl GrpcEventStoreClient {
         Ok(Self { client })
     }
 
+    // Optimized connect that configures the transport for lower latency and better concurrency.
+    // Takes a URL like "http://127.0.0.1:50051".
+    pub async fn connect_optimized_url(url: &str) -> Result<Self, tonic::transport::Error> {
+        use std::time::Duration;
+        use tonic::transport::Endpoint;
+
+        let endpoint = Endpoint::from_shared(url.to_string())?
+            .tcp_nodelay(true)
+            .http2_keep_alive_interval(Duration::from_secs(5))
+            .keep_alive_timeout(Duration::from_secs(10))
+            // Bump the window sizes to reduce flow-control stalls under high throughput
+            .initial_stream_window_size(Some(4 * 1024 * 1024))
+            .initial_connection_window_size(Some(8 * 1024 * 1024));
+
+        let channel = endpoint.connect().await?;
+        let client = dcbdb::event_store_service_client::EventStoreServiceClient::new(channel);
+        Ok(Self { client })
+    }
+
     // Async inherent methods: use the gRPC client directly (no trait required)
     pub async fn read(
         &self,
@@ -674,7 +693,9 @@ impl GrpcEventStoreClient {
         let response = client.read(request).await.map_err(|status| dcb_error_from_status(status))?;
         let mut stream = response.into_inner();
 
-        let (tx, rx) = mpsc::channel::<crate::dcbapi::DCBResult<crate::dcbapi::DCBSequencedEvent>>(128);
+        // Increase channel buffer to reduce backpressure when the consumer is slightly slower,
+        // especially under concurrent readers. A deeper buffer improves throughput scaling.
+        let (tx, rx) = mpsc::channel::<crate::dcbapi::DCBResult<crate::dcbapi::DCBSequencedEvent>>(2048);
         tokio::spawn(async move {
             loop {
                 match stream.message().await {

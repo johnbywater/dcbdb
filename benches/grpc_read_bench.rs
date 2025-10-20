@@ -43,7 +43,7 @@ fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
 
 pub fn grpc_stream_benchmark(c: &mut Criterion) {
     // Tune read batching to reduce per-message overhead over gRPC
-    const READ_BATCH_SIZE: usize = 2000;
+    const READ_BATCH_SIZE: usize = 1000;
     // Initialize DB and server with some events
     let total_events = 10_000usize;
     let (_tmp_dir, db_path) = init_db_with_events(total_events);
@@ -93,7 +93,8 @@ pub fn grpc_stream_benchmark(c: &mut Criterion) {
     group.sample_size(10);
     group.measurement_time(Duration::from_secs(10));
 
-    for &threads in &[1usize, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024] {
+    // for &threads in &[1usize, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024] {
+    for &threads in &[1usize, 2, 4, 8, 16] {
         // Report throughput as the total across all runtime worker threads
         group.throughput(Throughput::Elements((total_events as u64) * (threads as u64)));
 
@@ -108,7 +109,7 @@ pub fn grpc_stream_benchmark(c: &mut Criterion) {
         let mut clients: Vec<Arc<GrpcEventStoreClient>> = Vec::with_capacity(threads);
         for _ in 0..threads {
             let c = rt
-                .block_on(GrpcEventStoreClient::connect(addr_http.clone()))
+                .block_on(GrpcEventStoreClient::connect_optimized_url(&addr_http))
                 .expect("connect client");
             clients.push(Arc::new(c));
         }

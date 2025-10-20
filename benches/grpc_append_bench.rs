@@ -105,7 +105,7 @@ pub fn grpc_append_benchmark(c: &mut Criterion) {
         let mut clients: Vec<Arc<GrpcEventStoreClient>> = Vec::with_capacity(threads);
         for _ in 0..threads {
             let c = rt
-                .block_on(GrpcEventStoreClient::connect(addr_http.clone()))
+                .block_on(GrpcEventStoreClient::connect_optimized_url(&addr_http))
                 .expect("connect client");
             clients.push(Arc::new(c));
         }

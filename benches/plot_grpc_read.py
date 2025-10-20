@@ -3,10 +3,11 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 # Keep this in sync with benches/grpc_read_bench
-TOTAL_EVENTS = 5_000
+TOTAL_EVENTS = 10_000
 
 # Thread variants you ran (match the bench). You can edit this if you change the bench.
-threads = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
+# threads = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
+threads = [1, 2, 4, 8, 16]
 
 x = []
 throughputs = []  # events per second (total across threads)

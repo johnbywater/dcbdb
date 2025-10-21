@@ -449,8 +449,8 @@ impl EventStoreService for GrpcEventStoreServer {
         let after = req.after;
         let limit = req.limit.map(|l| l as usize);
 
-        // Create a channel for streaming responses
-        let (tx, rx) = mpsc::channel(128);
+        // Create a channel for streaming responses (deeper buffer to reduce backpressure under concurrency)
+        let (tx, rx) = mpsc::channel(2048);
         let event_store = self.event_store.clone();
         let mut shutdown_rx = self.shutdown_rx.clone();
 
@@ -529,20 +529,20 @@ impl EventStoreService for GrpcEventStoreServer {
                             break;
                         }
 
-                        // For unlimited overall reads, clamp events to the starting global head
-                        let (events_to_send, reached_end) = if remaining.is_none() {
+                        // For unlimited overall reads, clamp events to the starting global head without cloning
+                        let (slice_start, slice_len, reached_end) = if remaining.is_none() {
                             if let Some(h) = global_head {
-                                let trimmed: Vec<_> = events.iter().cloned().take_while(|e| e.position <= h).collect();
-                                let hit_boundary = trimmed.len() < events.len();
-                                (trimmed, hit_boundary)
+                                // find first index > h
+                                let idx = events.iter().position(|e| e.position > h).unwrap_or(events.len());
+                                (0, idx, idx < events.len())
                             } else {
-                                (events.clone(), false)
+                                (0, events.len(), false)
                             }
                         } else {
-                            (events.clone(), false)
+                            (0, events.len(), false)
                         };
 
-                        if events_to_send.is_empty() {
+                        if slice_len == 0 {
                             // If we haven't sent anything yet, still send an empty batch with head to convey metadata
                             if !sent_any {
                                 let head_to_send = if remaining.is_none() { global_head } else { head };
@@ -555,11 +555,11 @@ impl EventStoreService for GrpcEventStoreServer {
 
                         // Prepare and send this non-empty (possibly trimmed) batch
                         let batch_head = if remaining.is_none() { global_head } else { head };
-                        let batch = SequencedEventBatchProto {
-                            events: events_to_send.iter().cloned().map(|e| e.into()).collect(),
-                            head: batch_head,
-                        };
-                        let response = ReadResponseProto { batch: Some(batch) };
+                        let mut ev_out = Vec::with_capacity(slice_len);
+                        for e in events[slice_start..slice_start + slice_len].iter() {
+                            ev_out.push(SequencedEventProto::from(e.clone()));
+                        }
+                        let response = ReadResponseProto { batch: Some(SequencedEventBatchProto { events: ev_out, head: batch_head }) };
 
                         if tx.send(Ok(response)).await.is_err() {
                             break;
@@ -567,7 +567,7 @@ impl EventStoreService for GrpcEventStoreServer {
                         sent_any = true;
 
                         // Advance the cursor (use a new reader on the next loop iteration)
-                        next_after = events_to_send.last().map(|e| e.position);
+                        next_after = events.get(slice_start + slice_len - 1).map(|e| e.position);
 
                         // If we reached the captured head boundary on non-subscribe, stop streaming further
                         if reached_end && remaining.is_none() && !subscribe {
@@ -576,15 +576,18 @@ impl EventStoreService for GrpcEventStoreServer {
 
                         // Decrease remaining overall limit if any, and stop if reached
                         if let Some(rem) = remaining.as_mut() {
-                            if *rem <= events_to_send.len() {
+                            if *rem <= slice_len {
                                 *rem = 0;
                             } else {
-                                *rem -= events_to_send.len();
+                                *rem -= slice_len;
                             }
                             if *rem == 0 {
                                 break;
                             }
                         }
+
+                        // Yield to let other tasks progress under high concurrency
+                        tokio::task::yield_now().await;
                     }
                     Err(e) => {
                         let _ = tx
@@ -775,7 +778,16 @@ pub async fn start_grpc_server<P: AsRef<Path> + Send + 'static>(
 
     println!("gRPC server listening on {addr}");
 
-    Server::builder()
+    use std::time::Duration;
+    let mut server_builder = Server::builder()
+        .http2_keepalive_interval(Some(Duration::from_secs(5)))
+        .http2_keepalive_timeout(Some(Duration::from_secs(10)))
+        .initial_stream_window_size(Some(4 * 1024 * 1024))
+        .initial_connection_window_size(Some(8 * 1024 * 1024))
+        .tcp_nodelay(true)
+        .concurrency_limit_per_connection(1024);
+
+    server_builder
         .add_service(server.into_service())
         .serve(addr)
         .await?;
@@ -795,7 +807,16 @@ pub async fn start_grpc_server_with_shutdown<P: AsRef<Path> + Send + 'static>(
     let server = GrpcEventStoreServer::new_with_shutdown(path, srv_shutdown_rx)?;
     println!("gRPC server listening on {addr}");
 
-    Server::builder()
+    use std::time::Duration;
+    let mut server_builder = Server::builder()
+        .http2_keepalive_interval(Some(Duration::from_secs(5)))
+        .http2_keepalive_timeout(Some(Duration::from_secs(10)))
+        .initial_stream_window_size(Some(4 * 1024 * 1024))
+        .initial_connection_window_size(Some(8 * 1024 * 1024))
+        .tcp_nodelay(true)
+        .concurrency_limit_per_connection(1024);
+
+    server_builder
         .add_service(server.into_service())
         .serve_with_shutdown(addr, async move {
             // Wait for external shutdown trigger

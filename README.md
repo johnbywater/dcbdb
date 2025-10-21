@@ -1,12 +1,12 @@
-# DCBDB - Event Store for Dynamic Consistency Boundaries
+# UmaDB - Event Store for Dynamic Consistency Boundaries
 
-DCBDB is an event store designed for dynamic consistency boundaries with a gRPC interface. It
+UmaDB is an event store designed for dynamic consistency boundaries with a gRPC interface. It
 provides a robust foundation for event-driven architectures where consistency boundaries may
 shift based on business requirements.
 
 ## Database Design
 
-DCBDB stores data in a single paged file with fixed-size pages and an MVCC, copy-on-write update
+UmaDB stores data in a single paged file with fixed-size pages and an MVCC, copy-on-write update
 strategy. A small header node records the transaction sequence number (TSN), the next free PageID,
 and the roots for three B+ trees: the events tree (ordered by monotonically increasing Position),
 the tags tree (for tag-based indexing), and the free-lists tree (for reusable page IDs). Writers
@@ -80,7 +80,7 @@ You can interact with the gRPC server using any gRPC client. The server implemen
 
 ### Using the Example Client
 
-DCBDB includes an example client that you can use to interact with the gRPC server. You can run it with:
+UmaDB includes an example client that you can use to interact with the gRPC server. You can run it with:
 
 ```bash
 cargo run --bin example_client -- --address http://127.0.0.1:50051
@@ -94,11 +94,11 @@ The example client:
 
 ### Using the Rust Client in Your Own Code
 
-DCBDB provides a Rust client that you can use to interact with the gRPC server in your own code. Here's an example of how to use it:
+UmaDB provides a Rust client that you can use to interact with the gRPC server in your own code. Here's an example of how to use it:
 
 ```rust
-use dcbdb::dcbapi::{DCBEvent, DCBQuery, DCBQueryItem};
-use dcbdb::grpc::GrpcEventStoreClient;
+use umadb::dcbapi::{DCBEvent, DCBQuery, DCBQueryItem};
+use umadb::grpc::GrpcEventStoreClient;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -141,7 +141,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Subscriptions (catch-up and continue)
 
-DCBDB supports catch-up subscriptions over gRPC. A subscription behaves like a normal read until it reaches the end of the currently recorded events, at which point it blocks instead of terminating and then continues delivering newly appended events.
+UmaDB supports catch-up subscriptions over gRPC. A subscription behaves like a normal read until it reaches the end of the currently recorded events, at which point it blocks instead of terminating and then continues delivering newly appended events.
 
 Key semantics:
 - Normal read (subscribe = false):
@@ -157,8 +157,8 @@ Key semantics:
 Example: simple subscription from the beginning
 
 ```rust
-use dcbdb::grpc::GrpcEventStoreClient;
-use dcbdb::dcbapi::DCBEvent;
+use umadb::grpc::GrpcEventStoreClient;
+use umadb::dcbapi::DCBEvent;
 use futures::StreamExt;
 
 #[tokio::main]
@@ -185,7 +185,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Example: subscribe from current head (tail)
 
 ```rust
-use dcbdb::grpc::GrpcEventStoreClient;
+use umadb::grpc::GrpcEventStoreClient;
 use futures::StreamExt;
 
 #[tokio::main]

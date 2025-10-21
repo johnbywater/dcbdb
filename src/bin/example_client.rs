@@ -1,12 +1,12 @@
 use std::cmp::max;
 use clap::Parser;
-use dcbdb::dcbapi::DCBEvent;
-use dcbdb::grpc::GrpcEventStoreClient;
+use umadb::dcbapi::DCBEvent;
+use umadb::grpc::GrpcEventStoreClient;
 use std::time::Instant;
 use futures::StreamExt;
 
 #[derive(Parser)]
-#[command(author, version, about = "DCBDB Example Client", long_about = None)]
+#[command(author, version, about = "UmaDB Example Client", long_about = None)]
 struct Args {
     /// Address of the gRPC server (e.g., "http://127.0.0.1:50051")
     #[arg(

@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package dcbdb;
+package umadb;
 
 // Event message
 message EventProto {

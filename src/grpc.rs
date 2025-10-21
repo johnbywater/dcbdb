@@ -14,14 +14,14 @@ use crate::event_store::{EventStore, read_conditional, DEFAULT_PAGE_SIZE};
 use crate::lmdb::Lmdb;
 
 // Include the generated proto code
-pub mod dcbdb {
-    tonic::include_proto!("dcbdb");
+pub mod umadb {
+    tonic::include_proto!("umadb");
 }
 
 use prost::Message;
 use prost::bytes::Bytes;
 
-use dcbdb::{
+use umadb::{
     ErrorResponseProto,
     AppendConditionProto, AppendRequestProto, AppendResponseProto, EventProto, HeadRequestProto,
     HeadResponseProto, QueryItemProto, QueryProto, ReadRequestProto, ReadResponseProto,
@@ -377,9 +377,9 @@ impl Clone for EventStoreHandle {
 // Helper: map DCBError -> tonic::Status with structured details
 fn status_from_dcb_error(e: &DCBError) -> Status {
     let (code, error_type) = match e {
-            DCBError::IntegrityError(_) => (Code::FailedPrecondition, dcbdb::error_response_proto::ErrorType::Integrity as i32),
-            DCBError::Corruption(_) | DCBError::DatabaseCorrupted(_) | DCBError::DeserializationError(_) => (Code::DataLoss, dcbdb::error_response_proto::ErrorType::Corruption as i32),
-            _ => (Code::Internal, dcbdb::error_response_proto::ErrorType::Io as i32),
+            DCBError::IntegrityError(_) => (Code::FailedPrecondition, umadb::error_response_proto::ErrorType::Integrity as i32),
+            DCBError::Corruption(_) | DCBError::DatabaseCorrupted(_) | DCBError::DeserializationError(_) => (Code::DataLoss, umadb::error_response_proto::ErrorType::Corruption as i32),
+            _ => (Code::Internal, umadb::error_response_proto::ErrorType::Io as i32),
         };
     let msg = e.to_string();
     let detail = ErrorResponseProto { message: msg.clone(), error_type };
@@ -394,9 +394,9 @@ fn dcb_error_from_status(status: Status) -> DCBError {
     if !details.is_empty() {
         if let Ok(err) = ErrorResponseProto::decode(details) {
             return match err.error_type {
-                x if x == dcbdb::error_response_proto::ErrorType::Integrity as i32 => DCBError::IntegrityError(err.message),
-                x if x == dcbdb::error_response_proto::ErrorType::Corruption as i32 => DCBError::Corruption(err.message),
-                x if x == dcbdb::error_response_proto::ErrorType::Serialization as i32 => DCBError::SerializationError(err.message),
+                x if x == umadb::error_response_proto::ErrorType::Integrity as i32 => DCBError::IntegrityError(err.message),
+                x if x == umadb::error_response_proto::ErrorType::Corruption as i32 => DCBError::Corruption(err.message),
+                x if x == umadb::error_response_proto::ErrorType::Serialization as i32 => DCBError::SerializationError(err.message),
                 _ => DCBError::Io(std::io::Error::other(err.message)),
             };
         }
@@ -639,7 +639,7 @@ impl EventStoreService for GrpcEventStoreServer {
 
 // gRPC client implementation
 pub struct GrpcEventStoreClient {
-    client: dcbdb::event_store_service_client::EventStoreServiceClient<tonic::transport::Channel>,
+    client: umadb::event_store_service_client::EventStoreServiceClient<tonic::transport::Channel>,
 }
 
 impl GrpcEventStoreClient {
@@ -649,7 +649,7 @@ impl GrpcEventStoreClient {
         D::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
         let client =
-            dcbdb::event_store_service_client::EventStoreServiceClient::connect(dst).await?;
+            umadb::event_store_service_client::EventStoreServiceClient::connect(dst).await?;
         Ok(Self { client })
     }
 
@@ -668,7 +668,7 @@ impl GrpcEventStoreClient {
             .initial_connection_window_size(Some(8 * 1024 * 1024));
 
         let channel = endpoint.connect().await?;
-        let client = dcbdb::event_store_service_client::EventStoreServiceClient::new(channel);
+        let client = umadb::event_store_service_client::EventStoreServiceClient::new(channel);
         Ok(Self { client })
     }
 

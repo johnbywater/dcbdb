@@ -1,5 +1,5 @@
-use dcbdb::dcbapi::DCBEvent;
-use dcbdb::grpc::{start_grpc_server_with_shutdown, GrpcEventStoreClient};
+use umadb::dcbapi::DCBEvent;
+use umadb::grpc::{start_grpc_server_with_shutdown, GrpcEventStoreClient};
 use futures::StreamExt;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -1,10 +1,10 @@
 use clap::Parser;
-use dcbdb::grpc;
+use umadb::grpc;
 use std::path::PathBuf;
 use tokio::signal;
 
 #[derive(Parser)]
-#[command(author, version, about = "DCBDB gRPC Server", long_about = None)]
+#[command(author, version, about = "UmaDB gRPC Server", long_about = None)]
 struct Args {
     /// Path to the database directory
     #[arg(short, long, value_name = "PATH")]

@@ -1,5 +1,5 @@
-use dcbdb::dcbapi::{DCBAppendCondition, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem};
-use dcbdb::event_store::EventStore;
+use umadb::dcbapi::{DCBAppendCondition, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem};
+use umadb::event_store::EventStore;
 use std::env;
 use std::hint::black_box;
 use std::time::Instant;

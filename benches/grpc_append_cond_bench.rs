@@ -1,7 +1,7 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput, black_box};
-use dcbdb::dcbapi::{DCBEvent, DCBEventStore, DCBAppendCondition, DCBQuery, DCBQueryItem};
-use dcbdb::event_store::EventStore;
-use dcbdb::grpc::{GrpcEventStoreClient, start_grpc_server_with_shutdown};
+use umadb::dcbapi::{DCBEvent, DCBEventStore, DCBAppendCondition, DCBQuery, DCBQueryItem};
+use umadb::event_store::EventStore;
+use umadb::grpc::{GrpcEventStoreClient, start_grpc_server_with_shutdown};
 use std::net::TcpListener;
 use std::thread;
 use std::sync::Arc;

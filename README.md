@@ -11,22 +11,32 @@ shift based on business requirements.
 UmaDB stores data in a single paged file with fixed-size pages and an MVCC, copy-on-write update
 strategy. A small header node records the transaction sequence number (TSN), the next free PageID,
 and the roots for three B+ trees: the events tree (ordered by monotonically increasing Position),
-the tags tree (for tag-based indexing), and the free-lists tree (for reusable page IDs). Writers
-never mutate pages in place: they allocate new pages, write modified nodes, and on commit atomically
-publish a new header that points to the new roots; readers hold a TSN and can continue traversing the
-old roots safely. Large event payloads are split across overflow pages and referenced from leaf records,
-while small payloads are stored inline. This design yields crash-safe commits, concurrent readers without
-blocking, and efficient space reuse via the free-lists tree.
+the tags tree (for tag-based indexing), and the free-lists tree (for reusable page IDs). Large event
+payloads are split across overflow pages and referenced from leaf records, while small payloads
+are stored inline in the events tree pages.
 
-The benchmark plot below shows total append operations per second for concurrent append operations, with each client writing one event per request.
+Writers never mutate pages in place: they allocate new pages, write modified nodes, and on commit atomically
+publish a new header that points to the new roots. Readers hold a TSN and can continue traversing the
+old roots safely.
+
+Concurrent append requests are collected into batches and processed sequentially, using dirty pages, before
+flushing all changes to disk, after which individual responses to all client requests in the batch are sent.
+Concurrent read requests are streamed in batches, using a new reader for each batch, which allows pages to be
+reused quickly by avoiding hogging TSN for especially for subscription readers.
+
+This design yields crash-safe commits, concurrent readers without blocking, and efficient space reuse via the free-lists tree. 
+
+The benchmark plot below shows total append operations per second for concurrent append operations. Each client
+is writing one event per request.
 
 ![UmaDB benchmark](UmaDB-append-bench.png)
 
-The benchmark plot below shows total throughput across concurrent client read operations, with clients throttled to process events at around 10,000 events per second.
+The benchmark plot below shows total throughput across concurrent client read operations. Clients are throttled
+to process events at around 10,000 events per second.
 
 ![UmaDB benchmark](UmaDB-read-bench.png)
 
-
+The benchmark plots above were produced on an Apple MacBook Pro M4.
 
 
 ## Quick Start

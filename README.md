@@ -1,4 +1,4 @@
-![UmaDB Logo](UmaDB-logo-v3.png)
+![UmaDB Logo](UmaDB-logo-v4.png)
 
 # UmaDB - Event Store for DCB
 

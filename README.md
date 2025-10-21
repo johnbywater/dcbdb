@@ -18,6 +18,16 @@ old roots safely. Large event payloads are split across overflow pages and refer
 while small payloads are stored inline. This design yields crash-safe commits, concurrent readers without
 blocking, and efficient space reuse via the free-lists tree.
 
+The benchmark plot below shows total append operations per second for concurrent append operations, with each client writing one event per request.
+
+![UmaDB benchmark](UmaDB-append-bench.png)
+
+The benchmark plot below shows total throughput across concurrent client read operations, with clients throttled to process events at around 10,000 events per second.
+
+![UmaDB benchmark](UmaDB-read-bench.png)
+
+
+
 
 ## Quick Start
 

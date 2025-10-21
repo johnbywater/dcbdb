@@ -130,8 +130,10 @@ pub fn grpc_read_benchmark(c: &mut Criterion) {
                             while let Some(item) = stream.next().await {
                                 let _evt = black_box(item.expect("stream item ok"));
                                 count += 1;
+                                if count % 1000 == 0 {
+                                    tokio::time::sleep(Duration::from_millis(90)).await;
+                                }
                             }
-                            // tokio::time::sleep(Duration::from_millis(1000)).await;
                             assert_eq!(count, TOTAL_EVENTS, "expected to read all preloaded events");
                         }
                     });

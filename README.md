@@ -1,4 +1,4 @@
-![UmaDB Logo](UmaDB-logo-v5.png)
+![UmaDB Logo](UmaDB-logo.png)
 
 # UmaDB
 

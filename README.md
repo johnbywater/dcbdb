@@ -1,3 +1,5 @@
+![UmaDB Logo](UmaDB-logo-v2.png)
+
 # UmaDB - Event Store for Dynamic Consistency Boundaries
 
 UmaDB is an event store designed for dynamic consistency boundaries with a gRPC interface. It

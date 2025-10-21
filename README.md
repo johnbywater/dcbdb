@@ -36,7 +36,7 @@ is writing one event per request.
 ![UmaDB benchmark](UmaDB-append-bench.png)
 
 The benchmark plot below shows total completed append operations per second for concurrent clients, whilst there are four other
-clients concurrent reading events. This plot shows writing is not significantly impeded by
+clients concurrently reading events. This plot shows writing is not significantly impeded by
 concurrent readers.
 
 ![UmaDB benchmark](UmaDB-append-with-readers-bench.png)

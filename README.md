@@ -36,7 +36,8 @@ is writing one event per request.
 ![UmaDB benchmark](UmaDB-append-bench.png)
 
 The benchmark plot below shows total completed append operations per second for concurrent clients, whilst there are four other
-clients concurrent reading events.
+clients concurrent reading events. This plot shows writing is not significantly impeded by
+concurrent readers.
 
 ![UmaDB benchmark](UmaDB-append-with-readers-bench.png)
 
@@ -51,11 +52,12 @@ The rate is ultimately constrained by the CPU and network channel limitations.
 ![UmaDB benchmark](UmaDB-read-unthrottled-bench.png)
 
 The benchmark plot below shows total total events received per second across concurrent client read operations, whilst there are four other
-clients concurrently appending events.
+clients concurrently appending events. This plot shows reading is not significantly impeded by
+concurrent writers.
 
 ![UmaDB benchmark](UmaDB-read-with-writers-bench.png)
 
-The benchmark plots above were produced on an Apple MacBook Pro M4.
+The benchmark plots above were produced on an Apple MacBook Pro M4 (10 performance cores and 4 efficiency cores).
 
 
 

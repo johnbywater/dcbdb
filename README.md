@@ -254,7 +254,7 @@ Notes:
 
 ### Using Other gRPC Clients
 
-You can also use other gRPC clients to interact with the server. The protocol definition is in the `proto/event_store.proto` file.
+You can also use other gRPC clients to interact with the server. The protocol definition is in the `proto/umadb.proto` file.
 
 ## Additional Information
 

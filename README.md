@@ -28,17 +28,35 @@ reused quickly by avoiding hogging TSNs, which is especially important to suppor
 
 This design yields crash-safe commits, concurrent readers without blocking, and efficient space reuse via the free-lists tree. 
 
-The benchmark plot below shows total append operations per second for concurrent append operations. Each client
+## Benchmarks
+
+The benchmark plot below shows total append operations per second from concurrent clients. Each client
 is writing one event per request.
 
 ![UmaDB benchmark](UmaDB-append-bench.png)
 
-The benchmark plot below shows total throughput across concurrent client read operations. Clients are throttled
-to process events at around 10,000 events per second.
+The benchmark plot below shows total append operations per second for concurrent clients, whilst there are four other
+clients concurrent reading events.
 
-![UmaDB benchmark](UmaDB-read-bench.png)
+![UmaDB benchmark](UmaDB-append-with-readers-bench.png)
+
+The benchmark plot below shows total throughput across concurrent client read operations, whilst clients are throttled
+to process events at around 10,000 events per second. This plot shows concurrent readers scale quite linearly.
+
+![UmaDB benchmark](UmaDB-read-throttled-bench.png)
+
+The benchmark plot below shows total throughput across concurrent client read operations, whilst clients are not throttled.
+The rate is ultimately constrained by the CPU and network channel limitations.
+
+![UmaDB benchmark](UmaDB-read-unthrottled-bench.png)
+
+The benchmark plot below shows total throughput across concurrent client read operations, whilst there are four other
+clients concurrently appending events.
+
+![UmaDB benchmark](UmaDB-read-with-writers-bench.png)
 
 The benchmark plots above were produced on an Apple MacBook Pro M4.
+
 
 
 ## Quick Start

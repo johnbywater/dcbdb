@@ -132,9 +132,9 @@ cargo run --bin example_client -- --address http://127.0.0.1:50051
 
 The example client:
 1. Connects to the gRPC server
-2. Appends an event to the event store
-3. Reads events from the event store using a query
-4. Displays the events that were read
+2. Appends a few example events
+3. Reads a tail of recent events (no filter)
+4. Prints counts and a timing summary
 
 ### Using the Rust Client in Your Own Code
 

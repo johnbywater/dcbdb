@@ -183,6 +183,59 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### Query as the consistency boundary
+
+You can use a query as the consistency boundary for your write (carried inside an append condition). Two common patterns are:
+- Optimistic concurrency on the global stream by requiring that the append happens after a known head.
+- Guarded writes that fail if conflicting events already exist (based on type and tags).
+
+Example:
+
+```rust
+use umadb::dcbapi::{DCBEvent, DCBAppendCondition, DCBQuery, DCBQueryItem};
+use umadb::grpc::GrpcEventStoreClient;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = GrpcEventStoreClient::connect("http://127.0.0.1:50051").await?;
+
+    // Suppose we are creating an order and want to ensure we don't create it twice.
+    let order_id = "12345";
+
+    // 1) Optimistic concurrency fence: append must occur after the current head
+    // 2) Consistency boundary is the query: fail if an OrderCreated for this order_id already exists
+    let condition = DCBAppendCondition {
+        after: client.head().await?,
+        fail_if_events_match: DCBQuery {
+            items: vec![DCBQueryItem {
+                types: vec!["OrderCreated".to_string()],
+                tags: vec![format!("order-id={order_id}")],
+            }],
+        },
+    };
+
+    let event = DCBEvent {
+        event_type: "OrderCreated".to_string(),
+        tags: vec![format!("order-id={order_id}")],
+        data: br#"{\"orderId\":\"12345\",\"amount\": 42 }"#.to_vec(),
+    };
+
+    match client.append(vec![event], Some(condition)).await {
+        Ok(pos) => println!("OrderCreated appended at position {pos}"),
+        Err(e) => {
+            eprintln!("append failed due to boundary/condition: {e:?}");
+            // Decide whether to retry (with a fresh head), read state, or surface a conflict
+        }
+    }
+
+    Ok(())
+}
+```
+
+Notes:
+- The `after` field implements optimistic concurrency by requiring the append to observe no intervening commits.
+- The `fail_if_events_match` query is the consistency boundary: it lets you express a business-level idempotency/uniqueness guard using event type and tags.
+
 ## Subscriptions (catch-up and continue)
 
 UmaDB supports catch-up subscriptions over gRPC. A subscription behaves like a normal read until it reaches the end of the currently recorded events, at which point it blocks instead of terminating and then continues delivering newly appended events.

@@ -51,7 +51,7 @@ The rate is ultimately constrained by the CPU and network channel limitations.
 
 ![UmaDB benchmark](UmaDB-read-unthrottled-bench.png)
 
-The benchmark plot below shows total total events received per second across concurrent client read operations, whilst there are four other
+The benchmark plot below shows total events received per second across concurrent client read operations, whilst there are four other
 clients concurrently appending events. This plot shows reading is not significantly impeded by
 concurrent writers.
 

@@ -86,3 +86,8 @@ harness = false
 [[bench]]
 name = "grpc_append_cond_bench"
 harness = false
+
+
+[[bench]]
+name = "header_node_bench"
+harness = false

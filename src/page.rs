@@ -46,22 +46,18 @@ impl Page {
     /// before serialization, avoiding per-call resizing based on body length.
     pub fn serialize_into_vec(&self, out: &mut Vec<u8>) -> DCBResult<()> {
         // We assume `out` was created with capacity equal to the DB page size and reused across calls.
-        // Zero-fill the full page so we don't need to compute serialized size for resizing/padding.
-        let page_cap = out.capacity();
-        if page_cap < PAGE_HEADER_SIZE {
-            return Err(DCBError::SerializationError(
-                "serialize_into_vec: buffer capacity smaller than page header".into(),
-            ));
-        }
-        out.clear();
-        // Ensure len == page size and all bytes are zero
-        out.resize(page_cap, 0);
 
-        // Serialize body into the front of the zeroed body region using the space after header
+        // Serialize body into the front of the body region using the space after header
         let body_len = {
             let body_slice = &mut out[PAGE_HEADER_SIZE..];
             self.node.serialize_into(body_slice)?
         };
+
+        // Zero-fill the remainder of the page after the serialized body
+        let tail_start = PAGE_HEADER_SIZE + body_len;
+        if tail_start < out.len() {
+            out[tail_start..].fill(0);
+        }
 
         // Compute CRC over the actual body bytes
         let crc = calc_crc(&out[PAGE_HEADER_SIZE..PAGE_HEADER_SIZE + body_len]);

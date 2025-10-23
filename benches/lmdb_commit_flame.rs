@@ -92,8 +92,6 @@ fn flame_config() -> Criterion {
 
     // Configure default flamegraph options; if the pprof backend honors output paths,
     // it will emit into Criterion’s dir unless otherwise specified here.
-    let flame_opts = FlameOptions::default();
-
     Criterion::default()
         .with_profiler(PProfProfiler::new(100, Output::Flamegraph(Some(FlameOptions::default()))))
 }

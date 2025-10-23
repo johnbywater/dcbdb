@@ -1,4 +1,6 @@
 use crate::common::PageID;
+use crate::header_node::HeaderNode;
+use crate::page::calc_crc;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -129,6 +131,29 @@ impl Pager {
         }
 
         Ok(())
+    }
+
+    /// No-allocation write of a header page (node type '1') using a small stack buffer.
+    /// Writes the 9-byte page header (type, crc32, len) followed by the 48-byte header body
+    /// and pads the rest of the DB page with zeros.
+    pub fn write_header_page(&self, page_id: PageID, header: &HeaderNode) -> io::Result<()> {
+        // Serialize header body into fixed 48-byte stack buffer
+        let mut body = [0u8; 48];
+        header.serialize_into(&mut body);
+        let crc = calc_crc(&body);
+
+        // Compose page header (9 bytes): type('1'), crc32(le), len=48(le)
+        let mut head = [0u8; 9];
+        head[0] = b'1'; // must match Node::Header encoding
+        head[1..5].copy_from_slice(&crc.to_le_bytes());
+        head[5..9].copy_from_slice(&(48u32).to_le_bytes());
+
+        // Combine into a single small buffer to leverage existing write_page logic
+        let mut buf = [0u8; 57];
+        buf[0..9].copy_from_slice(&head);
+        buf[9..57].copy_from_slice(&body);
+
+        self.write_page(page_id, &buf)
     }
 
     pub fn write_pages(&self, pages: &[(PageID, Vec<u8>)]) -> io::Result<()> {

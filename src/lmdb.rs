@@ -63,11 +63,35 @@ pub struct Lmdb {
     pub page_size: usize,
     pub header_page_id0: PageID,
     pub header_page_id1: PageID,
+    // Owned header node instances for pages 0 and 1 to avoid reallocation/reconstruction
+    pub header0: Mutex<HeaderNode>,
+    pub header1: Mutex<HeaderNode>,
+    // Reusable, preallocated page-sized buffer for header serialization (zero-padded)
+    pub header_page_buf: Mutex<Vec<u8>>,
     reader_id_counter: Mutex<usize>,
     pub verbose: bool,
 }
 
 impl Lmdb {
+    fn write_header_using_buf(&self, page_id: PageID, header: &HeaderNode) -> DCBResult<()> {
+        // Ensure buffer exists and has correct size
+        let mut buf = self.header_page_buf.lock().unwrap();
+        if buf.len() != self.page_size {
+            buf.resize(self.page_size, 0);
+        }
+        // Serialize header body into bytes [9..57)
+        header.serialize_into(&mut buf[9..57]);
+        // Compute CRC over body
+        let crc = crate::page::calc_crc(&buf[9..57]);
+        // Compose 9-byte page header
+        buf[0] = b'1';
+        buf[1..5].copy_from_slice(&crc.to_le_bytes());
+        buf[5..9].copy_from_slice(&(48u32).to_le_bytes());
+        // Write full page buffer (already zero-padded)
+        self.pager.write_page(page_id, &buf)?;
+        Ok(())
+    }
+
     pub fn new(path: &Path, page_size: usize, verbose: bool) -> DCBResult<Self> {
         let pager = Pager::new(path, page_size)?;
         let header_page_id0 = PageID(0);
@@ -80,6 +104,23 @@ impl Lmdb {
             page_size,
             header_page_id0,
             header_page_id1,
+            header0: Mutex::new(HeaderNode {
+                tsn: Tsn(0),
+                next_page_id: PageID(0),
+                free_lists_tree_root_id: PageID(0),
+                events_tree_root_id: PageID(0),
+                tags_tree_root_id: PageID(0),
+                next_position: Position(0),
+            }),
+            header1: Mutex::new(HeaderNode {
+                tsn: Tsn(0),
+                next_page_id: PageID(0),
+                free_lists_tree_root_id: PageID(0),
+                events_tree_root_id: PageID(0),
+                tags_tree_root_id: PageID(0),
+                next_position: Position(0),
+            }),
+            header_page_buf: Mutex::new(vec![0u8; page_size]),
             reader_id_counter: Mutex::new(0),
             verbose,
         };
@@ -91,7 +132,7 @@ impl Lmdb {
             let tags_root_id = PageID(4);
             let next_page_id = PageID(5);
 
-            // Create and write header pages
+            // Create initial header node and keep owned copies
             let header_node0 = HeaderNode {
                 tsn: Tsn(0),
                 next_page_id,
@@ -100,12 +141,16 @@ impl Lmdb {
                 tags_tree_root_id: tags_root_id,
                 next_position: Position(1),
             };
+            {
+                let mut h0 = lmdb.header0.lock().unwrap();
+                *h0 = header_node0.clone();
+                let mut h1 = lmdb.header1.lock().unwrap();
+                *h1 = header_node0.clone();
+            }
 
-            let header_page0 = Page::new(header_page_id0, Node::Header(header_node0.clone()));
-            lmdb.write_page(&header_page0)?;
-
-            let header_page1 = Page::new(header_page_id1, Node::Header(header_node0));
-            lmdb.write_page(&header_page1)?;
+            // Write header pages using preallocated buffer
+            lmdb.write_header_using_buf(header_page_id0, &header_node0)?;
+            lmdb.write_header_using_buf(header_page_id1, &header_node0)?;
 
             // Create and write an empty free list root page
             let free_list_leaf = FreeListLeafNode {
@@ -132,6 +177,14 @@ impl Lmdb {
             lmdb.write_page(&tags_page)?;
 
             lmdb.flush()?;
+        } else {
+            // Existing database: read headers into owned instances
+            if let Ok(h0) = lmdb.read_header(header_page_id0) {
+                *lmdb.header0.lock().unwrap() = h0;
+            }
+            if let Ok(h1) = lmdb.read_header(header_page_id1) {
+                *lmdb.header1.lock().unwrap() = h1;
+            }
         }
 
         Ok(lmdb)
@@ -335,17 +388,26 @@ impl Lmdb {
             self.header_page_id0
         };
 
-        let header_node = HeaderNode {
-            tsn: writer.tsn,
-            next_page_id: writer.next_page_id,
-            free_lists_tree_root_id: writer.free_lists_tree_root_id,
-            events_tree_root_id: writer.events_tree_root_id,
-            tags_tree_root_id: writer.tags_tree_root_id,
-            next_position: writer.next_position,
-        };
-
-        let header_page = Page::new(header_page_id, Node::Header(header_node));
-        self.write_page(&header_page)?;
+        // Mutate the owned header instance and serialize into the preallocated buffer
+        if writer.header_page_id == self.header_page_id0 {
+            let mut h1 = self.header1.lock().unwrap();
+            h1.tsn = writer.tsn;
+            h1.next_page_id = writer.next_page_id;
+            h1.free_lists_tree_root_id = writer.free_lists_tree_root_id;
+            h1.events_tree_root_id = writer.events_tree_root_id;
+            h1.tags_tree_root_id = writer.tags_tree_root_id;
+            h1.next_position = writer.next_position;
+            self.write_header_using_buf(header_page_id, &h1)?;
+        } else {
+            let mut h0 = self.header0.lock().unwrap();
+            h0.tsn = writer.tsn;
+            h0.next_page_id = writer.next_page_id;
+            h0.free_lists_tree_root_id = writer.free_lists_tree_root_id;
+            h0.events_tree_root_id = writer.events_tree_root_id;
+            h0.tags_tree_root_id = writer.tags_tree_root_id;
+            h0.next_position = writer.next_position;
+            self.write_header_using_buf(header_page_id, &h0)?;
+        }
 
         // Flush the file to disk
         self.flush()?;

@@ -68,6 +68,8 @@ pub struct Lmdb {
     pub header1: Mutex<HeaderNode>,
     // Reusable, preallocated page-sized buffer for header serialization (zero-padded)
     pub header_page_buf: Mutex<Vec<u8>>,
+    // Reusable buffer for general page serialization to avoid per-page allocations
+    pub page_buf: Mutex<Vec<u8>>,
     reader_id_counter: Mutex<usize>,
     pub verbose: bool,
 }
@@ -121,6 +123,7 @@ impl Lmdb {
                 next_position: Position(0),
             }),
             header_page_buf: Mutex::new(vec![0u8; page_size]),
+            page_buf: Mutex::new(Vec::with_capacity(page_size)),
             reader_id_counter: Mutex::new(0),
             verbose,
         };
@@ -368,8 +371,10 @@ impl Lmdb {
         // Stream pages directly to the pager to avoid allocating an intermediate Vec
         if !writer.dirty.is_empty() {
             let mut count = 0usize;
+            // Reuse a single buffer for all page serializations
+            let mut buf = self.page_buf.lock().unwrap();
             for page in writer.dirty.values() {
-                let buf = page.serialize()?; // TODO: provide no-alloc serialization path in the future
+                page.serialize_into_vec(&mut buf)?;
                 self.pager.write_page(page.page_id, &buf)?;
                 count += 1;
             }

@@ -92,6 +92,32 @@ impl Node {
         }
     }
 
+    /// No-allocation serialization into a provided buffer slice of exact size.
+    /// Implemented for key node types; for others it falls back to allocate-and-copy.
+    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<()> {
+        match self {
+            Node::Header(node) => { node.serialize_into(dst); Ok(()) }
+            Node::FreeListLeaf(node) => { node.serialize_into(dst)?; Ok(()) }
+            Node::FreeListInternal(node) => { node.serialize_into(dst)?; Ok(()) }
+            Node::EventLeaf(node) => { node.serialize_into(dst)?; Ok(()) }
+            Node::EventInternal(node) => { node.serialize_into(dst)?; Ok(()) }
+            Node::EventOverflow(node) => { node.serialize_into(dst)?; Ok(()) }
+            Node::TagsLeaf(node) => {
+                // Fallback: allocate then copy (can be optimized later)
+                let tmp = node.serialize()?; if tmp.len()!=dst.len(){ return Err(DCBError::DatabaseCorrupted("serialize_into(dst) size mismatch".into())); } dst.copy_from_slice(&tmp); Ok(())
+            }
+            Node::TagsInternal(node) => {
+                let tmp = node.serialize()?; if tmp.len()!=dst.len(){ return Err(DCBError::DatabaseCorrupted("serialize_into(dst) size mismatch".into())); } dst.copy_from_slice(&tmp); Ok(())
+            }
+            Node::TagLeaf(node) => {
+                let tmp = node.serialize()?; if tmp.len()!=dst.len(){ return Err(DCBError::DatabaseCorrupted("serialize_into(dst) size mismatch".into())); } dst.copy_from_slice(&tmp); Ok(())
+            }
+            Node::TagInternal(node) => {
+                let tmp = node.serialize()?; if tmp.len()!=dst.len(){ return Err(DCBError::DatabaseCorrupted("serialize_into(dst) size mismatch".into())); } dst.copy_from_slice(&tmp); Ok(())
+            }
+        }
+    }
+
     pub fn deserialize(node_type: u8, data: &[u8]) -> DCBResult<Self> {
         match node_type {
             PAGE_TYPE_HEADER => {

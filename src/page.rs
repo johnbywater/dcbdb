@@ -41,6 +41,28 @@ impl Page {
         Ok(serialized)
     }
 
+    /// No-allocation (reusable Vec) serializer. Appends a full page record (header + body) into `out`.
+    /// `out` is cleared and resized to PAGE_HEADER_SIZE + body_len.
+    pub fn serialize_into_vec(&self, out: &mut Vec<u8>) -> DCBResult<()> {
+        let body_len = self.node.calc_serialized_size();
+        let total = PAGE_HEADER_SIZE + body_len;
+        if out.capacity() < total {
+            out.reserve(total - out.capacity());
+        }
+        out.clear();
+        out.resize(total, 0);
+        // Body slice
+        {
+            let body = &mut out[PAGE_HEADER_SIZE..];
+            self.node.serialize_into(body)?;
+        }
+        let crc = calc_crc(&out[PAGE_HEADER_SIZE..]);
+        out[0] = self.node.get_type_byte();
+        out[1..5].copy_from_slice(&crc.to_le_bytes());
+        out[5..9].copy_from_slice(&(body_len as u32).to_le_bytes());
+        Ok(())
+    }
+
     #[inline]
     pub fn deserialize(page_id: PageID, page_data: &[u8]) -> DCBResult<Self> {
         if page_data.len() < PAGE_HEADER_SIZE {

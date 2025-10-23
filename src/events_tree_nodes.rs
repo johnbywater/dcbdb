@@ -168,6 +168,71 @@ impl EventLeafNode {
         Ok(result)
     }
 
+    /// No-allocation serialization into the provided buffer. The buffer length must equal calc_serialized_size().
+    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<()> {
+        let need = self.calc_serialized_size();
+        if dst.len() != need {
+            return Err(DCBError::SerializationError(format!(
+                "EventLeafNode::serialize_into size mismatch: need {}, got {}",
+                need,
+                dst.len()
+            )));
+        }
+        let mut i = 0usize;
+        // keys_len
+        let klen = self.keys.len() as u16;
+        dst[i..i + 2].copy_from_slice(&klen.to_le_bytes());
+        i += 2;
+        // keys
+        for key in &self.keys {
+            let b = key.0.to_le_bytes();
+            dst[i..i + 8].copy_from_slice(&b);
+            i += 8;
+        }
+        // values
+        for value in &self.values {
+            match value {
+                EventValue::Inline(rec) => {
+                    dst[i] = 0u8; i += 1;
+                    let et_len = rec.event_type.len() as u16;
+                    dst[i..i + 2].copy_from_slice(&et_len.to_le_bytes()); i += 2;
+                    let s = rec.event_type.as_bytes();
+                    dst[i..i + s.len()].copy_from_slice(s); i += s.len();
+                    let dlen = rec.data.len() as u16;
+                    dst[i..i + 2].copy_from_slice(&dlen.to_le_bytes()); i += 2;
+                    dst[i..i + rec.data.len()].copy_from_slice(&rec.data); i += rec.data.len();
+                    let tlen = rec.tags.len() as u16;
+                    dst[i..i + 2].copy_from_slice(&tlen.to_le_bytes()); i += 2;
+                    for tag in &rec.tags {
+                        let tl = tag.len() as u16;
+                        dst[i..i + 2].copy_from_slice(&tl.to_le_bytes()); i += 2;
+                        let tb = tag.as_bytes();
+                        dst[i..i + tb.len()].copy_from_slice(tb); i += tb.len();
+                    }
+                }
+                EventValue::Overflow { event_type, data_len, tags, root_id } => {
+                    dst[i] = 1u8; i += 1;
+                    let et_len = event_type.len() as u16;
+                    dst[i..i + 2].copy_from_slice(&et_len.to_le_bytes()); i += 2;
+                    let s = event_type.as_bytes();
+                    dst[i..i + s.len()].copy_from_slice(s); i += s.len();
+                    dst[i..i + 8].copy_from_slice(&data_len.to_le_bytes()); i += 8;
+                    let tlen = tags.len() as u16;
+                    dst[i..i + 2].copy_from_slice(&tlen.to_le_bytes()); i += 2;
+                    for tag in tags {
+                        let tl = tag.len() as u16;
+                        dst[i..i + 2].copy_from_slice(&tl.to_le_bytes()); i += 2;
+                        let tb = tag.as_bytes();
+                        dst[i..i + tb.len()].copy_from_slice(tb); i += tb.len();
+                    }
+                    dst[i..i + 8].copy_from_slice(&root_id.0.to_le_bytes()); i += 8;
+                }
+            }
+        }
+        debug_assert_eq!(i, need);
+        Ok(())
+    }
+
     pub fn from_slice(slice: &[u8]) -> DCBResult<Self> {
         // Check if the slice has at least 2 bytes for keys_len
         if slice.len() < 2 {
@@ -416,6 +481,20 @@ impl EventOverflowNode {
         Ok(result)
     }
 
+    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<()> {
+        let need = self.calc_serialized_size();
+        if dst.len() != need {
+            return Err(DCBError::SerializationError(format!(
+                "EventOverflowNode::serialize_into size mismatch: need {}, got {}",
+                need,
+                dst.len()
+            )));
+        }
+        dst[0..8].copy_from_slice(&self.next.0.to_le_bytes());
+        dst[8..].copy_from_slice(&self.data);
+        Ok(())
+    }
+
     pub fn from_slice(slice: &[u8]) -> DCBResult<Self> {
         if slice.len() < 8 {
             return Err(DCBError::DeserializationError(
@@ -469,6 +548,28 @@ impl EventInternalNode {
         }
 
         Ok(result)
+    }
+
+    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<()> {
+        let need = self.calc_serialized_size();
+        if dst.len() != need {
+            return Err(DCBError::SerializationError(format!(
+                "EventInternalNode::serialize_into size mismatch: need {}, got {}",
+                need,
+                dst.len()
+            )));
+        }
+        let mut i = 0usize;
+        let klen = self.keys.len() as u16;
+        dst[i..i + 2].copy_from_slice(&klen.to_le_bytes()); i += 2;
+        for key in &self.keys {
+            dst[i..i + 8].copy_from_slice(&key.0.to_le_bytes()); i += 8;
+        }
+        for child_id in &self.child_ids {
+            dst[i..i + 8].copy_from_slice(&child_id.0.to_le_bytes()); i += 8;
+        }
+        debug_assert_eq!(i, need);
+        Ok(())
     }
 
     pub fn from_slice(slice: &[u8]) -> DCBResult<Self> {

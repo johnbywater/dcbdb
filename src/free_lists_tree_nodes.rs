@@ -73,6 +73,33 @@ impl FreeListLeafNode {
         Ok(result)
     }
 
+    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<()> {
+        let need = self.calc_serialized_size();
+        if dst.len() != need {
+            return Err(DCBError::SerializationError(format!(
+                "FreeListLeafNode::serialize_into size mismatch: need {}, got {}",
+                need,
+                dst.len()
+            )));
+        }
+        let mut i = 0usize;
+        let klen = self.keys.len() as u16;
+        dst[i..i + 2].copy_from_slice(&klen.to_le_bytes()); i += 2;
+        for key in &self.keys {
+            dst[i..i + 8].copy_from_slice(&key.0.to_le_bytes()); i += 8;
+        }
+        for value in &self.values {
+            let plen = value.page_ids.len() as u16;
+            dst[i..i + 2].copy_from_slice(&plen.to_le_bytes()); i += 2;
+            for page_id in &value.page_ids {
+                dst[i..i + 8].copy_from_slice(&page_id.0.to_le_bytes()); i += 8;
+            }
+            dst[i..i + 8].copy_from_slice(&value.root_id.0.to_le_bytes()); i += 8;
+        }
+        debug_assert_eq!(i, need);
+        Ok(())
+    }
+
     /// Creates a FreeListLeafNode from a byte slice
     ///
     /// # Arguments
@@ -276,6 +303,30 @@ impl FreeListInternalNode {
         }
 
         Ok(result)
+    }
+
+    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<()> {
+        let need = self.calc_serialized_size();
+        if dst.len() != need {
+            return Err(DCBError::SerializationError(format!(
+                "FreeListInternalNode::serialize_into size mismatch: need {}, got {}",
+                need,
+                dst.len()
+            )));
+        }
+        let mut i = 0usize;
+        let klen = self.keys.len() as u16;
+        dst[i..i + 2].copy_from_slice(&klen.to_le_bytes()); i += 2;
+        for key in &self.keys {
+            dst[i..i + 8].copy_from_slice(&key.0.to_le_bytes()); i += 8;
+        }
+        let clen = self.child_ids.len() as u16;
+        dst[i..i + 2].copy_from_slice(&clen.to_le_bytes()); i += 2;
+        for child_id in &self.child_ids {
+            dst[i..i + 8].copy_from_slice(&child_id.0.to_le_bytes()); i += 8;
+        }
+        debug_assert_eq!(i, need);
+        Ok(())
     }
 
     /// Creates a FreeListInternalNode from a byte slice

@@ -41,104 +41,104 @@ fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
 }
 
 pub fn grpc_append_with_readers_benchmark(c: &mut Criterion) {
-    const TOTAL_EVENTS: usize = 10_000; // preloaded events for readers to loop over
+    const TOTAL_EVENTS: usize = 100_000; // preloaded events for readers to loop over
     const READ_BATCH_SIZE: usize = 1000;
     const READER_COUNT: usize = 4; // number of background readers
 
-    // Initialize DB and server with some events
-    let (_tmp_dir, db_path) = init_db_with_events(TOTAL_EVENTS);
-
-    // Find a free localhost port
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind to ephemeral port");
-    let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
-    drop(listener);
-
-    let addr_http = format!("http://{}", addr);
-
-    // Start the gRPC server in a background thread, with shutdown channel
-    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-    let db_path_clone = db_path.clone();
-    let addr_clone = addr.clone();
-
-    let server_thread = thread::spawn(move || {
-        let server_threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
-        let rt = RtBuilder::new_multi_thread()
-            .worker_threads(server_threads)
-            .enable_all()
-            .build()
-            .expect("build tokio rt for server");
-        rt.block_on(async move {
-            start_grpc_server_with_shutdown(db_path_clone, &addr_clone, shutdown_rx)
-                .await
-                .expect("start server");
-        });
-    });
-
-    // Wait until the server is actually accepting connections (avoid race with startup)
-    {
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        loop {
-            if std::net::TcpStream::connect(&addr).is_ok() {
-                break;
-            }
-            if std::time::Instant::now() >= deadline {
-                panic!("server did not start listening within timeout at {}", addr);
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-    }
-
-    // Start background readers that continuously read all preloaded events while appends are benchmarked
-    let readers_running = Arc::new(AtomicBool::new(true));
-    let readers_rt = RtBuilder::new_multi_thread()
-        .worker_threads(READER_COUNT)
-        .enable_all()
-        .build()
-        .expect("build tokio rt (readers)");
-
-    // Create independent reader clients
-    let mut reader_clients: Vec<Arc<GrpcEventStoreClient>> = Vec::with_capacity(READER_COUNT);
-    for _ in 0..READER_COUNT {
-        let c = readers_rt
-            .block_on(GrpcEventStoreClient::connect_optimized_url(&addr_http))
-            .expect("connect reader client");
-        reader_clients.push(Arc::new(c));
-    }
-
-    // Spawn continuous reader tasks
-    let mut reader_handles = Vec::with_capacity(READER_COUNT);
-    for i in 0..READER_COUNT {
-        let client = reader_clients[i].clone();
-        let running = readers_running.clone();
-        let handle = readers_rt.spawn(async move {
-            while running.load(Ordering::Relaxed) {
-                let mut stream = match client
-                    .read(None, None, Some(TOTAL_EVENTS), false, Some(READ_BATCH_SIZE))
-                    .await
-                {
-                    Ok(s) => s,
-                    Err(_) => break,
-                };
-                // let mut count = 0usize;
-                while let Some(item) = stream.next().await {
-                    if item.is_err() { break; }
-                    let _evt = black_box(item.unwrap());
-                    // count += 1;
-                }
-                // Keep the loop light to avoid starving writers
-                tokio::task::yield_now().await;
-            }
-        });
-        reader_handles.push(handle);
-    }
-
     let mut group = c.benchmark_group("grpc_append_4readers");
-    group.sample_size(40);
-
-    // Number of events appended per iteration by a single writer client
-    let events_per_iter = 1usize;
+    group.sample_size(100);
 
     for &threads in &[1usize, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024] {
+        // Initialize DB and server with some events
+        let (_tmp_dir, db_path) = init_db_with_events(TOTAL_EVENTS);
+
+        // Find a free localhost port
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind to ephemeral port");
+        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        drop(listener);
+
+        let addr_http = format!("http://{}", addr);
+
+        // Start the gRPC server in a background thread, with shutdown channel
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let db_path_clone = db_path.clone();
+        let addr_clone = addr.clone();
+
+        let server_thread = thread::spawn(move || {
+            let server_threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+            let rt = RtBuilder::new_multi_thread()
+                .worker_threads(server_threads)
+                .enable_all()
+                .build()
+                .expect("build tokio rt for server");
+            rt.block_on(async move {
+                start_grpc_server_with_shutdown(db_path_clone, &addr_clone, shutdown_rx)
+                    .await
+                    .expect("start server");
+            });
+        });
+
+        // Wait until the server is actually accepting connections (avoid race with startup)
+        {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                if std::net::TcpStream::connect(&addr).is_ok() {
+                    break;
+                }
+                if std::time::Instant::now() >= deadline {
+                    panic!("server did not start listening within timeout at {}", addr);
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+
+        // Start background readers that continuously read all preloaded events while appends are benchmarked
+        let readers_running = Arc::new(AtomicBool::new(true));
+        let readers_rt = RtBuilder::new_multi_thread()
+            .worker_threads(READER_COUNT)
+            .enable_all()
+            .build()
+            .expect("build tokio rt (readers)");
+
+        // Create independent reader clients
+        let mut reader_clients: Vec<Arc<GrpcEventStoreClient>> = Vec::with_capacity(READER_COUNT);
+        for _ in 0..READER_COUNT {
+            let c = readers_rt
+                .block_on(GrpcEventStoreClient::connect_optimized_url(&addr_http))
+                .expect("connect reader client");
+            reader_clients.push(Arc::new(c));
+        }
+
+        // Spawn continuous reader tasks
+        let mut reader_handles = Vec::with_capacity(READER_COUNT);
+        for i in 0..READER_COUNT {
+            let client = reader_clients[i].clone();
+            let running = readers_running.clone();
+            let handle = readers_rt.spawn(async move {
+                while running.load(Ordering::Relaxed) {
+                    let mut stream = match client
+                        .read(None, None, Some(TOTAL_EVENTS), false, Some(READ_BATCH_SIZE))
+                        .await
+                    {
+                        Ok(s) => s,
+                        Err(_) => break,
+                    };
+                    // let mut count = 0usize;
+                    while let Some(item) = stream.next().await {
+                        if item.is_err() { break; }
+                        let _evt = black_box(item.unwrap());
+                        // count += 1;
+                    }
+                    // Keep the loop light to avoid starving writers
+                    tokio::task::yield_now().await;
+                }
+            });
+            reader_handles.push(handle);
+        }
+
+        // Number of events appended per iteration by a single writer client
+        let events_per_iter = 1usize;
+
         // Report throughput as the total across all writer clients
         group.throughput(Throughput::Elements((events_per_iter as u64) * (threads as u64)));
 
@@ -182,21 +182,22 @@ pub fn grpc_append_with_readers_benchmark(c: &mut Criterion) {
                 });
             });
         });
+
+        // Stop readers and shutdown server
+        readers_running.store(false, Ordering::Relaxed);
+        // Wait briefly to let reader tasks exit
+        readers_rt.block_on(async {
+            for h in reader_handles {
+                let _ = h.await;
+            }
+        });
+
+        let _ = shutdown_tx.send(());
+        let _ = server_thread.join();
     }
 
     group.finish();
 
-    // Stop readers and shutdown server
-    readers_running.store(false, Ordering::Relaxed);
-    // Wait briefly to let reader tasks exit
-    readers_rt.block_on(async {
-        for h in reader_handles {
-            let _ = h.await;
-        }
-    });
-
-    let _ = shutdown_tx.send(());
-    let _ = server_thread.join();
 }
 
 criterion_group!(benches, grpc_append_with_readers_benchmark);

@@ -168,12 +168,12 @@ impl EventLeafNode {
         Ok(result)
     }
 
-    /// No-allocation serialization into the provided buffer. The buffer length must equal calc_serialized_size().
-    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<()> {
+    /// No-allocation serialization into the provided buffer. Returns number of bytes written.
+    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
         let need = self.calc_serialized_size();
-        if dst.len() != need {
+        if dst.len() < need {
             return Err(DCBError::SerializationError(format!(
-                "EventLeafNode::serialize_into size mismatch: need {}, got {}",
+                "EventLeafNode::serialize_into needs at least {} bytes, got {}",
                 need,
                 dst.len()
             )));
@@ -230,7 +230,7 @@ impl EventLeafNode {
             }
         }
         debug_assert_eq!(i, need);
-        Ok(())
+        Ok(i)
     }
 
     pub fn from_slice(slice: &[u8]) -> DCBResult<Self> {
@@ -481,18 +481,18 @@ impl EventOverflowNode {
         Ok(result)
     }
 
-    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<()> {
+    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
         let need = self.calc_serialized_size();
-        if dst.len() != need {
+        if dst.len() < need {
             return Err(DCBError::SerializationError(format!(
-                "EventOverflowNode::serialize_into size mismatch: need {}, got {}",
+                "EventOverflowNode::serialize_into needs at least {} bytes, got {}",
                 need,
                 dst.len()
             )));
         }
         dst[0..8].copy_from_slice(&self.next.0.to_le_bytes());
-        dst[8..].copy_from_slice(&self.data);
-        Ok(())
+        dst[8..8 + self.data.len()].copy_from_slice(&self.data);
+        Ok(need)
     }
 
     pub fn from_slice(slice: &[u8]) -> DCBResult<Self> {
@@ -550,11 +550,11 @@ impl EventInternalNode {
         Ok(result)
     }
 
-    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<()> {
+    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
         let need = self.calc_serialized_size();
-        if dst.len() != need {
+        if dst.len() < need {
             return Err(DCBError::SerializationError(format!(
-                "EventInternalNode::serialize_into size mismatch: need {}, got {}",
+                "EventInternalNode::serialize_into needs at least {} bytes, got {}",
                 need,
                 dst.len()
             )));
@@ -569,7 +569,7 @@ impl EventInternalNode {
             dst[i..i + 8].copy_from_slice(&child_id.0.to_le_bytes()); i += 8;
         }
         debug_assert_eq!(i, need);
-        Ok(())
+        Ok(i)
     }
 
     pub fn from_slice(slice: &[u8]) -> DCBResult<Self> {

@@ -14,10 +14,10 @@ pub struct HeaderNode {
 }
 
 impl HeaderNode {
-    /// Writes the serialized HeaderNode into the provided buffer.
-    /// The buffer must be exactly 48 bytes long.
-    pub fn serialize_into(&self, dst: &mut [u8]) {
-        assert!(dst.len() == 48, "HeaderNode::serialize_into dst must be 48 bytes");
+    /// Writes the serialized HeaderNode into the provided buffer and returns the number of bytes written (48).
+    /// The buffer must be at least 48 bytes long.
+    pub fn serialize_into(&self, dst: &mut [u8]) -> usize {
+        assert!(dst.len() >= 48, "HeaderNode::serialize_into dst must be at least 48 bytes");
         // Write fields in little-endian order
         dst[0..8].copy_from_slice(&self.tsn.0.to_le_bytes());
         dst[8..16].copy_from_slice(&self.next_page_id.0.to_le_bytes());
@@ -25,6 +25,7 @@ impl HeaderNode {
         dst[24..32].copy_from_slice(&self.events_tree_root_id.0.to_le_bytes());
         dst[32..40].copy_from_slice(&self.tags_tree_root_id.0.to_le_bytes());
         dst[40..48].copy_from_slice(&self.next_position.0.to_le_bytes());
+        48
     }
 
     /// Serializes the HeaderNode to a newly allocated Vec<u8> of 48 bytes.

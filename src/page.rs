@@ -41,25 +41,37 @@ impl Page {
         Ok(serialized)
     }
 
-    /// No-allocation (reusable Vec) serializer. Appends a full page record (header + body) into `out`.
-    /// `out` is cleared and resized to PAGE_HEADER_SIZE + body_len.
+    /// No-allocation (reusable Vec) serializer. Writes a full page (header + body + zero padding)
+    /// into `out`. The vector is cleared and zero-filled to its capacity (expected to be DB page size)
+    /// before serialization, avoiding per-call resizing based on body length.
     pub fn serialize_into_vec(&self, out: &mut Vec<u8>) -> DCBResult<()> {
-        let body_len = self.node.calc_serialized_size();
-        let total = PAGE_HEADER_SIZE + body_len;
-        if out.capacity() < total {
-            out.reserve(total - out.capacity());
+        // We assume `out` was created with capacity equal to the DB page size and reused across calls.
+        // Zero-fill the full page so we don't need to compute serialized size for resizing/padding.
+        let page_cap = out.capacity();
+        if page_cap < PAGE_HEADER_SIZE {
+            return Err(DCBError::SerializationError(
+                "serialize_into_vec: buffer capacity smaller than page header".into(),
+            ));
         }
         out.clear();
-        out.resize(total, 0);
-        // Body slice
-        {
-            let body = &mut out[PAGE_HEADER_SIZE..];
-            self.node.serialize_into(body)?;
-        }
-        let crc = calc_crc(&out[PAGE_HEADER_SIZE..]);
+        // Ensure len == page size and all bytes are zero
+        out.resize(page_cap, 0);
+
+        // Serialize body into the front of the zeroed body region using the space after header
+        let body_len = {
+            let body_slice = &mut out[PAGE_HEADER_SIZE..];
+            self.node.serialize_into(body_slice)?
+        };
+
+        // Compute CRC over the actual body bytes
+        let crc = calc_crc(&out[PAGE_HEADER_SIZE..PAGE_HEADER_SIZE + body_len]);
+
+        // Fill page header
         out[0] = self.node.get_type_byte();
         out[1..5].copy_from_slice(&crc.to_le_bytes());
         out[5..9].copy_from_slice(&(body_len as u32).to_le_bytes());
+
+        // Keep `out.len()` at page size; the pager will write the full page without extra padding.
         Ok(())
     }
 

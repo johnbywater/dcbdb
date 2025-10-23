@@ -73,11 +73,11 @@ impl FreeListLeafNode {
         Ok(result)
     }
 
-    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<()> {
+    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
         let need = self.calc_serialized_size();
-        if dst.len() != need {
+        if dst.len() < need {
             return Err(DCBError::SerializationError(format!(
-                "FreeListLeafNode::serialize_into size mismatch: need {}, got {}",
+                "FreeListLeafNode::serialize_into needs at least {} bytes, got {}",
                 need,
                 dst.len()
             )));
@@ -97,7 +97,7 @@ impl FreeListLeafNode {
             dst[i..i + 8].copy_from_slice(&value.root_id.0.to_le_bytes()); i += 8;
         }
         debug_assert_eq!(i, need);
-        Ok(())
+        Ok(i)
     }
 
     /// Creates a FreeListLeafNode from a byte slice
@@ -305,11 +305,11 @@ impl FreeListInternalNode {
         Ok(result)
     }
 
-    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<()> {
+    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
         let need = self.calc_serialized_size();
-        if dst.len() != need {
+        if dst.len() < need {
             return Err(DCBError::SerializationError(format!(
-                "FreeListInternalNode::serialize_into size mismatch: need {}, got {}",
+                "FreeListInternalNode::serialize_into needs at least {} bytes, got {}",
                 need,
                 dst.len()
             )));
@@ -326,7 +326,7 @@ impl FreeListInternalNode {
             dst[i..i + 8].copy_from_slice(&child_id.0.to_le_bytes()); i += 8;
         }
         debug_assert_eq!(i, need);
-        Ok(())
+        Ok(i)
     }
 
     /// Creates a FreeListInternalNode from a byte slice

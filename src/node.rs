@@ -92,28 +92,29 @@ impl Node {
         }
     }
 
-    /// No-allocation serialization into a provided buffer slice of exact size.
+    /// No-allocation serialization into a provided buffer slice.
+    /// Returns the number of bytes written.
     /// Implemented for key node types; for others it falls back to allocate-and-copy.
-    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<()> {
+    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
         match self {
-            Node::Header(node) => { node.serialize_into(dst); Ok(()) }
-            Node::FreeListLeaf(node) => { node.serialize_into(dst)?; Ok(()) }
-            Node::FreeListInternal(node) => { node.serialize_into(dst)?; Ok(()) }
-            Node::EventLeaf(node) => { node.serialize_into(dst)?; Ok(()) }
-            Node::EventInternal(node) => { node.serialize_into(dst)?; Ok(()) }
-            Node::EventOverflow(node) => { node.serialize_into(dst)?; Ok(()) }
+            Node::Header(node) => { let n = node.serialize_into(dst); Ok(n) }
+            Node::FreeListLeaf(node) => { let n = node.serialize_into(dst)?; Ok(n) }
+            Node::FreeListInternal(node) => { let n = node.serialize_into(dst)?; Ok(n) }
+            Node::EventLeaf(node) => { let n = node.serialize_into(dst)?; Ok(n) }
+            Node::EventInternal(node) => { let n = node.serialize_into(dst)?; Ok(n) }
+            Node::EventOverflow(node) => { let n = node.serialize_into(dst)?; Ok(n) }
             Node::TagsLeaf(node) => {
                 // Fallback: allocate then copy (can be optimized later)
-                let tmp = node.serialize()?; if tmp.len()!=dst.len(){ return Err(DCBError::DatabaseCorrupted("serialize_into(dst) size mismatch".into())); } dst.copy_from_slice(&tmp); Ok(())
+                let tmp = node.serialize()?; if tmp.len()>dst.len(){ return Err(DCBError::SerializationError("serialize_into(dst) buffer too small".into())); } dst[..tmp.len()].copy_from_slice(&tmp); Ok(tmp.len())
             }
             Node::TagsInternal(node) => {
-                let tmp = node.serialize()?; if tmp.len()!=dst.len(){ return Err(DCBError::DatabaseCorrupted("serialize_into(dst) size mismatch".into())); } dst.copy_from_slice(&tmp); Ok(())
+                let tmp = node.serialize()?; if tmp.len()>dst.len(){ return Err(DCBError::SerializationError("serialize_into(dst) buffer too small".into())); } dst[..tmp.len()].copy_from_slice(&tmp); Ok(tmp.len())
             }
             Node::TagLeaf(node) => {
-                let tmp = node.serialize()?; if tmp.len()!=dst.len(){ return Err(DCBError::DatabaseCorrupted("serialize_into(dst) size mismatch".into())); } dst.copy_from_slice(&tmp); Ok(())
+                let tmp = node.serialize()?; if tmp.len()>dst.len(){ return Err(DCBError::SerializationError("serialize_into(dst) buffer too small".into())); } dst[..tmp.len()].copy_from_slice(&tmp); Ok(tmp.len())
             }
             Node::TagInternal(node) => {
-                let tmp = node.serialize()?; if tmp.len()!=dst.len(){ return Err(DCBError::DatabaseCorrupted("serialize_into(dst) size mismatch".into())); } dst.copy_from_slice(&tmp); Ok(())
+                let tmp = node.serialize()?; if tmp.len()>dst.len(){ return Err(DCBError::SerializationError("serialize_into(dst) buffer too small".into())); } dst[..tmp.len()].copy_from_slice(&tmp); Ok(tmp.len())
             }
         }
     }

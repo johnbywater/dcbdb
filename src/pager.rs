@@ -137,23 +137,24 @@ impl Pager {
     /// Writes the 9-byte page header (type, crc32, len) followed by the 48-byte header body
     /// and pads the rest of the DB page with zeros.
     pub fn write_header_page(&self, page_id: PageID, header: &HeaderNode) -> io::Result<()> {
-        // Serialize header body into fixed 48-byte stack buffer
+        // Serialize header body into fixed stack buffer
         let mut body = [0u8; 48];
-        header.serialize_into(&mut body);
-        let crc = calc_crc(&body);
+        let len = header.serialize_into(&mut body);
+        debug_assert_eq!(len, 48);
+        let crc = calc_crc(&body[..len]);
 
-        // Compose page header (9 bytes): type('1'), crc32(le), len=48(le)
+        // Compose page header (9 bytes): type('1'), crc32(le), len=written
         let mut head = [0u8; 9];
         head[0] = b'1'; // must match Node::Header encoding
         head[1..5].copy_from_slice(&crc.to_le_bytes());
-        head[5..9].copy_from_slice(&(48u32).to_le_bytes());
+        head[5..9].copy_from_slice(&((len as u32).to_le_bytes()));
 
         // Combine into a single small buffer to leverage existing write_page logic
         let mut buf = [0u8; 57];
         buf[0..9].copy_from_slice(&head);
-        buf[9..57].copy_from_slice(&body);
+        buf[9..9 + len].copy_from_slice(&body[..len]);
 
-        self.write_page(page_id, &buf)
+        self.write_page(page_id, &buf[..9 + len])
     }
 
     pub fn write_pages(&self, pages: &[(PageID, Vec<u8>)]) -> io::Result<()> {

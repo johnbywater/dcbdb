@@ -75,25 +75,6 @@ pub struct Lmdb {
 }
 
 impl Lmdb {
-    fn write_header_using_buf(&self, page_id: PageID, header: &HeaderNode) -> DCBResult<()> {
-        // Ensure buffer exists and has correct size
-        let mut buf = self.header_page_buf.lock().unwrap();
-        if buf.len() != self.page_size {
-            buf.resize(self.page_size, 0);
-        }
-        // Serialize header body into bytes [9..57)
-        header.serialize_into(&mut buf[9..57]);
-        // Compute CRC over body
-        let crc = crate::page::calc_crc(&buf[9..57]);
-        // Compose 9-byte page header
-        buf[0] = b'1';
-        buf[1..5].copy_from_slice(&crc.to_le_bytes());
-        buf[5..9].copy_from_slice(&(48u32).to_le_bytes());
-        // Write full page buffer (already zero-padded)
-        self.pager.write_page(page_id, &buf)?;
-        Ok(())
-    }
-
     pub fn new(path: &Path, page_size: usize, verbose: bool) -> DCBResult<Self> {
         let pager = Pager::new(path, page_size)?;
         let header_page_id0 = PageID(0);
@@ -123,7 +104,7 @@ impl Lmdb {
                 next_position: Position(0),
             }),
             header_page_buf: Mutex::new(vec![0u8; page_size]),
-            page_buf: Mutex::new(Vec::with_capacity(page_size)),
+            page_buf: Mutex::new(vec![0u8; page_size]),
             reader_id_counter: Mutex::new(0),
             verbose,
         };
@@ -191,6 +172,25 @@ impl Lmdb {
         }
 
         Ok(lmdb)
+    }
+
+    fn write_header_using_buf(&self, page_id: PageID, header: &HeaderNode) -> DCBResult<()> {
+        // Ensure buffer exists and has correct size
+        let mut buf = self.header_page_buf.lock().unwrap();
+        if buf.len() != self.page_size {
+            buf.resize(self.page_size, 0);
+        }
+        // Serialize header body into bytes after header; capture length
+        let body_len = header.serialize_into(&mut buf[9..]);
+        // Compute CRC over body
+        let crc = crate::page::calc_crc(&buf[9..9 + body_len]);
+        // Compose 9-byte page header
+        buf[0] = b'1';
+        buf[1..5].copy_from_slice(&crc.to_le_bytes());
+        buf[5..9].copy_from_slice(&((body_len as u32).to_le_bytes()));
+        // Write full page buffer (already zero-padded)
+        self.pager.write_page(page_id, &buf)?;
+        Ok(())
     }
 
     pub fn get_latest_header(&self) -> DCBResult<(PageID, HeaderNode)> {

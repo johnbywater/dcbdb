@@ -14,18 +14,25 @@ pub struct HeaderNode {
 }
 
 impl HeaderNode {
-    /// Serializes the HeaderNode to a byte array with 48 bytes:
-    /// - 8 bytes for tsn
-    /// - 8 bytes for next_page_id
-    /// - 8 bytes for free_lists_tree_root_id
-    /// - 8 bytes for events_tree_root_id
-    /// - 8 bytes for tags_tree_root_id
-    /// - 8 bytes for next_position
-    ///
-    /// # Returns
-    /// * `Vec<u8>` - The serialized data
+    /// Writes the serialized HeaderNode into the provided buffer.
+    /// The buffer must be exactly 48 bytes long.
+    pub fn serialize_into(&self, dst: &mut [u8]) {
+        assert!(dst.len() == 48, "HeaderNode::serialize_into dst must be 48 bytes");
+        // Write fields in little-endian order
+        dst[0..8].copy_from_slice(&self.tsn.0.to_le_bytes());
+        dst[8..16].copy_from_slice(&self.next_page_id.0.to_le_bytes());
+        dst[16..24].copy_from_slice(&self.free_lists_tree_root_id.0.to_le_bytes());
+        dst[24..32].copy_from_slice(&self.events_tree_root_id.0.to_le_bytes());
+        dst[32..40].copy_from_slice(&self.tags_tree_root_id.0.to_le_bytes());
+        dst[40..48].copy_from_slice(&self.next_position.0.to_le_bytes());
+    }
+
+    /// Serializes the HeaderNode to a newly allocated Vec<u8> of 48 bytes.
+    /// This includes allocation cost; use `serialize_into` to measure encode-only cost.
     pub fn serialize(&self) -> Vec<u8> {
         let mut result = Vec::with_capacity(48);
+        // Safety: we will immediately fill all 48 bytes below.
+        // Using extend_from_slice repeatedly will also grow length accordingly.
         result.extend_from_slice(&self.tsn.0.to_le_bytes());
         result.extend_from_slice(&self.next_page_id.0.to_le_bytes());
         result.extend_from_slice(&self.free_lists_tree_root_id.0.to_le_bytes());

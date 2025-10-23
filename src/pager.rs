@@ -116,11 +116,16 @@ impl Pager {
         // Write the page data
         file.write_all(page)?;
 
-        // Pad with zeros if needed
-        let padding_size = self.page_size - page.len();
-        if padding_size > 0 {
-            let padding = vec![0u8; padding_size];
-            file.write_all(&padding)?;
+        // Pad with zeros if needed (avoid heap allocation)
+        let mut remaining = self.page_size - page.len();
+        if remaining > 0 {
+            // Write zeros in chunks using a fixed-size stack buffer
+            let zero_chunk = [0u8; 4096];
+            while remaining > 0 {
+                let to_write = remaining.min(zero_chunk.len());
+                file.write_all(&zero_chunk[..to_write])?;
+                remaining -= to_write;
+            }
         }
 
         Ok(())
@@ -144,11 +149,15 @@ impl Pager {
             file.seek(SeekFrom::Start(page_id.0 * (self.page_size as u64)))?;
             // Write the page data
             file.write_all(page)?;
-            // Pad with zeros if needed
-            let padding_size = self.page_size - page.len();
-            if padding_size > 0 {
-                let padding = vec![0u8; padding_size];
-                file.write_all(&padding)?;
+            // Pad with zeros if needed (avoid heap allocation)
+            let mut remaining = self.page_size - page.len();
+            if remaining > 0 {
+                let zero_chunk = [0u8; 4096];
+                while remaining > 0 {
+                    let to_write = remaining.min(zero_chunk.len());
+                    file.write_all(&zero_chunk[..to_write])?;
+                    remaining -= to_write;
+                }
             }
         }
         Ok(())

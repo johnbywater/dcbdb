@@ -312,15 +312,16 @@ impl Lmdb {
         }
 
         // Write all dirty pages (except for the header page) to the file
+        // Stream pages directly to the pager to avoid allocating an intermediate Vec
         if !writer.dirty.is_empty() {
-            let mut serialized_pages: Vec<(PageID, Vec<u8>)> = Vec::with_capacity(writer.dirty.len());
+            let mut count = 0usize;
             for page in writer.dirty.values() {
-                let buf = page.serialize()?;
-                serialized_pages.push((page.page_id, buf));
+                let buf = page.serialize()?; // TODO: provide no-alloc serialization path in the future
+                self.pager.write_page(page.page_id, &buf)?;
+                count += 1;
             }
-            self.pager.write_pages(&serialized_pages)?;
             if self.verbose {
-                println!("Wrote {} dirty page(s) to file", serialized_pages.len());
+                println!("Wrote {} dirty page(s) to file", count);
             }
         }
 

@@ -91,3 +91,7 @@ harness = false
 [[bench]]
 name = "header_node_bench"
 harness = false
+
+[[bench]]
+name = "lmdb_commit_bench"
+harness = false

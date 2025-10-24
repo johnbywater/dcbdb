@@ -227,13 +227,8 @@ impl Mvcc {
     }
 
     pub fn write_page(&self, page: &Page) -> DCBResult<()> {
-        // Serialize directly into a reusable, page-sized buffer to avoid allocations
-        let mut buf = self.page_buf.lock().unwrap();
-        if buf.len() != self.page_size {
-            buf.resize(self.page_size, 0);
-        }
-        page.serialize_into_vec(&mut buf)?;
-        self.pager.write_page(page.page_id, &buf)?;
+        let serialized = &page.serialize()?;
+        self.pager.write_page(page.page_id, serialized)?;
         if self.verbose {
             println!("Wrote {:?} to file", page.page_id);
         }

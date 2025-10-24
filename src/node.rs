@@ -103,19 +103,10 @@ impl Node {
             Node::EventLeaf(node) => { let n = node.serialize_into(dst)?; Ok(n) }
             Node::EventInternal(node) => { let n = node.serialize_into(dst)?; Ok(n) }
             Node::EventOverflow(node) => { let n = node.serialize_into(dst)?; Ok(n) }
-            Node::TagsLeaf(node) => {
-                // Fallback: allocate then copy (can be optimized later)
-                let tmp = node.serialize()?; if tmp.len()>dst.len(){ return Err(DCBError::SerializationError("serialize_into(dst) buffer too small".into())); } dst[..tmp.len()].copy_from_slice(&tmp); Ok(tmp.len())
-            }
-            Node::TagsInternal(node) => {
-                let tmp = node.serialize()?; if tmp.len()>dst.len(){ return Err(DCBError::SerializationError("serialize_into(dst) buffer too small".into())); } dst[..tmp.len()].copy_from_slice(&tmp); Ok(tmp.len())
-            }
-            Node::TagLeaf(node) => {
-                let tmp = node.serialize()?; if tmp.len()>dst.len(){ return Err(DCBError::SerializationError("serialize_into(dst) buffer too small".into())); } dst[..tmp.len()].copy_from_slice(&tmp); Ok(tmp.len())
-            }
-            Node::TagInternal(node) => {
-                let tmp = node.serialize()?; if tmp.len()>dst.len(){ return Err(DCBError::SerializationError("serialize_into(dst) buffer too small".into())); } dst[..tmp.len()].copy_from_slice(&tmp); Ok(tmp.len())
-            }
+            Node::TagsLeaf(node) => { let n = node.serialize_into(dst)?; Ok(n) }
+            Node::TagsInternal(node) => { let n = node.serialize_into(dst)?; Ok(n) }
+            Node::TagLeaf(node) => { let n = node.serialize_into(dst)?; Ok(n) }
+            Node::TagInternal(node) => { let n = node.serialize_into(dst)?; Ok(n) }
         }
     }
 

@@ -62,6 +62,45 @@ impl TagsLeafNode {
         Ok(out)
     }
 
+    /// No-allocation serialization into the provided buffer. Returns bytes written.
+    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
+        let need = self.calc_serialized_size();
+        if dst.len() < need {
+            return Err(DCBError::SerializationError(format!(
+                "TagsLeafNode::serialize_into needs at least {} bytes, got {}",
+                need,
+                dst.len()
+            )));
+        }
+        let mut i = 0usize;
+        // keys_len
+        let klen = self.keys.len() as u16;
+        dst[i..i + 2].copy_from_slice(&klen.to_le_bytes());
+        i += 2;
+        // keys
+        for key in &self.keys {
+            dst[i..i + TAG_HASH_LEN].copy_from_slice(key);
+            i += TAG_HASH_LEN;
+        }
+        // values
+        for v in &self.values {
+            // root_id
+            dst[i..i + 8].copy_from_slice(&v.root_id.0.to_le_bytes());
+            i += 8;
+            // positions length
+            let plen = v.positions.len() as u16;
+            dst[i..i + 2].copy_from_slice(&plen.to_le_bytes());
+            i += 2;
+            // positions
+            for pos in &v.positions {
+                dst[i..i + 8].copy_from_slice(&pos.0.to_le_bytes());
+                i += 8;
+            }
+        }
+        debug_assert_eq!(i, need);
+        Ok(i)
+    }
+
     pub fn from_slice(slice: &[u8]) -> DCBResult<Self> {
         if slice.len() < 2 {
             return Err(DCBError::DeserializationError(format!(
@@ -187,6 +226,35 @@ impl TagsInternalNode {
         Ok(out)
     }
 
+    /// No-allocation serialization into the provided buffer. Returns bytes written.
+    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
+        let need = self.calc_serialized_size();
+        if dst.len() < need {
+            return Err(DCBError::SerializationError(format!(
+                "TagsInternalNode::serialize_into needs at least {} bytes, got {}",
+                need,
+                dst.len()
+            )));
+        }
+        let mut i = 0usize;
+        // keys_len
+        let klen = self.keys.len() as u16;
+        dst[i..i + 2].copy_from_slice(&klen.to_le_bytes());
+        i += 2;
+        // keys
+        for key in &self.keys {
+            dst[i..i + TAG_HASH_LEN].copy_from_slice(key);
+            i += TAG_HASH_LEN;
+        }
+        // child ids (len implied as keys_len + 1)
+        for id in &self.child_ids {
+            dst[i..i + 8].copy_from_slice(&id.0.to_le_bytes());
+            i += 8;
+        }
+        debug_assert_eq!(i, need);
+        Ok(i)
+    }
+
     pub fn from_slice(slice: &[u8]) -> DCBResult<Self> {
         if slice.len() < 2 {
             return Err(DCBError::DeserializationError(format!(
@@ -305,6 +373,28 @@ impl TagLeafNode {
         Ok(out)
     }
 
+    /// No-allocation serialization into the provided buffer. Returns bytes written.
+    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
+        let need = self.calc_serialized_size();
+        if dst.len() < need {
+            return Err(DCBError::SerializationError(format!(
+                "TagLeafNode::serialize_into needs at least {} bytes, got {}",
+                need,
+                dst.len()
+            )));
+        }
+        let mut i = 0usize;
+        let plen = self.positions.len() as u16;
+        dst[i..i + 2].copy_from_slice(&plen.to_le_bytes());
+        i += 2;
+        for pos in &self.positions {
+            dst[i..i + 8].copy_from_slice(&pos.0.to_le_bytes());
+            i += 8;
+        }
+        debug_assert_eq!(i, need);
+        Ok(i)
+    }
+
     pub fn from_slice(slice: &[u8]) -> DCBResult<Self> {
         if slice.len() < 2 {
             return Err(DCBError::DeserializationError(format!(
@@ -372,6 +462,32 @@ impl TagInternalNode {
             out.extend_from_slice(&id.0.to_le_bytes());
         }
         Ok(out)
+    }
+
+    /// No-allocation serialization into the provided buffer. Returns bytes written.
+    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
+        let need = self.calc_serialized_size();
+        if dst.len() < need {
+            return Err(DCBError::SerializationError(format!(
+                "TagInternalNode::serialize_into needs at least {} bytes, got {}",
+                need,
+                dst.len()
+            )));
+        }
+        let mut i = 0usize;
+        let klen = self.keys.len() as u16;
+        dst[i..i + 2].copy_from_slice(&klen.to_le_bytes());
+        i += 2;
+        for k in &self.keys {
+            dst[i..i + 8].copy_from_slice(&k.0.to_le_bytes());
+            i += 8;
+        }
+        for id in &self.child_ids {
+            dst[i..i + 8].copy_from_slice(&id.0.to_le_bytes());
+            i += 8;
+        }
+        debug_assert_eq!(i, need);
+        Ok(i)
     }
 
     pub fn from_slice(slice: &[u8]) -> DCBResult<Self> {

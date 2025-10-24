@@ -102,71 +102,6 @@ impl EventLeafNode {
         total_size
     }
 
-    pub fn serialize(&self) -> DCBResult<Vec<u8>> {
-        let total_size = self.calc_serialized_size();
-        let mut result = Vec::with_capacity(total_size);
-
-        // Serialize the length of the keys (2 bytes)
-        result.extend_from_slice(&(self.keys.len() as u16).to_le_bytes());
-
-        // Serialize each key (8 bytes each)
-        for key in &self.keys {
-            result.extend_from_slice(&key.0.to_le_bytes());
-        }
-
-        // Serialize each value
-        for value in &self.values {
-            match value {
-                EventValue::Inline(rec) => {
-                    // kind = 0
-                    result.push(0u8);
-                    // Serialize event_type length (2 bytes)
-                    result.extend_from_slice(&(rec.event_type.len() as u16).to_le_bytes());
-                    // Serialize event_type bytes
-                    result.extend_from_slice(rec.event_type.as_bytes());
-                    // Serialize data length (2 bytes)
-                    result.extend_from_slice(&(rec.data.len() as u16).to_le_bytes());
-                    // Serialize data bytes
-                    result.extend_from_slice(&rec.data);
-                    // Serialize number of tags (2 bytes)
-                    result.extend_from_slice(&(rec.tags.len() as u16).to_le_bytes());
-                    // Serialize each tag (2 bytes for length + string bytes)
-                    for tag in &rec.tags {
-                        // Serialize tag length (2 bytes)
-                        result.extend_from_slice(&(tag.len() as u16).to_le_bytes());
-                        // Serialize tag bytes
-                        result.extend_from_slice(tag.as_bytes());
-                    }
-                }
-                EventValue::Overflow {
-                    event_type,
-                    data_len,
-                    tags,
-                    root_id,
-                } => {
-                    // kind = 1
-                    result.push(1u8);
-                    // Serialize event_type length (2 bytes)
-                    result.extend_from_slice(&(event_type.len() as u16).to_le_bytes());
-                    // Serialize event_type bytes
-                    result.extend_from_slice(event_type.as_bytes());
-                    // Serialize data_len (8 bytes)
-                    result.extend_from_slice(&(*data_len).to_le_bytes());
-                    // Serialize number of tags (2 bytes)
-                    result.extend_from_slice(&(tags.len() as u16).to_le_bytes());
-                    // Serialize each tag (2 bytes for length + string bytes)
-                    for tag in tags {
-                        result.extend_from_slice(&(tag.len() as u16).to_le_bytes());
-                        result.extend_from_slice(tag.as_bytes());
-                    }
-                    // Serialize root_id (8 bytes)
-                    result.extend_from_slice(&root_id.0.to_le_bytes());
-                }
-            }
-        }
-
-        Ok(result)
-    }
 
     /// No-allocation serialization into the provided buffer. Returns number of bytes written.
     pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
@@ -474,12 +409,6 @@ impl EventOverflowNode {
         8 + self.data.len()
     }
 
-    pub fn serialize(&self) -> DCBResult<Vec<u8>> {
-        let mut result = Vec::with_capacity(self.calc_serialized_size());
-        result.extend_from_slice(&self.next.0.to_le_bytes());
-        result.extend_from_slice(&self.data);
-        Ok(result)
-    }
 
     pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
         let need = self.calc_serialized_size();
@@ -529,26 +458,6 @@ impl EventInternalNode {
         total_size
     }
 
-    pub fn serialize(&self) -> DCBResult<Vec<u8>> {
-        let total_size = self.calc_serialized_size();
-        let mut result = Vec::with_capacity(total_size);
-
-        // Serialize the length of the keys (2 bytes)
-        result.extend_from_slice(&(self.keys.len() as u16).to_le_bytes());
-
-        // Serialize each key (8 bytes each)
-        for key in &self.keys {
-            result.extend_from_slice(&key.0.to_le_bytes());
-        }
-
-        // Serialize each child_id (4 bytes each)
-        // Note: We don't need to serialize child_ids_len as it's always keys_len + 1
-        for child_id in &self.child_ids {
-            result.extend_from_slice(&child_id.0.to_le_bytes());
-        }
-
-        Ok(result)
-    }
 
     pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
         let need = self.calc_serialized_size();
@@ -687,7 +596,8 @@ mod tests {
         };
 
         // Serialize the EventInternalNode
-        let serialized = internal_node.serialize().unwrap();
+        let mut serialized = vec![0u8; internal_node.calc_serialized_size()];
+        internal_node.serialize_into(&mut serialized).unwrap();
 
         // Verify the serialized output is not empty
         assert!(!serialized.is_empty());
@@ -745,7 +655,8 @@ mod tests {
         };
 
         // Serialize the EventLeafNode
-        let serialized = leaf_node.serialize().unwrap();
+        let mut serialized = vec![0u8; leaf_node.calc_serialized_size()];
+        leaf_node.serialize_into(&mut serialized).unwrap();
 
         // Verify the serialized output is not empty
         assert!(!serialized.is_empty());
@@ -820,7 +731,8 @@ mod tests {
             }],
         };
         // Serialize
-        let serialized = leaf_node.serialize().unwrap();
+        let mut serialized = vec![0u8; leaf_node.calc_serialized_size()];
+        leaf_node.serialize_into(&mut serialized).unwrap();
         assert!(!serialized.is_empty());
         // Deserialize
         let deserialized = EventLeafNode::from_slice(&serialized)
@@ -864,7 +776,8 @@ mod tests {
             keys: vec![Position(10), Position(20)],
             values: vec![inline.clone(), overflow.clone()],
         };
-        let serialized = leaf_node.serialize().unwrap();
+        let mut serialized = vec![0u8; leaf_node.calc_serialized_size()];
+        leaf_node.serialize_into(&mut serialized).unwrap();
         let deserialized = EventLeafNode::from_slice(&serialized).unwrap();
         assert_eq!(leaf_node, deserialized);
 
@@ -899,7 +812,8 @@ mod tests {
             next: PageID(77),
             data: vec![7, 8, 9, 10],
         };
-        let ser = node.serialize().unwrap();
+        let mut ser = vec![0u8; node.calc_serialized_size()];
+        node.serialize_into(&mut ser).unwrap();
         assert_eq!(8 + 4, ser.len()); // 8 bytes next + 4 bytes data
         let de = EventOverflowNode::from_slice(&ser).unwrap();
         assert_eq!(node, de);

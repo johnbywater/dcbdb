@@ -36,31 +36,6 @@ impl TagsLeafNode {
         total
     }
 
-    pub fn serialize(&self) -> DCBResult<Vec<u8>> {
-        let mut out = Vec::with_capacity(self.calc_serialized_size());
-
-        // keys_len
-        out.extend_from_slice(&(self.keys.len() as u16).to_le_bytes());
-
-        // keys
-        for key in &self.keys {
-            out.extend_from_slice(key);
-        }
-
-        // values
-        for v in &self.values {
-            // root_id (8 bytes)
-            out.extend_from_slice(&v.root_id.0.to_le_bytes());
-            // positions length (2 bytes)
-            out.extend_from_slice(&(v.positions.len() as u16).to_le_bytes());
-            // positions
-            for pos in &v.positions {
-                out.extend_from_slice(&pos.0.to_le_bytes());
-            }
-        }
-
-        Ok(out)
-    }
 
     /// No-allocation serialization into the provided buffer. Returns bytes written.
     pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
@@ -211,20 +186,6 @@ impl TagsInternalNode {
         2 + (self.keys.len() * TAG_HASH_LEN) + (self.child_ids.len() * 8)
     }
 
-    pub fn serialize(&self) -> DCBResult<Vec<u8>> {
-        let mut out = Vec::with_capacity(self.calc_serialized_size());
-        // keys_len
-        out.extend_from_slice(&(self.keys.len() as u16).to_le_bytes());
-        // keys
-        for key in &self.keys {
-            out.extend_from_slice(key);
-        }
-        // child_ids
-        for id in &self.child_ids {
-            out.extend_from_slice(&id.0.to_le_bytes());
-        }
-        Ok(out)
-    }
 
     /// No-allocation serialization into the provided buffer. Returns bytes written.
     pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
@@ -362,16 +323,6 @@ impl TagLeafNode {
         2 + (self.positions.len() * 8)
     }
 
-    pub fn serialize(&self) -> DCBResult<Vec<u8>> {
-        let mut out = Vec::with_capacity(self.calc_serialized_size());
-        // positions length
-        out.extend_from_slice(&(self.positions.len() as u16).to_le_bytes());
-        // positions
-        for pos in &self.positions {
-            out.extend_from_slice(&pos.0.to_le_bytes());
-        }
-        Ok(out)
-    }
 
     /// No-allocation serialization into the provided buffer. Returns bytes written.
     pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
@@ -449,20 +400,6 @@ impl TagInternalNode {
         2 + (self.keys.len() * 8) + (self.child_ids.len() * 8)
     }
 
-    pub fn serialize(&self) -> DCBResult<Vec<u8>> {
-        let mut out = Vec::with_capacity(self.calc_serialized_size());
-        // keys_len
-        out.extend_from_slice(&(self.keys.len() as u16).to_le_bytes());
-        // keys
-        for k in &self.keys {
-            out.extend_from_slice(&k.0.to_le_bytes());
-        }
-        // child_ids (no len)
-        for id in &self.child_ids {
-            out.extend_from_slice(&id.0.to_le_bytes());
-        }
-        Ok(out)
-    }
 
     /// No-allocation serialization into the provided buffer. Returns bytes written.
     pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
@@ -564,7 +501,8 @@ mod tests {
         let leaf = TagLeafNode {
             positions: vec![Position(10), Position(20), Position(30)],
         };
-        let ser = leaf.serialize().unwrap();
+        let mut ser = vec![0u8; leaf.calc_serialized_size()];
+        leaf.serialize_into(&mut ser).unwrap();
         let de = TagLeafNode::from_slice(&ser).unwrap();
         assert_eq!(leaf, de);
     }
@@ -575,7 +513,8 @@ mod tests {
             keys: vec![Position(5), Position(15), Position(25)],
             child_ids: vec![PageID(100), PageID(200), PageID(300), PageID(400)],
         };
-        let ser = node.serialize().unwrap();
+        let mut ser = vec![0u8; node.calc_serialized_size()];
+        node.serialize_into(&mut ser).unwrap();
         let de = TagInternalNode::from_slice(&ser).unwrap();
         assert_eq!(node, de);
     }
@@ -607,7 +546,8 @@ mod tests {
             ],
         };
 
-        let ser = leaf.serialize().unwrap();
+        let mut ser = vec![0u8; leaf.calc_serialized_size()];
+        leaf.serialize_into(&mut ser).unwrap();
         let de = TagsLeafNode::from_slice(&ser).unwrap();
         assert_eq!(leaf, de);
     }
@@ -626,7 +566,8 @@ mod tests {
             child_ids: vec![PageID(100), PageID(200), PageID(300), PageID(400)],
         };
 
-        let ser = node.serialize().unwrap();
+        let mut ser = vec![0u8; node.calc_serialized_size()];
+        node.serialize_into(&mut ser).unwrap();
         let de = TagsInternalNode::from_slice(&ser).unwrap();
         assert_eq!(node, de);
     }
@@ -634,7 +575,8 @@ mod tests {
     #[test]
     fn test_tag_leaf_node_empty_positions_roundtrip() {
         let leaf = TagLeafNode { positions: vec![] };
-        let ser = leaf.serialize().unwrap();
+        let mut ser = vec![0u8; leaf.calc_serialized_size()];
+        leaf.serialize_into(&mut ser).unwrap();
         let de = TagLeafNode::from_slice(&ser).unwrap();
         assert_eq!(leaf, de);
     }
@@ -645,7 +587,8 @@ mod tests {
             keys: vec![],
             child_ids: vec![PageID(42)],
         };
-        let ser = node.serialize().unwrap();
+        let mut ser = vec![0u8; node.calc_serialized_size()];
+        node.serialize_into(&mut ser).unwrap();
         let de = TagInternalNode::from_slice(&ser).unwrap();
         assert_eq!(node, de);
     }
@@ -672,8 +615,9 @@ mod tests {
         let leaf = TagLeafNode {
             positions: vec![Position(7), Position(9), Position(11)],
         };
-        let ser = leaf.serialize().unwrap();
-        assert_eq!(ser.len(), leaf.calc_serialized_size());
+        let mut ser = vec![0u8; leaf.calc_serialized_size()];
+        let written = leaf.serialize_into(&mut ser).unwrap();
+        assert_eq!(written, leaf.calc_serialized_size());
         let de = TagLeafNode::from_slice(&ser).unwrap();
         assert_eq!(leaf, de);
     }
@@ -684,8 +628,9 @@ mod tests {
             keys: vec![Position(1), Position(2), Position(3)],
             child_ids: vec![PageID(10), PageID(20), PageID(30), PageID(40)],
         };
-        let ser = node.serialize().unwrap();
-        assert_eq!(ser.len(), node.calc_serialized_size());
+        let mut ser = vec![0u8; node.calc_serialized_size()];
+        let written = node.serialize_into(&mut ser).unwrap();
+        assert_eq!(written, node.calc_serialized_size());
         let de = TagInternalNode::from_slice(&ser).unwrap();
         assert_eq!(node, de);
     }

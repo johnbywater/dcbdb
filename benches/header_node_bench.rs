@@ -22,8 +22,11 @@ pub fn header_node_benchmarks(c: &mut Criterion) {
     // Benchmark serialization (alloc + encode)
     group.bench_function(BenchmarkId::new("serialize", header_size_bytes), |b| {
         b.iter(|| {
-            let bytes = black_box(&HEADER).serialize();
-            black_box(bytes)
+            let mut v = black_box(Vec::<u8>::with_capacity(48));
+            // ensure vec has length 48 so we can serialize into it
+            unsafe { v.set_len(48); }
+            black_box(&HEADER).serialize_into(black_box(&mut v));
+            black_box(v)
         })
     });
 
@@ -45,7 +48,8 @@ pub fn header_node_benchmarks(c: &mut Criterion) {
     });
 
     // Prepare serialized bytes once for deserialization benchmark (outside iter)
-    let serialized = HEADER.serialize();
+    let mut serialized = [0u8; 48];
+    HEADER.serialize_into(&mut serialized);
 
     // Benchmark deserialization reusing the same bytes each iteration (pure from_slice; no cloning/allocation)
     group.bench_function(BenchmarkId::new("deserialize_reuse", header_size_bytes), |b| {
@@ -58,8 +62,12 @@ pub fn header_node_benchmarks(c: &mut Criterion) {
     // Benchmark deserialization immediately after a fresh serialize (setup does serialize; measure only from_slice)
     group.bench_function(BenchmarkId::new("deserialize_after_serialize", header_size_bytes), |b| {
         b.iter_batched(
-            || HEADER.serialize(),
-            |bytes| {
+            || {
+                let mut buf = [0u8; 48];
+                HEADER.serialize_into(&mut buf);
+                buf
+            },
+            |bytes: [u8; 48]| {
                 let node = HeaderNode::from_slice(black_box(&bytes)).expect("valid header bytes");
                 black_box(node)
             },
@@ -81,7 +89,8 @@ pub fn header_node_benchmarks(c: &mut Criterion) {
     // Benchmark serialize + deserialize round trip (alloc + encode + decode)
     group.bench_function(BenchmarkId::new("round_trip", header_size_bytes), |b| {
         b.iter(|| {
-            let bytes = black_box(&HEADER).serialize();
+            let mut bytes = [0u8; 48];
+            black_box(&HEADER).serialize_into(black_box(&mut bytes));
             // Black-box the bytes to prevent the compiler from fusing serialize+deserialize
             let node = HeaderNode::from_slice(black_box(&bytes)).unwrap();
             black_box(node)

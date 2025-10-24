@@ -28,20 +28,6 @@ impl HeaderNode {
         48
     }
 
-    /// Serializes the HeaderNode to a newly allocated Vec<u8> of 48 bytes.
-    /// This includes allocation cost; use `serialize_into` to measure encode-only cost.
-    pub fn serialize(&self) -> Vec<u8> {
-        let mut result = Vec::with_capacity(48);
-        // Safety: we will immediately fill all 48 bytes below.
-        // Using extend_from_slice repeatedly will also grow length accordingly.
-        result.extend_from_slice(&self.tsn.0.to_le_bytes());
-        result.extend_from_slice(&self.next_page_id.0.to_le_bytes());
-        result.extend_from_slice(&self.free_lists_tree_root_id.0.to_le_bytes());
-        result.extend_from_slice(&self.events_tree_root_id.0.to_le_bytes());
-        result.extend_from_slice(&self.tags_tree_root_id.0.to_le_bytes());
-        result.extend_from_slice(&self.next_position.0.to_le_bytes());
-        result
-    }
 
     /// Creates a HeaderNode from a byte slice
     /// Expects a slice with 48 bytes:
@@ -111,7 +97,8 @@ mod tests {
         };
 
         // Serialize the HeaderNode
-        let serialized = header_node.serialize();
+        let mut serialized = [0u8; 48];
+        header_node.serialize_into(&mut serialized);
 
         // Verify the serialized output has the correct length
         assert_eq!(48, serialized.len());

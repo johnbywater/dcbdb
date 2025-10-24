@@ -40,38 +40,6 @@ impl FreeListLeafNode {
         total_size
     }
 
-    /// Serializes the FreeListLeafNode to a byte array by manually converting its fields to bytes
-    ///
-    /// # Returns
-    /// * `Result<Vec<u8>, LmdbError>` - The serialized data or an error
-    pub fn serialize(&self) -> DCBResult<Vec<u8>> {
-        let total_size = self.calc_serialized_size();
-        let mut result = Vec::with_capacity(total_size);
-
-        // Serialize the length of the keys (2 bytes)
-        result.extend_from_slice(&(self.keys.len() as u16).to_le_bytes());
-
-        // Serialize each key (4 bytes each)
-        for key in &self.keys {
-            result.extend_from_slice(&key.0.to_le_bytes());
-        }
-
-        // Serialize each value
-        for value in &self.values {
-            // Serialize the length of page_ids (2 bytes)
-            result.extend_from_slice(&(value.page_ids.len() as u16).to_le_bytes());
-
-            // Serialize each PageID (4 bytes each)
-            for page_id in &value.page_ids {
-                result.extend_from_slice(&page_id.0.to_le_bytes());
-            }
-
-            // Serialize the root_id (always 8 bytes); PageID(0) indicates no subtree
-            result.extend_from_slice(&value.root_id.0.to_le_bytes());
-        }
-
-        Ok(result)
-    }
 
     pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
         let need = self.calc_serialized_size();
@@ -278,32 +246,6 @@ impl FreeListInternalNode {
         total_size
     }
 
-    /// Serializes the FreeListInternalNode to a byte array by manually converting its fields to bytes
-    ///
-    /// # Returns
-    /// * `Result<Vec<u8>, LmdbError>` - The serialized data or an error
-    pub fn serialize(&self) -> DCBResult<Vec<u8>> {
-        let total_size = self.calc_serialized_size();
-        let mut result = Vec::with_capacity(total_size);
-
-        // Serialize the length of the keys (2 bytes)
-        result.extend_from_slice(&(self.keys.len() as u16).to_le_bytes());
-
-        // Serialize each key (4 bytes each)
-        for key in &self.keys {
-            result.extend_from_slice(&key.0.to_le_bytes());
-        }
-
-        // Serialize the length of child_ids (2 bytes)
-        result.extend_from_slice(&(self.child_ids.len() as u16).to_le_bytes());
-
-        // Serialize each child_id (4 bytes each)
-        for child_id in &self.child_ids {
-            result.extend_from_slice(&child_id.0.to_le_bytes());
-        }
-
-        Ok(result)
-    }
 
     pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
         let need = self.calc_serialized_size();
@@ -472,7 +414,8 @@ mod tests {
         };
 
         // Serialize the FreeListLeafNode
-        let serialized = leaf_node.serialize().unwrap();
+        let mut serialized = vec![0u8; leaf_node.calc_serialized_size()];
+        leaf_node.serialize_into(&mut serialized).unwrap();
 
         // Verify the serialized output is not empty
         assert!(!serialized.is_empty());
@@ -520,8 +463,9 @@ mod tests {
             child_ids: vec![PageID(100), PageID(200), PageID(300), PageID(400)],
         };
 
-        // Serialize the FreeListInternalNode using its serialize method
-        let serialized = internal_node.serialize().unwrap();
+        // Serialize the FreeListInternalNode
+        let mut serialized = vec![0u8; internal_node.calc_serialized_size()];
+        internal_node.serialize_into(&mut serialized).unwrap();
 
         // Verify the serialized output is not empty
         assert!(!serialized.is_empty());

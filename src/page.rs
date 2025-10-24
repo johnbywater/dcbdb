@@ -24,27 +24,27 @@ impl Page {
         PAGE_HEADER_SIZE + self.node.calc_serialized_size()
     }
 
-    /// Serialized page (header + body + zero padding) into `out`.
-    pub fn serialize_into(&self, out: &mut Vec<u8>) -> DCBResult<()> {
+    /// Serialized page (header + body + zero padding) into `buf`.
+    pub fn serialize_into(&self, buf: &mut Vec<u8>) -> DCBResult<()> {
         // Serialize body into the front of the body region using the space after header
         let body_len = {
-            let body_slice = &mut out[PAGE_HEADER_SIZE..];
+            let body_slice = &mut buf[PAGE_HEADER_SIZE..];
             self.node.serialize_into(body_slice)?
         };
 
         // Zero-fill the remainder of the page after the serialized body
         let tail_start = PAGE_HEADER_SIZE + body_len;
-        if tail_start < out.len() {
-            out[tail_start..].fill(0);
+        if tail_start < buf.len() {
+            buf[tail_start..].fill(0);
         }
 
         // Compute CRC over the actual body bytes
-        let crc = calc_crc(&out[PAGE_HEADER_SIZE..PAGE_HEADER_SIZE + body_len]);
+        let crc = calc_crc(&buf[PAGE_HEADER_SIZE..PAGE_HEADER_SIZE + body_len]);
 
         // Fill page header
-        out[0] = self.node.get_type_byte();
-        out[1..5].copy_from_slice(&crc.to_le_bytes());
-        out[5..9].copy_from_slice(&(body_len as u32).to_le_bytes());
+        buf[0] = self.node.get_type_byte();
+        buf[1..5].copy_from_slice(&crc.to_le_bytes());
+        buf[5..9].copy_from_slice(&(body_len as u32).to_le_bytes());
 
         Ok(())
     }

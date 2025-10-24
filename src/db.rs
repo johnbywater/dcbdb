@@ -158,28 +158,17 @@ impl DCBEventStore for UmaDB {
         events: Vec<DCBEvent>,
         condition: Option<DCBAppendCondition>,
     ) -> DCBResult<u64> {
-        let mvcc = &self.mvcc;
-        let mut writer = mvcc.writer()?;
-
-        // Check condition using read_conditional (limit 1), starting after the provided position
-        if let Some(cond) = condition {
-            let after = Position(cond.after.unwrap_or(0));
-            let found = read_conditional(mvcc, &writer.dirty, writer.events_tree_root_id, writer.tags_tree_root_id, cond.fail_if_events_match.clone(), after, Some(1))?;
-            if let Some(matched) = found.first() {
-                let msg = format!("matching event: {:?} condition: {:?}", matched, cond.fail_if_events_match);
-                return Err(DCBError::IntegrityError(msg));
-            }
-        }
-
-        // If no events to append then return 0
+        // Preserve existing fast-path: if no events, do nothing and return 0 (avoid opening/committing a writer)
         if events.is_empty() {
             return Ok(0);
         }
-
-        // Append unconditionally then commit
-        let last = unconditional_append(mvcc, &mut writer, events)?;
-        mvcc.commit(&mut writer)?;
-        Ok(last)
+        // Delegate to append_batch with a single item to reuse unified batching logic
+        let mut results = self.append_batch(vec![(events, condition)])?;
+        debug_assert_eq!(results.len(), 1);
+        match results.remove(0) {
+            Ok(pos) => Ok(pos),
+            Err(e) => Err(e),
+        }
     }
 }
 

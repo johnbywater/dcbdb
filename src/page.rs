@@ -24,29 +24,8 @@ impl Page {
         PAGE_HEADER_SIZE + self.node.calc_serialized_size()
     }
 
-    pub fn serialize(&self) -> DCBResult<Vec<u8>> {
-        // Serialize the node
-        let data = self.node.serialize()?;
-
-        // Calculate CRC
-        let crc = calc_crc(&data);
-
-        // Create the serialized data with header
-        let mut serialized = Vec::with_capacity(PAGE_HEADER_SIZE + data.len());
-        serialized.push(self.node.get_type_byte());
-        serialized.extend_from_slice(&crc.to_le_bytes());
-        serialized.extend_from_slice(&(data.len() as u32).to_le_bytes());
-        serialized.extend_from_slice(&data);
-
-        Ok(serialized)
-    }
-
-    /// No-allocation (reusable Vec) serializer. Writes a full page (header + body + zero padding)
-    /// into `out`. The vector is cleared and zero-filled to its capacity (expected to be DB page size)
-    /// before serialization, avoiding per-call resizing based on body length.
+    /// Serialized page (header + body + zero padding) into `out`.
     pub fn serialize_into(&self, out: &mut Vec<u8>) -> DCBResult<()> {
-        // We assume `out` was created with capacity equal to the DB page size and reused across calls.
-
         // Serialize body into the front of the body region using the space after header
         let body_len = {
             let body_slice = &mut out[PAGE_HEADER_SIZE..];
@@ -67,7 +46,6 @@ impl Page {
         out[1..5].copy_from_slice(&crc.to_le_bytes());
         out[5..9].copy_from_slice(&(body_len as u32).to_le_bytes());
 
-        // Keep `out.len()` at page size; the pager will write the full page without extra padding.
         Ok(())
     }
 

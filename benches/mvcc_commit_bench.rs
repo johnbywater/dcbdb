@@ -2,8 +2,8 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use tempfile::tempdir;
 use umadb::bench_api::BenchDb;
 
-pub fn lmdb_commit_benchmarks(c: &mut Criterion) {
-    let mut group = c.benchmark_group("lmdb_commit");
+pub fn mvcc_commit_benchmarks(c: &mut Criterion) {
+    let mut group = c.benchmark_group("mvcc_commit");
 
     // Create a temporary database once per benchmark group
     let dir = tempdir().expect("tempdir");
@@ -30,5 +30,5 @@ pub fn lmdb_commit_benchmarks(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, lmdb_commit_benchmarks);
+criterion_group!(benches, mvcc_commit_benchmarks);
 criterion_main!(benches);

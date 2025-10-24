@@ -1,6 +1,6 @@
 use std::cmp::max;
 use clap::Parser;
-use umadb::dcbapi::DCBEvent;
+use umadb::dcb::DCBEvent;
 use umadb::grpc::GrpcEventStoreClient;
 use std::time::Instant;
 use futures::StreamExt;

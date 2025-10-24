@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use crate::common::{PageID, Position};
-use crate::dcbapi::{DCBError, DCBResult};
-use crate::lmdb::{Lmdb, Writer};
+use crate::dcb::{DCBError, DCBResult};
+use crate::mvcc::{Mvcc, Writer};
 use crate::node::Node;
 use crate::page::Page;
 use crate::tags_tree_nodes::{
@@ -17,12 +17,12 @@ use crate::tags_tree_nodes::{
 /// vector. Otherwise a new key/value pair is inserted at the correct sorted
 /// index.
 pub fn tags_tree_insert(
-    lmdb: &Lmdb,
+    mvcc: &Mvcc,
     writer: &mut Writer,
     tag: TagHash,
     pos: Position,
 ) -> DCBResult<()> {
-    let verbose = lmdb.verbose;
+    let verbose = mvcc.verbose;
     if verbose {
         println!("Inserting position {pos:?} for tag {tag:?}");
         println!("Tags root is {:?}", writer.tags_tree_root_id);
@@ -34,7 +34,7 @@ pub fn tags_tree_insert(
     // Traverse to the correct leaf, keeping track of parent ids and the child index taken at each step
     let mut stack: Vec<(PageID, usize)> = Vec::new();
     loop {
-        let current_page_ref = writer.get_page_ref(lmdb, current_page_id)?;
+        let current_page_ref = writer.get_page_ref(mvcc, current_page_id)?;
         match &current_page_ref.node {
             Node::TagsLeaf(_) => break,
             Node::TagsInternal(internal_node) => {
@@ -125,7 +125,7 @@ pub fn tags_tree_insert(
         let dirty_tag_id = {
             // No outstanding borrows of writer here
             // Make sure the page is present in this writer's cache before COW
-            let _ = writer.get_page_ref(lmdb, tag_root_id)?;
+            let _ = writer.get_page_ref(mvcc, tag_root_id)?;
             writer.get_dirty_page_id(tag_root_id)?
         };
         if dirty_tag_id != tag_root_id {
@@ -151,7 +151,7 @@ pub fn tags_tree_insert(
             let mut current_page_id = tag_root_id;
             let mut stack: Vec<(PageID, usize)> = Vec::new();
             loop {
-                let page_ref = writer.get_page_ref(lmdb, current_page_id)?;
+                let page_ref = writer.get_page_ref(mvcc, current_page_id)?;
                 match &page_ref.node {
                     Node::TagInternal(internal) => {
                         let child_idx = match internal.keys.binary_search(&pos) {
@@ -186,7 +186,7 @@ pub fn tags_tree_insert(
                         tleaf.positions.push(pos);
                         let page_bytes =
                             crate::page::PAGE_HEADER_SIZE + tleaf.calc_serialized_size();
-                        if page_bytes > lmdb.page_size {
+                        if page_bytes > mvcc.page_size {
                             // Move last pos to a new right leaf
                             let last_pos = tleaf
                                 .pop_last_position()
@@ -256,7 +256,7 @@ pub fn tags_tree_insert(
 
                 // Now check for internal overflow and split if needed
                 let parent_page = writer.get_mut_dirty(dirty_parent_id)?;
-                let needs_split = parent_page.calc_serialized_size() > lmdb.page_size;
+                let needs_split = parent_page.calc_serialized_size() > mvcc.page_size;
                 if needs_split {
                     if let Node::TagInternal(internal) = &mut parent_page.node {
                         if internal.keys.len() < 3 || internal.child_ids.len() < 4 {
@@ -327,9 +327,9 @@ pub fn tags_tree_insert(
     // If we appended inline, check if the page overflowed and migrate positions to a per-tag TagLeaf page
     if let Some(i) = inline_appended_index.take() {
         let sz = writer
-            .get_page_ref(lmdb, dirty_leaf_page_id)?
+            .get_page_ref(mvcc, dirty_leaf_page_id)?
             .calc_serialized_size();
-        if sz > lmdb.page_size {
+        if sz > mvcc.page_size {
             if verbose {
                 println!("Migrating inline positions to per-tag TagLeafNode for index {i}",);
             }
@@ -352,7 +352,7 @@ pub fn tags_tree_insert(
                         positions: pos_vec.clone(),
                     }
                     .calc_serialized_size();
-                if page_bytes <= lmdb.page_size {
+                if page_bytes <= mvcc.page_size {
                     let tag_leaf_id = writer.alloc_page_id();
                     let tag_leaf_page = Page::new(
                         tag_leaf_id,
@@ -370,7 +370,7 @@ pub fn tags_tree_insert(
                             positions: pos_vec.clone(),
                         }
                         .calc_serialized_size();
-                    if left_bytes > lmdb.page_size {
+                    if left_bytes > mvcc.page_size {
                         return Err(DCBError::DatabaseCorrupted(
                             "Recursive per-tag split not implemented".to_string(),
                         ));
@@ -422,7 +422,7 @@ pub fn tags_tree_insert(
     // Check if leaf overflows
     let needs_split = {
         let page = writer.get_mut_dirty(dirty_leaf_page_id)?;
-        page.calc_serialized_size() > lmdb.page_size
+        page.calc_serialized_size() > mvcc.page_size
     };
     if needs_split {
         let leaf_page = writer.get_mut_dirty(dirty_leaf_page_id)?;
@@ -449,7 +449,7 @@ pub fn tags_tree_insert(
 
             // Check new page size sanity
             let sz = new_leaf_page.calc_serialized_size();
-            if sz > lmdb.page_size {
+            if sz > mvcc.page_size {
                 return Err(DCBError::DatabaseCorrupted(
                     "Overflow tag positions to subtree not implemented".to_string(),
                 ));
@@ -518,7 +518,7 @@ pub fn tags_tree_insert(
         }
 
         // Now check for internal overflow after any insertion
-        let needs_split = parent_page.calc_serialized_size() > lmdb.page_size;
+        let needs_split = parent_page.calc_serialized_size() > mvcc.page_size;
         if needs_split {
             if let Node::TagsInternal(internal) = &mut parent_page.node {
                 if verbose {
@@ -589,7 +589,7 @@ pub fn tags_tree_insert(
 
 // Iterator over positions for a given tag in the tags tree
 pub struct TagsTreeIterator<'a> {
-    db: &'a Lmdb,
+    db: &'a Mvcc,
     dirty: &'a HashMap<PageID, Page>,
     tags_root_id: PageID,
     tag: TagHash,
@@ -607,7 +607,7 @@ enum IterState {
 }
 
 impl<'a> TagsTreeIterator<'a> {
-    pub fn new(db: &'a Lmdb, dirty: &'a HashMap<PageID, Page>, tags_root_id: PageID, tag: TagHash, after: Position) -> Self {
+    pub fn new(db: &'a Mvcc, dirty: &'a HashMap<PageID, Page>, tags_root_id: PageID, tag: TagHash, after: Position) -> Self {
         Self {
             db,
             dirty,
@@ -754,17 +754,17 @@ impl<'a> TagsTreeIterator<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lmdb::Lmdb;
+    use crate::mvcc::Mvcc;
     // use std::hint;
     // use std::time::Instant;
     use tempfile::{TempDir, tempdir};
 
     static VERBOSE: bool = false;
 
-    fn construct_db(page_size: usize) -> (TempDir, Lmdb) {
+    fn construct_db(page_size: usize) -> (TempDir, Mvcc) {
         let temp_dir = tempdir().unwrap();
-        let db_path = temp_dir.path().join("lmdb-test.db");
-        let db = Lmdb::new(&db_path, page_size, VERBOSE).unwrap();
+        let db_path = temp_dir.path().join("mvcc-test.db");
+        let db = Mvcc::new(&db_path, page_size, VERBOSE).unwrap();
         (temp_dir, db)
     }
 
@@ -773,10 +773,10 @@ mod tests {
         n.to_le_bytes()
     }
 
-    fn tags_tree_lookup(lmdb: &Lmdb, tags_root_id: PageID, tag: TagHash) -> DCBResult<Vec<Position>> {
+    fn tags_tree_lookup(mvcc: &Mvcc, tags_root_id: PageID, tag: TagHash) -> DCBResult<Vec<Position>> {
         // Reuse the iterator to traverse and collect all positions for the tag
         let dirty = HashMap::new();
-        let iter = TagsTreeIterator::new(lmdb, &dirty, tags_root_id, tag, Position(0));
+        let iter = TagsTreeIterator::new(mvcc, &dirty, tags_root_id, tag, Position(0));
         Ok(iter.collect())
     }
 

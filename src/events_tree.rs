@@ -1,18 +1,18 @@
 use crate::common::PageID;
 use crate::common::Position;
-use crate::dcbapi::{DCBError, DCBResult};
+use crate::dcb::{DCBError, DCBResult};
 use crate::events_tree_nodes::{
     EventInternalNode, EventLeafNode, EventOverflowNode, EventRecord, EventValue,
 };
-use crate::lmdb::{Lmdb, Writer};
+use crate::mvcc::{Mvcc, Writer};
 use crate::node::Node;
 use crate::page::{PAGE_HEADER_SIZE, Page};
 use std::collections::HashMap;
 
 // Helpers for storing large event data across overflow pages
-fn write_overflow_chain(lmdb: &Lmdb, writer: &mut Writer, data: &[u8]) -> DCBResult<PageID> {
+fn write_overflow_chain(mvcc: &Mvcc, writer: &mut Writer, data: &[u8]) -> DCBResult<PageID> {
     // Maximum payload per overflow page: page_size - header - next pointer (8 bytes)
-    let payload_cap = lmdb.page_size.saturating_sub(PAGE_HEADER_SIZE + 8);
+    let payload_cap = mvcc.page_size.saturating_sub(PAGE_HEADER_SIZE + 8);
     if payload_cap == 0 {
         return Err(DCBError::DatabaseCorrupted(
             "Page size too small to store overflow data".to_string(),
@@ -51,14 +51,14 @@ fn write_overflow_chain(lmdb: &Lmdb, writer: &mut Writer, data: &[u8]) -> DCBRes
     Ok(next_id)
 }
 
-fn read_overflow_chain(lmdb: &Lmdb, dirty: &HashMap<PageID, Page>, mut page_id: PageID) -> DCBResult<Vec<u8>> {
+fn read_overflow_chain(mvcc: &Mvcc, dirty: &HashMap<PageID, Page>, mut page_id: PageID) -> DCBResult<Vec<u8>> {
     let mut out: Vec<u8> = Vec::new();
     while page_id.0 != 0 {
         // Prefer the dirty (unflushed) page if present; otherwise read from disk
         let page = if let Some(p) = dirty.get(&page_id) {
             p.clone()
         } else {
-            lmdb.read_page(page_id)?
+            mvcc.read_page(page_id)?
         };
         match page.node {
             Node::EventOverflow(node) => {
@@ -75,7 +75,7 @@ fn read_overflow_chain(lmdb: &Lmdb, dirty: &HashMap<PageID, Page>, mut page_id: 
     Ok(out)
 }
 
-fn materialize_event_value(lmdb: &Lmdb, dirty: &HashMap<PageID, Page>, value: &EventValue) -> DCBResult<EventRecord> {
+fn materialize_event_value(mvcc: &Mvcc, dirty: &HashMap<PageID, Page>, value: &EventValue) -> DCBResult<EventRecord> {
     match value {
         EventValue::Inline(rec) => Ok(rec.clone()),
         EventValue::Overflow {
@@ -84,7 +84,7 @@ fn materialize_event_value(lmdb: &Lmdb, dirty: &HashMap<PageID, Page>, value: &E
             tags,
             root_id,
         } => {
-            let data = read_overflow_chain(lmdb, dirty, *root_id)?;
+            let data = read_overflow_chain(mvcc, dirty, *root_id)?;
             if (data.len() as u64) != *data_len {
                 return Err(DCBError::DatabaseCorrupted(
                     "Overflow data length mismatch".to_string(),
@@ -105,12 +105,12 @@ fn materialize_event_value(lmdb: &Lmdb, dirty: &HashMap<PageID, Page>, value: &E
 /// leaf page (using copy-on-write if necessary) and appends the provided
 /// Position to the keys and the EventRecord to the values.
 pub fn event_tree_append(
-    lmdb: &Lmdb,
+    mvcc: &Mvcc,
     writer: &mut Writer,
     event: EventRecord,
     position: Position,
 ) -> DCBResult<()> {
-    let verbose = lmdb.verbose;
+    let verbose = mvcc.verbose;
     if verbose {
         println!("Appending event: {position:?} {event:?}");
         println!("Root is {:?}", writer.events_tree_root_id);
@@ -121,7 +121,7 @@ pub fn event_tree_append(
     // Traverse the tree to find a leaf node
     let mut stack: Vec<PageID> = Vec::new();
     loop {
-        let current_page_ref = writer.get_page_ref(lmdb, current_page_id)?;
+        let current_page_ref = writer.get_page_ref(mvcc, current_page_id)?;
         if matches!(current_page_ref.node, Node::EventLeaf(_)) {
             break;
         }
@@ -143,7 +143,7 @@ pub fn event_tree_append(
 
     // Decide inline vs overflow based on data length before mut-borrowing the page
     let pending_value = if event.data.len() > u16::MAX as usize {
-        let root_id = write_overflow_chain(lmdb, writer, &event.data)?;
+        let root_id = write_overflow_chain(mvcc, writer, &event.data)?;
         EventValue::Overflow {
             event_type: event.event_type.clone(),
             data_len: event.data.len() as u64,
@@ -177,7 +177,7 @@ pub fn event_tree_append(
 
                 // Check if the leaf needs splitting by estimating the serialized size
                 let serialized_size = dirty_leaf_page.calc_serialized_size();
-                if serialized_size > lmdb.page_size {
+                if serialized_size > mvcc.page_size {
                     if let Node::EventLeaf(dirty_leaf_node) = &mut dirty_leaf_page.node {
                         let (last_key, last_value) = dirty_leaf_node.pop_last_key_and_value()?;
                         if verbose {
@@ -215,9 +215,9 @@ pub fn event_tree_append(
         };
         let mut new_leaf_page = Page::new(new_leaf_page_id, Node::EventLeaf(new_leaf_node.clone()));
         let mut serialized_size = new_leaf_page.calc_serialized_size();
-        if serialized_size > lmdb.page_size {
+        if serialized_size > mvcc.page_size {
             if let EventValue::Inline(rec) = last_value {
-                let root_id = write_overflow_chain(lmdb, writer, &rec.data)?;
+                let root_id = write_overflow_chain(mvcc, writer, &rec.data)?;
                 last_value = EventValue::Overflow {
                     event_type: rec.event_type,
                     data_len: rec.data.len() as u64,
@@ -231,10 +231,10 @@ pub fn event_tree_append(
                 new_leaf_page = Page::new(new_leaf_page_id, Node::EventLeaf(new_leaf_node.clone()));
                 serialized_size = new_leaf_page.calc_serialized_size();
             }
-            if serialized_size > lmdb.page_size {
+            if serialized_size > mvcc.page_size {
                 return Err(DCBError::DatabaseCorrupted(format!(
                     "Event too large even after overflow conversion (size: {serialized_size}, max: {})",
-                    lmdb.page_size
+                    mvcc.page_size
                 )));
             }
         }
@@ -303,7 +303,7 @@ pub fn event_tree_append(
 
         // Check if the internal page needs splitting
 
-        if dirty_internal_page.calc_serialized_size() > lmdb.page_size {
+        if dirty_internal_page.calc_serialized_size() > mvcc.page_size {
             if let Node::EventInternal(dirty_internal_node) = &mut dirty_internal_page.node {
                 if verbose {
                     println!("Splitting internal {dirty_page_id:?}...");
@@ -396,7 +396,7 @@ pub fn event_tree_append(
 }
 
 pub fn event_tree_lookup(
-    lmdb: &Lmdb,
+    mvcc: &Mvcc,
     dirty: &HashMap<PageID, Page>,
     events_tree_root_id: PageID,
     position: Position,
@@ -407,7 +407,7 @@ pub fn event_tree_lookup(
         let page = if let Some(p) = dirty.get(&current_page_id) {
             p.clone()
         } else {
-            lmdb.read_page(current_page_id)?
+            mvcc.read_page(current_page_id)?
         };
         match &page.node {
             Node::EventInternal(internal) => {
@@ -425,7 +425,7 @@ pub fn event_tree_lookup(
             }
             Node::EventLeaf(leaf) => match leaf.keys.binary_search(&position) {
                 Ok(i) => {
-                    let rec = materialize_event_value(lmdb, dirty,&leaf.values[i])?;
+                    let rec = materialize_event_value(mvcc, dirty,&leaf.values[i])?;
                     return Ok(rec);
                 }
                 Err(_) => {
@@ -447,7 +447,7 @@ pub fn event_tree_lookup(
 }
 
 pub struct EventIterator<'a> {
-    pub db: &'a Lmdb,
+    pub db: &'a Mvcc,
     pub dirty: &'a HashMap<PageID, Page>,
     pub stack: Vec<(PageID, usize)>,
     pub page_cache: HashMap<PageID, Page>,
@@ -455,7 +455,7 @@ pub struct EventIterator<'a> {
 }
 
 impl<'a> EventIterator<'a> {
-    pub fn new(db: &'a Lmdb, dirty: &'a HashMap<PageID, Page>, events_tree_root_id: PageID, after: Option<Position>) -> Self {
+    pub fn new(db: &'a Mvcc, dirty: &'a HashMap<PageID, Page>, events_tree_root_id: PageID, after: Option<Position>) -> Self {
         let next_position = (events_tree_root_id, 0);
         let after = after.unwrap_or(Position(0));
         Self {
@@ -598,10 +598,10 @@ mod tests {
     static VERBOSE: bool = false;
 
     // Helper function to create a test database with a specified page size
-    fn construct_db(page_size: usize) -> (tempfile::TempDir, Lmdb) {
+    fn construct_db(page_size: usize) -> (tempfile::TempDir, Mvcc) {
         let temp_dir = tempdir().unwrap();
-        let db_path = temp_dir.path().join("lmdb-test.db");
-        let db = Lmdb::new(&db_path, page_size, VERBOSE).unwrap();
+        let db_path = temp_dir.path().join("mvcc-test.db");
+        let db = Mvcc::new(&db_path, page_size, VERBOSE).unwrap();
         (temp_dir, db)
     }
 

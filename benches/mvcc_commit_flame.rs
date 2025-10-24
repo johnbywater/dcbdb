@@ -3,8 +3,8 @@ use pprof::criterion::{PProfProfiler, Output};
 use tempfile::tempdir;
 use umadb::bench_api::BenchDb;
 
-pub fn lmdb_commit_benchmarks(c: &mut Criterion) {
-    let mut group = c.benchmark_group("lmdb_commit_flame");
+pub fn mvcc_commit_benchmarks(c: &mut Criterion) {
+    let mut group = c.benchmark_group("mvcc_commit_flame");
 
     // Create a temporary database once per benchmark group
     let dir = tempdir().expect("tempdir");
@@ -67,13 +67,13 @@ where
 
 fn generate_flamegraphs(db: &BenchDb, page_size: usize) -> std::io::Result<()> {
     // commit_empty
-    profile_to_svg(&format!("lmdb_commit_empty_{}", page_size), || {
+    profile_to_svg(&format!("mvcc_commit_empty_{}", page_size), || {
         db.commit_empty().expect("commit_empty");
     })?;
 
     // commit_with_dirty for N in {1,10,100}
     for &n in &[1usize, 10, 100] {
-        profile_to_svg(&format!("lmdb_commit_with_dirty_{}", n), || {
+        profile_to_svg(&format!("mvcc_commit_with_dirty_{}", n), || {
             db.commit_with_dirty(n).expect("commit_with_dirty");
     })?;
     }
@@ -99,7 +99,7 @@ fn flame_config() -> Criterion {
 criterion_group! {
     name = benches;
     config = flame_config();
-    targets = lmdb_commit_benchmarks
+    targets = mvcc_commit_benchmarks
 }
 
 criterion_main!(benches);

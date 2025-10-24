@@ -94,9 +94,9 @@ name = "header_node_bench"
 harness = false
 
 [[bench]]
-name = "lmdb_commit_bench"
+name = "mvcc_commit_bench"
 harness = false
 
 [[bench]]
-name = "lmdb_commit_flame"
+name = "mvcc_commit_flame"
 harness = false

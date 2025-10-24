@@ -4,13 +4,13 @@ use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 
 use crate::common::{PageID, Position};
-use crate::dcbapi::{
+use crate::dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBReadResponse, DCBResult,
     DCBSequencedEvent,
 };
 use crate::events_tree::{EventIterator, event_tree_append, event_tree_lookup};
 use crate::events_tree_nodes::EventRecord;
-use crate::lmdb::{Lmdb, Writer};
+use crate::mvcc::{Mvcc, Writer};
 use crate::page::Page;
 use crate::tags_tree::{tags_tree_insert, TagsTreeIterator};
 use crate::tags_tree_nodes::TagHash;
@@ -19,7 +19,7 @@ pub static DEFAULT_PAGE_SIZE: usize = 4096;
 
 /// LMDB-backed EventStore implementing the DCBEventStore
 pub struct EventStore {
-    lmdb: std::sync::Arc<Lmdb>,
+    mvcc: std::sync::Arc<Mvcc>,
 }
 
 impl EventStore {
@@ -32,12 +32,12 @@ impl EventStore {
         } else {
             p.to_path_buf()
         };
-        let lmdb = Lmdb::new(&file_path, DEFAULT_PAGE_SIZE, false)?;
-        Ok(Self { lmdb: std::sync::Arc::new(lmdb) })
+        let mvcc = Mvcc::new(&file_path, DEFAULT_PAGE_SIZE, false)?;
+        Ok(Self { mvcc: std::sync::Arc::new(mvcc) })
     }
 
-    pub fn from_arc(lmdb: std::sync::Arc<Lmdb>) -> Self {
-        Self { lmdb }
+    pub fn from_arc(mvcc: std::sync::Arc<Mvcc>) -> Self {
+        Self { mvcc }
     }
 }
 
@@ -105,7 +105,7 @@ pub fn tag_to_hash(tag: &str) -> TagHash {
 /// - insert the position for each tag into the tags tree
 ///
 /// Caller is responsible for committing the writer.
-pub fn unconditional_append(lmdb: &Lmdb, writer: &mut Writer, events: Vec<DCBEvent>) -> DCBResult<u64> {
+pub fn unconditional_append(mvcc: &Mvcc, writer: &mut Writer, events: Vec<DCBEvent>) -> DCBResult<u64> {
     let mut last_pos_u64: u64 = 0;
 
     for ev in events.into_iter() {
@@ -118,10 +118,10 @@ pub fn unconditional_append(lmdb: &Lmdb, writer: &mut Writer, events: Vec<DCBEve
         };
         // Clone tags so we can index them after moving record into event_tree_append
         let tags = record.tags.clone();
-        event_tree_append(lmdb, writer, record, position)?;
+        event_tree_append(mvcc, writer, record, position)?;
         for tag in tags.iter() {
             let tag_hash: TagHash = tag_to_hash(tag);
-            tags_tree_insert(lmdb, writer, tag_hash, position)?;
+            tags_tree_insert(mvcc, writer, tag_hash, position)?;
         }
     }
 
@@ -131,7 +131,7 @@ pub fn unconditional_append(lmdb: &Lmdb, writer: &mut Writer, events: Vec<DCBEve
 /// Read events using the tags index by merging per-tag iterators, grouping by position,
 /// filtering by tag and type matches, and then looking up the event record.
 pub fn read_conditional(
-    lmdb: &Lmdb,
+    mvcc: &Mvcc,
     dirty: &HashMap<PageID, Page>,
     events_tree_root_id: PageID,
     tags_tree_root_id: PageID,
@@ -147,7 +147,7 @@ pub fn read_conditional(
 
     // If no items, return all events with after/limit respected via sequential scan
     if query.items.is_empty() {
-        let mut iter = EventIterator::new(lmdb, dirty, events_tree_root_id, Some(after));
+        let mut iter = EventIterator::new(mvcc, dirty, events_tree_root_id, Some(after));
         let mut out: Vec<DCBSequencedEvent> = Vec::new();
         'outer_all: loop {
             let batch = iter.next_batch(limit.unwrap_or(SCAN_BATCH_SIZE))?;
@@ -177,7 +177,7 @@ pub fn read_conditional(
     let all_items_have_tags = query.items.iter().all(|it| !it.tags.is_empty());
     if !all_items_have_tags {
         // Fallback: sequentially scan all events and apply the same matching logic
-        let mut iter = EventIterator::new(lmdb, dirty, events_tree_root_id, Some(after));
+        let mut iter = EventIterator::new(mvcc, dirty, events_tree_root_id, Some(after));
         let mut out: Vec<DCBSequencedEvent> = Vec::new();
         let matches_item = |rec: &EventRecord| -> bool {
             for item in &query.items {
@@ -262,7 +262,7 @@ pub fn read_conditional(
     let mut tag_iters: Vec<PositionTagQiidIterator<_>> = Vec::new();
     for (tag, qiids) in tag_qiis.iter() {
         let tag_hash: TagHash = tag_to_hash(tag);
-        let positions_iter = TagsTreeIterator::new(lmdb, dirty, tags_tree_root_id, tag_hash, after); // yields positions for tag
+        let positions_iter = TagsTreeIterator::new(mvcc, dirty, tags_tree_root_id, tag_hash, after); // yields positions for tag
         tag_iters.push(PositionTagQiidIterator::new(
             positions_iter,
             tag.clone(),
@@ -349,7 +349,7 @@ pub fn read_conditional(
         }
 
         // Lookup the event record at position
-        let rec = event_tree_lookup(lmdb, dirty, events_tree_root_id, pos)?;
+        let rec = event_tree_lookup(mvcc, dirty, events_tree_root_id, pos)?;
 
         // Check type and actual tag matching against any of the matching items to avoid hash-collision false positives
         let mut match_ok = false;
@@ -395,8 +395,8 @@ impl DCBEventStore for EventStore {
         limit: Option<usize>,
         _subscribe: bool,
     ) -> DCBResult<Box<dyn DCBReadResponse + '_>> {
-        let lmdb = &self.lmdb;
-        let reader = lmdb.reader()?;
+        let mvcc = &self.mvcc;
+        let reader = mvcc.reader()?;
 
         // Compute last committed position for unlimited head
         let last_committed_position = reader.next_position.0.saturating_sub(1);
@@ -406,7 +406,7 @@ impl DCBEventStore for EventStore {
         let after_pos = Position(after.unwrap_or(0));
 
         // Delegate to read_conditional
-        let events = read_conditional(lmdb, &HashMap::new(), reader.events_tree_root_id, reader.tags_tree_root_id, q, after_pos, limit)?;
+        let events = read_conditional(mvcc, &HashMap::new(), reader.events_tree_root_id, reader.tags_tree_root_id, q, after_pos, limit)?;
 
         // Compute head according to semantics
         let head = if limit.is_none() {
@@ -427,7 +427,7 @@ impl DCBEventStore for EventStore {
     }
 
     fn head(&self) -> DCBResult<Option<u64>> {
-        let db = &self.lmdb;
+        let db = &self.mvcc;
         let (_, header) = db.get_latest_header()?;
         let last = header.next_position.0.saturating_sub(1);
         if last == 0 { Ok(None) } else { Ok(Some(last)) }
@@ -438,13 +438,13 @@ impl DCBEventStore for EventStore {
         events: Vec<DCBEvent>,
         condition: Option<DCBAppendCondition>,
     ) -> DCBResult<u64> {
-        let lmdb = &self.lmdb;
-        let mut writer = lmdb.writer()?;
+        let mvcc = &self.mvcc;
+        let mut writer = mvcc.writer()?;
 
         // Check condition using read_conditional (limit 1), starting after the provided position
         if let Some(cond) = condition {
             let after = Position(cond.after.unwrap_or(0));
-            let found = read_conditional(lmdb, &writer.dirty, writer.events_tree_root_id, writer.tags_tree_root_id, cond.fail_if_events_match.clone(), after, Some(1))?;
+            let found = read_conditional(mvcc, &writer.dirty, writer.events_tree_root_id, writer.tags_tree_root_id, cond.fail_if_events_match.clone(), after, Some(1))?;
             if let Some(matched) = found.first() {
                 let msg = format!("matching event: {:?} condition: {:?}", matched, cond.fail_if_events_match);
                 return Err(DCBError::IntegrityError(msg));
@@ -457,8 +457,8 @@ impl DCBEventStore for EventStore {
         }
 
         // Append unconditionally then commit
-        let last = unconditional_append(lmdb, &mut writer, events)?;
-        lmdb.commit(&mut writer)?;
+        let last = unconditional_append(mvcc, &mut writer, events)?;
+        mvcc.commit(&mut writer)?;
         Ok(last)
     }
 }
@@ -476,8 +476,8 @@ impl EventStore {
     ) -> DCBResult<Vec<DCBResult<u64>>> {
         // println!("Processing batch of {} items", items.len());
 
-        let lmdb = &self.lmdb;
-        let mut writer = lmdb.writer()?;
+        let mvcc = &self.mvcc;
+        let mut writer = mvcc.writer()?;
         let mut results: Vec<DCBResult<u64>> = Vec::with_capacity(items.len());
 
         for (events, condition) in items.into_iter() {
@@ -485,7 +485,7 @@ impl EventStore {
             if let Some(cond) = condition {
                 let after = Position(cond.after.unwrap_or(0));
                 let found = read_conditional(
-                    lmdb,
+                    mvcc,
                     &writer.dirty,
                     writer.events_tree_root_id,
                     writer.tags_tree_root_id,
@@ -515,7 +515,7 @@ impl EventStore {
             }
 
             // Append unconditionally
-            match unconditional_append(lmdb, &mut writer, events) {
+            match unconditional_append(mvcc, &mut writer, events) {
                 Ok(last) => results.push(Ok(last)),
                 Err(e) => {
                     // Record error for this item and continue
@@ -525,7 +525,7 @@ impl EventStore {
         }
 
         // Single commit at the end of the batch
-        lmdb.commit(&mut writer)?;
+        mvcc.commit(&mut writer)?;
         Ok(results)
     }
 }
@@ -533,7 +533,7 @@ impl EventStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dcbapi::{DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem};
+    use crate::dcb::{DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem};
     use crate::page::Page;
     use std::collections::HashMap;
     use serial_test::serial;
@@ -541,7 +541,7 @@ mod tests {
 
     // Backward-compatible wrapper for tests: call new read_conditional with an empty dirty map
     fn read_conditional(
-        lmdb: &Lmdb,
+        mvcc: &Mvcc,
         events_tree_root_id: PageID,
         tags_tree_root_id: PageID,
         query: DCBQuery,
@@ -549,7 +549,7 @@ mod tests {
         limit: Option<usize>,
     ) -> DCBResult<Vec<DCBSequencedEvent>> {
         super::read_conditional(
-            lmdb,
+            mvcc,
             &HashMap::<PageID, Page>::new(),
             events_tree_root_id,
             tags_tree_root_id,
@@ -584,10 +584,10 @@ mod tests {
     }
 
     // Create DB with the standard events; keep temp dir alive by returning it
-    fn setup_db_with_standard_events() -> (tempfile::TempDir, Lmdb, Vec<DCBEvent>) {
+    fn setup_db_with_standard_events() -> (tempfile::TempDir, Mvcc, Vec<DCBEvent>) {
         let temp_dir = tempdir().unwrap();
         let db_path = temp_dir.path().join("mvcc-api-test.db");
-        let db = Lmdb::new(db_path.as_ref(), DEFAULT_PAGE_SIZE, VERBOSE).unwrap();
+        let db = Mvcc::new(db_path.as_ref(), DEFAULT_PAGE_SIZE, VERBOSE).unwrap();
         let input = standard_events();
         let mut writer = db.writer().unwrap();
         let last = unconditional_append(&db, &mut writer, input.clone()).unwrap();
@@ -602,36 +602,36 @@ mod tests {
     #[test]
     #[serial]
     fn empty_query_after_and_limit() {
-        let (_tmp, mut lmdb, input) = setup_db_with_standard_events();
+        let (_tmp, mut mvcc, input) = setup_db_with_standard_events();
 
         // after = 0 -> all
-        let reader = lmdb.reader().unwrap();
+        let reader = mvcc.reader().unwrap();
 
-        let all = read_conditional(&mut lmdb, reader.events_tree_root_id, reader.tags_tree_root_id, DCBQuery { items: vec![] }, Position(0), None).unwrap();
+        let all = read_conditional(&mut mvcc, reader.events_tree_root_id, reader.tags_tree_root_id, DCBQuery { items: vec![] }, Position(0), None).unwrap();
         assert_eq!(all.len(), input.len());
         assert!(all.windows(2).all(|w| w[0].position < w[1].position));
 
         // after = first -> tail
         let first = all[0].position;
         let tail =
-            read_conditional(&mut lmdb, reader.events_tree_root_id, reader.tags_tree_root_id, DCBQuery { items: vec![] }, Position(first), None).unwrap();
+            read_conditional(&mut mvcc, reader.events_tree_root_id, reader.tags_tree_root_id, DCBQuery { items: vec![] }, Position(first), None).unwrap();
         assert_eq!(tail.len(), input.len() - 1);
 
         // after = last -> empty
         let last = all.last().unwrap().position;
         let none =
-            read_conditional(&mut lmdb, reader.events_tree_root_id, reader.tags_tree_root_id, DCBQuery { items: vec![] }, Position(last), None).unwrap();
+            read_conditional(&mut mvcc, reader.events_tree_root_id, reader.tags_tree_root_id, DCBQuery { items: vec![] }, Position(last), None).unwrap();
         assert!(none.is_empty());
 
         // limits
         let lim0 =
-            read_conditional(&mut lmdb, reader.events_tree_root_id, reader.tags_tree_root_id, DCBQuery { items: vec![] }, Position(0), Some(0)).unwrap();
+            read_conditional(&mut mvcc, reader.events_tree_root_id, reader.tags_tree_root_id, DCBQuery { items: vec![] }, Position(0), Some(0)).unwrap();
         assert!(lim0.is_empty());
         let lim3 =
-            read_conditional(&mut lmdb, reader.events_tree_root_id, reader.tags_tree_root_id, DCBQuery { items: vec![] }, Position(0), Some(3)).unwrap();
+            read_conditional(&mut mvcc, reader.events_tree_root_id, reader.tags_tree_root_id, DCBQuery { items: vec![] }, Position(0), Some(3)).unwrap();
         assert_eq!(lim3.len(), 3);
         let lim20 =
-            read_conditional(&mut lmdb, reader.events_tree_root_id, reader.tags_tree_root_id, DCBQuery { items: vec![] }, Position(0), Some(20)).unwrap();
+            read_conditional(&mut mvcc, reader.events_tree_root_id, reader.tags_tree_root_id, DCBQuery { items: vec![] }, Position(0), Some(20)).unwrap();
         assert_eq!(lim20.len(), input.len());
     }
 
@@ -759,7 +759,7 @@ mod tests {
     fn fallback_types_only_after_and_limit() {
         let temp_dir = tempdir().unwrap();
         let db_path = temp_dir.path().join("mvcc-fallback-types-only.db");
-        let mut db = Lmdb::new(db_path.as_ref(), DEFAULT_PAGE_SIZE, VERBOSE).unwrap();
+        let mut db = Mvcc::new(db_path.as_ref(), DEFAULT_PAGE_SIZE, VERBOSE).unwrap();
 
         // Use a smaller custom set to make counts obvious
         let events = vec![

@@ -1,8 +1,8 @@
-use umadb::dcbapi::{
+use umadb::dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem, DCBSequencedEvent,
 };
 // gRPC client sync trait support has been removed; tests use the local EventStore
-use umadb::event_store::EventStore;
+use umadb::db::EventStore;
 use tempfile::tempdir;
 use uuid::Uuid;
 use umadb::grpc::{GrpcEventStoreClient, start_grpc_server_with_shutdown};
@@ -1000,7 +1000,7 @@ impl Iterator for SyncReadResponse {
     }
 }
 
-impl umadb::dcbapi::DCBReadResponse for SyncReadResponse {
+impl umadb::dcb::DCBReadResponse for SyncReadResponse {
     fn head(&self) -> Option<u64> { self.head }
     fn collect_with_head(&mut self) -> (Vec<DCBSequencedEvent>, Option<u64>) {
         let mut out = Vec::with_capacity(self.events.len() - self.idx);
@@ -1022,7 +1022,7 @@ impl DCBEventStore for SyncGrpcEventStoreClient {
         after: Option<u64>,
         limit: Option<usize>,
         subscribe: bool,
-    ) -> Result<Box<dyn umadb::dcbapi::DCBReadResponse + '_>, DCBError> {
+    ) -> Result<Box<dyn umadb::dcb::DCBReadResponse + '_>, DCBError> {
         use futures::StreamExt as _;
         // We only support subscribe=false in this sync wrapper for tests
         assert!(!subscribe, "SyncGrpcEventStore::read only supports subscribe=false in tests");

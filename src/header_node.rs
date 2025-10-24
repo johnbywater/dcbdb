@@ -1,6 +1,6 @@
 use crate::common::Position;
 use crate::common::{PageID, Tsn};
-use crate::dcbapi::{DCBError, DCBResult};
+use crate::dcb::{DCBError, DCBResult};
 
 // Node type definitions
 #[derive(Debug, Clone, PartialEq, Eq)]

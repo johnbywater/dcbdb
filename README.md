@@ -141,7 +141,7 @@ The example client:
 UmaDB provides a Rust client that you can use to interact with the gRPC server in your own code. Here's an example of how to use it:
 
 ```rust
-use umadb::dcbapi::{DCBEvent, DCBQuery, DCBQueryItem};
+use umadb::dcb::{DCBEvent, DCBQuery, DCBQueryItem};
 use umadb::grpc::GrpcEventStoreClient;
 
 #[tokio::main]
@@ -192,7 +192,7 @@ You can use a query as the consistency boundary for your write (carried inside a
 Example:
 
 ```rust
-use umadb::dcbapi::{DCBEvent, DCBAppendCondition, DCBQuery, DCBQueryItem};
+use umadb::dcb::{DCBEvent, DCBAppendCondition, DCBQuery, DCBQueryItem};
 use umadb::grpc::GrpcEventStoreClient;
 
 #[tokio::main]
@@ -255,7 +255,7 @@ Example: simple subscription from the beginning
 
 ```rust
 use umadb::grpc::GrpcEventStoreClient;
-use umadb::dcbapi::DCBEvent;
+use umadb::dcb::DCBEvent;
 use futures::StreamExt;
 
 #[tokio::main]

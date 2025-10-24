@@ -1,5 +1,5 @@
 use crate::common::{PageID, Position};
-use crate::dcbapi::{DCBError, DCBResult};
+use crate::dcb::{DCBError, DCBResult};
 
 /// Length in bytes of the hashed tag key used in tag index leaf/internal nodes
 pub const TAG_HASH_LEN: usize = 8;

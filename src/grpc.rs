@@ -6,12 +6,12 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Code, transport::Server};
 
-use crate::dcbapi::{
+use crate::dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem, DCBResult,
     DCBSequencedEvent,
 };
-use crate::event_store::{EventStore, read_conditional, DEFAULT_PAGE_SIZE};
-use crate::lmdb::Lmdb;
+use crate::db::{EventStore, read_conditional, DEFAULT_PAGE_SIZE};
+use crate::mvcc::Mvcc;
 
 // Include the generated proto code
 pub mod umadb {
@@ -109,7 +109,7 @@ enum EventStoreRequest {
 
 // Thread-safe wrapper for EventStore
 struct EventStoreHandle {
-    lmdb: std::sync::Arc<Lmdb>,
+    mvcc: std::sync::Arc<Mvcc>,
     head_tx: watch::Sender<Option<u64>>,
     request_tx: mpsc::Sender<EventStoreRequest>,
 }
@@ -122,14 +122,14 @@ impl EventStoreHandle {
         // Build a shared LMDB instance (Arc) upfront so reads can proceed concurrently on this thread
         let p = path.as_ref();
         let file_path = if p.is_dir() { p.join("dcb.db") } else { p.to_path_buf() };
-        let lmdb = std::sync::Arc::new(
-            Lmdb::new(&file_path, DEFAULT_PAGE_SIZE, false)
+        let mvcc = std::sync::Arc::new(
+            Mvcc::new(&file_path, DEFAULT_PAGE_SIZE, false)
                 .map_err(|e| std::io::Error::other(format!("Failed to init LMDB: {e:?}")))?,
         );
 
         // Initialize head watch channel with current head
         let init_head = {
-            let (_, header) = lmdb
+            let (_, header) = mvcc
                 .get_latest_header()
                 .map_err(|e| std::io::Error::other(format!("Failed to read header: {e:?}")))?;
             let last = header.next_position.0.saturating_sub(1);
@@ -138,10 +138,10 @@ impl EventStoreHandle {
         let (head_tx, _head_rx) = watch::channel::<Option<u64>>(init_head);
 
         // Spawn a thread to run the EventStore for serialized write operations
-        let lmdb_for_writer = lmdb.clone();
+        let mvcc_for_writer = mvcc.clone();
         let head_tx_writer = head_tx.clone();
         thread::spawn(move || {
-            let event_store = EventStore::from_arc(lmdb_for_writer);
+            let event_store = EventStore::from_arc(mvcc_for_writer);
 
             // Create a runtime for async operations
             let rt = tokio::runtime::Runtime::new().unwrap();
@@ -235,7 +235,7 @@ impl EventStoreHandle {
             });
         });
 
-        Ok(Self { lmdb, head_tx, request_tx })
+        Ok(Self { mvcc, head_tx, request_tx })
     }
 
     async fn read(
@@ -245,7 +245,7 @@ impl EventStoreHandle {
         limit: Option<usize>,
     ) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
         // Offload blocking read to a dedicated threadpool
-        let db = self.lmdb.clone();
+        let db = self.mvcc.clone();
         tokio::task::spawn_blocking(move || -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
             let reader = db.reader()?;
             let last_committed_position = reader.next_position.0.saturating_sub(1);
@@ -278,7 +278,7 @@ impl EventStoreHandle {
     ) -> DCBResult<u64> {
         // Concurrent pre-check of condition using a read-only view in a blocking thread.
         let adjusted_condition = if let Some(cond_in) = condition {
-            let db = self.lmdb.clone();
+            let db = self.mvcc.clone();
             tokio::task::spawn_blocking(move || -> DCBResult<Option<DCBAppendCondition>> {
                 let mut cond = cond_in;
                 let reader = db.reader()?;
@@ -344,7 +344,7 @@ impl EventStoreHandle {
 
     async fn head(&self) -> DCBResult<Option<u64>> {
         // Offload blocking head read to a dedicated threadpool
-        let db = self.lmdb.clone();
+        let db = self.mvcc.clone();
         tokio::task::spawn_blocking(move || -> DCBResult<Option<u64>> {
             let (_, header) = db
                 .get_latest_header()
@@ -366,7 +366,7 @@ impl EventStoreHandle {
 impl Clone for EventStoreHandle {
     fn clone(&self) -> Self {
         Self {
-            lmdb: self.lmdb.clone(),
+            mvcc: self.mvcc.clone(),
             head_tx: self.head_tx.clone(),
             request_tx: self.request_tx.clone(),
         }
@@ -675,12 +675,12 @@ impl GrpcEventStoreClient {
     // Async inherent methods: use the gRPC client directly (no trait required)
     pub async fn read(
         &self,
-        query: Option<crate::dcbapi::DCBQuery>,
+        query: Option<crate::dcb::DCBQuery>,
         after: Option<u64>,
         limit: Option<usize>,
         subscribe: bool,
         batch_size: Option<usize>,
-    ) -> crate::dcbapi::DCBResult<Pin<Box<dyn futures::Stream<Item = crate::dcbapi::DCBResult<crate::dcbapi::DCBSequencedEvent>> + Send>>> {
+    ) -> crate::dcb::DCBResult<Pin<Box<dyn futures::Stream<Item = crate::dcb::DCBResult<crate::dcb::DCBSequencedEvent>> + Send>>> {
         // Convert API types to proto types
         let query_proto = query.map(|q| QueryProto {
             items: q
@@ -698,7 +698,7 @@ impl GrpcEventStoreClient {
 
         // Increase channel buffer to reduce backpressure when the consumer is slightly slower,
         // especially under concurrent readers. A deeper buffer improves throughput scaling.
-        let (tx, rx) = mpsc::channel::<crate::dcbapi::DCBResult<crate::dcbapi::DCBSequencedEvent>>(2048);
+        let (tx, rx) = mpsc::channel::<crate::dcb::DCBResult<crate::dcb::DCBSequencedEvent>>(2048);
         tokio::spawn(async move {
             loop {
                 match stream.message().await {
@@ -706,9 +706,9 @@ impl GrpcEventStoreClient {
                         if let Some(batch) = resp.batch {
                             for e in batch.events.into_iter() {
                                 if let Some(ev) = e.event {
-                                    let out = crate::dcbapi::DCBSequencedEvent {
+                                    let out = crate::dcb::DCBSequencedEvent {
                                         position: e.position,
-                                        event: crate::dcbapi::DCBEvent { event_type: ev.event_type, tags: ev.tags, data: ev.data },
+                                        event: crate::dcb::DCBEvent { event_type: ev.event_type, tags: ev.tags, data: ev.data },
                                     };
                                     if tx.send(Ok(out)).await.is_err() { return; }
                                 }
@@ -729,9 +729,9 @@ impl GrpcEventStoreClient {
 
     pub async fn append(
         &self,
-        events: Vec<crate::dcbapi::DCBEvent>,
-        condition: Option<crate::dcbapi::DCBAppendCondition>,
-    ) -> crate::dcbapi::DCBResult<u64> {
+        events: Vec<crate::dcb::DCBEvent>,
+        condition: Option<crate::dcb::DCBAppendCondition>,
+    ) -> crate::dcb::DCBResult<u64> {
         let events_proto: Vec<EventProto> = events
             .into_iter()
             .map(|e| EventProto { event_type: e.event_type, tags: e.tags, data: e.data })
@@ -757,7 +757,7 @@ impl GrpcEventStoreClient {
         }
     }
 
-    pub async fn head(&self) -> crate::dcbapi::DCBResult<Option<u64>> {
+    pub async fn head(&self) -> crate::dcb::DCBResult<Option<u64>> {
         let mut client = self.client.clone();
         match client.head(HeadRequestProto {}).await {
             Ok(response) => Ok(response.into_inner().position),

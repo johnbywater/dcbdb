@@ -1,4 +1,4 @@
-use umadb::dcbapi::DCBEvent;
+use umadb::dcb::DCBEvent;
 use umadb::grpc::{start_grpc_server_with_shutdown, GrpcEventStoreClient};
 use futures::StreamExt;
 

@@ -1,7 +1,7 @@
 use crate::common::PageID;
 use crate::common::Position;
-use crate::dcbapi::DCBError;
-use crate::dcbapi::DCBResult;
+use crate::dcb::DCBError;
+use crate::dcb::DCBResult;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EventRecord {

@@ -1,6 +1,6 @@
 use crate::common::Position;
 use crate::common::{PageID, Tsn};
-use crate::dcbapi::{DCBError, DCBResult};
+use crate::dcb::{DCBError, DCBResult};
 use crate::events_tree_nodes::EventLeafNode;
 use crate::free_lists_tree_nodes::{FreeListInternalNode, FreeListLeafNode};
 use crate::header_node::HeaderNode;
@@ -55,8 +55,8 @@ pub struct Writer {
     pub verbose: bool,
 }
 
-// Main LMDB structure
-pub struct Lmdb {
+// Main MVCC structure
+pub struct Mvcc {
     pub pager: Pager,
     pub reader_tsns: Mutex<HashMap<usize, Tsn>>,
     pub writer_lock: Mutex<()>,
@@ -74,13 +74,13 @@ pub struct Lmdb {
     pub verbose: bool,
 }
 
-impl Lmdb {
+impl Mvcc {
     pub fn new(path: &Path, page_size: usize, verbose: bool) -> DCBResult<Self> {
         let pager = Pager::new(path, page_size)?;
         let header_page_id0 = PageID(0);
         let header_page_id1 = PageID(1);
 
-        let lmdb = Self {
+        let mvcc = Self {
             pager,
             reader_tsns: Mutex::new(HashMap::new()),
             writer_lock: Mutex::new(()),
@@ -109,7 +109,7 @@ impl Lmdb {
             verbose,
         };
 
-        if lmdb.pager.is_file_new {
+        if mvcc.pager.is_file_new {
             // Initialize new database
             let freetree_root_id = PageID(2);
             let position_root_id = PageID(3);
@@ -126,15 +126,15 @@ impl Lmdb {
                 next_position: Position(1),
             };
             {
-                let mut h0 = lmdb.header0.lock().unwrap();
+                let mut h0 = mvcc.header0.lock().unwrap();
                 *h0 = header_node0.clone();
-                let mut h1 = lmdb.header1.lock().unwrap();
+                let mut h1 = mvcc.header1.lock().unwrap();
                 *h1 = header_node0.clone();
             }
 
             // Write header pages using preallocated buffer
-            lmdb.write_header_using_buf(header_page_id0, &header_node0)?;
-            lmdb.write_header_using_buf(header_page_id1, &header_node0)?;
+            mvcc.write_header_using_buf(header_page_id0, &header_node0)?;
+            mvcc.write_header_using_buf(header_page_id1, &header_node0)?;
 
             // Create and write an empty free list root page
             let free_list_leaf = FreeListLeafNode {
@@ -142,7 +142,7 @@ impl Lmdb {
                 values: Vec::new(),
             };
             let free_list_page = Page::new(freetree_root_id, Node::FreeListLeaf(free_list_leaf));
-            lmdb.write_page(&free_list_page)?;
+            mvcc.write_page(&free_list_page)?;
 
             // Create and write an empty position index root page
             let event_leaf = EventLeafNode {
@@ -150,7 +150,7 @@ impl Lmdb {
                 values: Vec::new(),
             };
             let position_page = Page::new(position_root_id, Node::EventLeaf(event_leaf));
-            lmdb.write_page(&position_page)?;
+            mvcc.write_page(&position_page)?;
 
             // Create and write an empty tags index root page
             let tags_leaf = TagsLeafNode {
@@ -158,20 +158,20 @@ impl Lmdb {
                 values: Vec::new(),
             };
             let tags_page = Page::new(tags_root_id, Node::TagsLeaf(tags_leaf));
-            lmdb.write_page(&tags_page)?;
+            mvcc.write_page(&tags_page)?;
 
-            lmdb.flush()?;
+            mvcc.flush()?;
         } else {
             // Existing database: read headers into owned instances
-            if let Ok(h0) = lmdb.read_header(header_page_id0) {
-                *lmdb.header0.lock().unwrap() = h0;
+            if let Ok(h0) = mvcc.read_header(header_page_id0) {
+                *mvcc.header0.lock().unwrap() = h0;
             }
-            if let Ok(h1) = lmdb.read_header(header_page_id1) {
-                *lmdb.header1.lock().unwrap() = h1;
+            if let Ok(h1) = mvcc.read_header(header_page_id1) {
+                *mvcc.header1.lock().unwrap() = h1;
             }
         }
 
-        Ok(lmdb)
+        Ok(mvcc)
     }
 
     fn write_header_using_buf(&self, page_id: PageID, header: &HeaderNode) -> DCBResult<()> {
@@ -460,7 +460,7 @@ impl Writer {
         pos
     }
 
-    pub fn get_page_ref(&mut self, lmdb: &Lmdb, page_id: PageID) -> DCBResult<&Page> {
+    pub fn get_page_ref(&mut self, mvcc: &Mvcc, page_id: PageID) -> DCBResult<&Page> {
         // Check the dirty pages first
         if self.dirty.contains_key(&page_id) {
             return Ok(self.dirty.get(&page_id).unwrap());
@@ -472,7 +472,7 @@ impl Writer {
         }
 
         // Need to deserialize the page
-        let deserialized_page = lmdb.read_page(page_id)?;
+        let deserialized_page = mvcc.read_page(page_id)?;
         self.insert_deserialized(deserialized_page);
 
         // Return the deserialized page
@@ -563,7 +563,7 @@ impl Writer {
         }
     }
 
-    pub fn find_reusable_page_ids(&mut self, lmdb: &Lmdb) -> DCBResult<()> {
+    pub fn find_reusable_page_ids(&mut self, mvcc: &Mvcc) -> DCBResult<()> {
         let verbose = self.verbose;
         let mut reusable_page_ids: VecDeque<(PageID, Tsn)> = VecDeque::new();
         // Get free page IDs
@@ -572,7 +572,7 @@ impl Writer {
         }
 
         // Find the smallest reader TSN
-        let smallest_reader_tsn = { lmdb.reader_tsns.lock().unwrap().values().min().cloned() };
+        let smallest_reader_tsn = { mvcc.reader_tsns.lock().unwrap().values().min().cloned() };
         if verbose {
             println!("Smallest reader TSN: {smallest_reader_tsn:?}");
         }
@@ -588,7 +588,7 @@ impl Writer {
             if is_finished {
                 break;
             }
-            let page = { self.get_page_ref(lmdb, page_id)? };
+            let page = { self.get_page_ref(mvcc, page_id)? };
             match &page.node {
                 Node::FreeListInternal(node) => {
                     if verbose {
@@ -644,7 +644,7 @@ impl Writer {
     // Free list tree methods
     pub fn insert_freed_page_id(
         &mut self,
-        lmdb: &Lmdb,
+        mvcc: &Mvcc,
         tsn: Tsn,
         freed_page_id: PageID,
     ) -> DCBResult<()> {
@@ -659,7 +659,7 @@ impl Writer {
         // Traverse the tree to find a leaf node
         let mut stack: Vec<PageID> = Vec::new();
         loop {
-            let current_page_ref = self.get_page_ref(lmdb, current_page_id)?;
+            let current_page_ref = self.get_page_ref(mvcc, current_page_id)?;
             if matches!(current_page_ref.node, Node::FreeListLeaf(_)) {
                 break;
             }
@@ -707,7 +707,7 @@ impl Writer {
         // Check if the leaf needs splitting by estimating the serialized size
         let mut split_info: Option<(Tsn, PageID)> = None;
 
-        if dirty_leaf_page.calc_serialized_size() > lmdb.page_size {
+        if dirty_leaf_page.calc_serialized_size() > mvcc.page_size {
             // Split the leaf node
             if let Node::FreeListLeaf(dirty_leaf_node) = &mut dirty_leaf_page.node {
                 let (last_key, last_value) = dirty_leaf_node.pop_last_key_and_value()?;
@@ -730,7 +730,7 @@ impl Writer {
                 // Check if the new leaf page needs splitting
 
                 let serialized_size = new_leaf_page.calc_serialized_size();
-                if serialized_size > lmdb.page_size {
+                if serialized_size > mvcc.page_size {
                     return Err(DCBError::DatabaseCorrupted(
                         "Overflow freed page IDs for TSN to subtree not implemented".to_string(),
                     ));
@@ -807,7 +807,7 @@ impl Writer {
 
             // Check if the internal page needs splitting
 
-            if dirty_internal_page.calc_serialized_size() > lmdb.page_size {
+            if dirty_internal_page.calc_serialized_size() > mvcc.page_size {
                 if let Node::FreeListInternal(dirty_internal_node) = &mut dirty_internal_page.node {
                     if verbose {
                         println!("Splitting internal {dirty_page_id:?}...");
@@ -905,7 +905,7 @@ impl Writer {
 
     pub fn remove_free_page_id(
         &mut self,
-        lmdb: &Lmdb,
+        mvcc: &Mvcc,
         tsn: Tsn,
         used_page_id: PageID,
     ) -> DCBResult<()> {
@@ -923,7 +923,7 @@ impl Writer {
         let mut removed_page_ids: Vec<PageID> = Vec::new();
 
         loop {
-            let current_page_ref = self.get_page_ref(lmdb, current_page_id)?;
+            let current_page_ref = self.get_page_ref(mvcc, current_page_id)?;
             if matches!(current_page_ref.node, Node::FreeListLeaf(_)) {
                 break;
             }
@@ -1133,17 +1133,17 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_lmdb_init() {
+    fn test_mvcc_init() {
         let temp_dir = tempdir().unwrap();
-        let db_path = temp_dir.path().join("lmdb-test.db");
+        let db_path = temp_dir.path().join("mvcc-test.db");
 
         {
-            let db = Lmdb::new(&db_path, 4096, VERBOSE).unwrap();
+            let db = Mvcc::new(&db_path, 4096, VERBOSE).unwrap();
             assert!(db.pager.is_file_new);
         }
 
         {
-            let db = Lmdb::new(&db_path, 4096, VERBOSE).unwrap();
+            let db = Mvcc::new(&db_path, 4096, VERBOSE).unwrap();
             assert!(!db.pager.is_file_new);
         }
     }
@@ -1152,8 +1152,8 @@ mod tests {
     #[serial]
     fn test_write_transaction_incrementing_tsn_and_alternating_header() {
         let temp_dir = tempdir().unwrap();
-        let db_path = temp_dir.path().join("lmdb-test.db");
-        let db = Lmdb::new(&db_path, 4096, VERBOSE).unwrap();
+        let db_path = temp_dir.path().join("mvcc-test.db");
+        let db = Mvcc::new(&db_path, 4096, VERBOSE).unwrap();
 
         {
             let mut writer = db.writer().unwrap();
@@ -1195,8 +1195,8 @@ mod tests {
     #[serial]
     fn test_read_transaction_header_and_tsn() {
         let temp_dir = tempdir().unwrap();
-        let db_path = temp_dir.path().join("lmdb-test.db");
-        let db = Lmdb::new(&db_path, 4096, VERBOSE).unwrap();
+        let db_path = temp_dir.path().join("mvcc-test.db");
+        let db = Mvcc::new(&db_path, 4096, VERBOSE).unwrap();
 
         // Initial reader should see TSN 0
         {
@@ -1294,8 +1294,8 @@ mod tests {
     #[serial]
     fn test_copy_on_write_page_reuse() {
         let temp_dir = tempdir().unwrap();
-        let db_path = temp_dir.path().join("lmdb-test.db");
-        let db = Lmdb::new(&db_path, 4096, VERBOSE).unwrap();
+        let db_path = temp_dir.path().join("mvcc-test.db");
+        let db = Mvcc::new(&db_path, 4096, VERBOSE).unwrap();
         // First transaction
         {
             let mut writer = db.writer().unwrap();
@@ -1401,10 +1401,10 @@ mod tests {
         use tempfile::tempdir;
 
         // Helper function to create a test database with a specified page size
-        fn construct_db(page_size: usize) -> (tempfile::TempDir, Lmdb) {
+        fn construct_db(page_size: usize) -> (tempfile::TempDir, Mvcc) {
             let temp_dir = tempdir().unwrap();
-            let db_path = temp_dir.path().join("lmdb-test.db");
-            let db = Lmdb::new(&db_path, page_size, VERBOSE).unwrap();
+            let db_path = temp_dir.path().join("mvcc-test.db");
+            let db = Mvcc::new(&db_path, page_size, VERBOSE).unwrap();
             (temp_dir, db)
         }
 

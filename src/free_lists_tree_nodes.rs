@@ -1,5 +1,5 @@
 use crate::common::{PageID, Tsn};
-use crate::dcbapi::{DCBError, DCBResult};
+use crate::dcb::{DCBError, DCBResult};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FreeListLeafValue {

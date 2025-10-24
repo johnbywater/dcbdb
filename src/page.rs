@@ -1,5 +1,5 @@
 use crate::common::PageID;
-use crate::dcbapi::{DCBError, DCBResult};
+use crate::dcb::{DCBError, DCBResult};
 use crate::node::Node;
 
 // Page structure

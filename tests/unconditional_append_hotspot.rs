@@ -1,5 +1,5 @@
 use umadb::dcb::{DCBAppendCondition, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem};
-use umadb::db::EventStore;
+use umadb::db::UmaDB;
 use std::env;
 use std::hint::black_box;
 use std::time::Instant;
@@ -47,7 +47,7 @@ fn profile_event_store_append() {
     let total_events: usize = calls_per_run.saturating_mul(events_per_call);
 
     let tmp = tempdir().expect("create temp dir");
-    let store = EventStore::new(tmp.path()).expect("open event store");
+    let store = UmaDB::new(tmp.path()).expect("open event store");
 
     // Time the entire loop of batched appends.
     let start = Instant::now();

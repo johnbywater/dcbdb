@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput, black_box};
 use umadb::dcb::{DCBEvent, DCBEventStore, DCBAppendCondition, DCBQuery, DCBQueryItem};
-use umadb::db::EventStore;
+use umadb::db::UmaDB;
 use umadb::grpc::{AsyncUmaDBClient, start_grpc_server_with_shutdown};
 use std::net::TcpListener;
 use std::thread;
@@ -15,7 +15,7 @@ fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
     let path = dir.path().to_str().unwrap().to_string();
 
     // Populate the database using the local EventStore (fast, in-process)
-    let store = EventStore::new(&path).expect("create event store");
+    let store = UmaDB::new(&path).expect("create event store");
 
     // Prepare events and append in moderate batches to avoid huge allocations
     let batch_size = 1000usize.min(num_events.max(1));

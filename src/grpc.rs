@@ -10,7 +10,7 @@ use crate::dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem, DCBResult,
     DCBSequencedEvent,
 };
-use crate::db::{EventStore, read_conditional, DEFAULT_PAGE_SIZE};
+use crate::db::{UmaDB, read_conditional, DEFAULT_PAGE_SIZE};
 use crate::mvcc::Mvcc;
 
 // Include the generated proto code
@@ -141,7 +141,7 @@ impl EventStoreHandle {
         let mvcc_for_writer = mvcc.clone();
         let head_tx_writer = head_tx.clone();
         thread::spawn(move || {
-            let event_store = EventStore::from_arc(mvcc_for_writer);
+            let event_store = UmaDB::from_arc(mvcc_for_writer);
 
             // Create a runtime for async operations
             let rt = tokio::runtime::Runtime::new().unwrap();
@@ -411,12 +411,12 @@ fn dcb_error_from_status(status: Status) -> DCBError {
 }
 
 // gRPC server implementation
-pub struct GrpcEventStoreServer {
+pub struct UmaDBServer {
     event_store: EventStoreHandle,
     shutdown_rx: watch::Receiver<bool>,
 }
 
-impl GrpcEventStoreServer {
+impl UmaDBServer {
     pub fn new<P: AsRef<Path> + Send + 'static>(path: P) -> std::io::Result<Self> {
         let event_store = EventStoreHandle::new(path)?;
         let (_tx, rx) = watch::channel(false);
@@ -434,7 +434,7 @@ impl GrpcEventStoreServer {
 }
 
 #[tonic::async_trait]
-impl UmaDbService for GrpcEventStoreServer {
+impl UmaDbService for UmaDBServer {
     type ReadStream =
         Pin<Box<dyn Stream<Item = Result<ReadResponseProto, Status>> + Send + 'static>>;
 
@@ -641,14 +641,110 @@ pub struct AsyncUmaDBClient {
 }
 
 // Async read response wrapper that provides batched access and head metadata
-pub struct GrpcReadResponse {
+pub struct AsyncReadResponse {
     stream: tonic::Streaming<ReadResponseProto>,
     buffered: Vec<crate::dcb::DCBSequencedEvent>,
     last_head: Option<Option<u64>>, // None = unknown yet; Some(x) = known
     ended: bool,
 }
 
-impl GrpcReadResponse {
+impl AsyncUmaDBClient {
+    pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
+    where
+        D: std::convert::TryInto<tonic::transport::Endpoint>,
+        D::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    {
+        let client =
+            umadb::uma_db_service_client::UmaDbServiceClient::connect(dst).await?;
+        Ok(Self { client })
+    }
+
+    // Optimized connect that configures the transport for lower latency and better concurrency.
+    // Takes a URL like "http://127.0.0.1:50051".
+    pub async fn connect_optimized_url(url: &str) -> Result<Self, tonic::transport::Error> {
+        use std::time::Duration;
+        use tonic::transport::Endpoint;
+
+        let endpoint = Endpoint::from_shared(url.to_string())?
+            .tcp_nodelay(true)
+            .http2_keep_alive_interval(Duration::from_secs(5))
+            .keep_alive_timeout(Duration::from_secs(10))
+            // Bump the window sizes to reduce flow-control stalls under high throughput
+            .initial_stream_window_size(Some(4 * 1024 * 1024))
+            .initial_connection_window_size(Some(8 * 1024 * 1024));
+
+        let channel = endpoint.connect().await?;
+        let client = umadb::uma_db_service_client::UmaDbServiceClient::new(channel);
+        Ok(Self { client })
+    }
+
+    // Async inherent methods: use the gRPC client directly (no trait required)
+    pub async fn read(
+        &self,
+        query: Option<crate::dcb::DCBQuery>,
+        after: Option<u64>,
+        limit: Option<usize>,
+        subscribe: bool,
+        batch_size: Option<usize>,
+    ) -> crate::dcb::DCBResult<AsyncReadResponse> {
+        // Convert API types to proto types
+        let query_proto = query.map(|q| QueryProto {
+            items: q
+                .items
+                .into_iter()
+                .map(|item| QueryItemProto { types: item.types, tags: item.tags })
+                .collect(),
+        });
+        let limit_proto = limit.map(|l| l as u32);
+        let request = ReadRequestProto { query: query_proto, after, limit: limit_proto, subscribe: Some(subscribe), batch_size: batch_size.map(|b| b as u32) };
+
+        let mut client = self.client.clone();
+        let response = client.read(request).await.map_err(|status| dcb_error_from_status(status))?;
+        let stream = response.into_inner();
+
+        Ok(AsyncReadResponse { stream, buffered: Vec::new(), last_head: None, ended: false })
+    }
+
+    pub async fn append(
+        &self,
+        events: Vec<crate::dcb::DCBEvent>,
+        condition: Option<crate::dcb::DCBAppendCondition>,
+    ) -> crate::dcb::DCBResult<u64> {
+        let events_proto: Vec<EventProto> = events
+            .into_iter()
+            .map(|e| EventProto { event_type: e.event_type, tags: e.tags, data: e.data })
+            .collect();
+
+        let condition_proto = condition.map(|c| AppendConditionProto {
+            fail_if_events_match: Some(QueryProto {
+                items: c
+                    .fail_if_events_match
+                    .items
+                    .into_iter()
+                    .map(|item| QueryItemProto { types: item.types, tags: item.tags })
+                    .collect(),
+            }),
+            after: c.after,
+        });
+
+        let request = AppendRequestProto { events: events_proto, condition: condition_proto };
+        let mut client = self.client.clone();
+        match client.append(request).await {
+            Ok(response) => Ok(response.into_inner().position),
+            Err(status) => Err(dcb_error_from_status(status)),
+        }
+    }
+
+    pub async fn head(&self) -> crate::dcb::DCBResult<Option<u64>> {
+        let mut client = self.client.clone();
+        match client.head(HeadRequestProto {}).await {
+            Ok(response) => Ok(response.into_inner().position),
+            Err(status) => Err(dcb_error_from_status(status)),
+        }
+    }
+}
+
+impl AsyncReadResponse {
     async fn fetch_next_if_needed(&mut self) -> crate::dcb::DCBResult<()> {
         if !self.buffered.is_empty() || self.ended { return Ok(()); }
         match self.stream.message().await {
@@ -697,102 +793,6 @@ impl GrpcReadResponse {
     }
 }
 
-impl AsyncUmaDBClient {
-    pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
-    where
-        D: std::convert::TryInto<tonic::transport::Endpoint>,
-        D::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-    {
-        let client =
-            umadb::uma_db_service_client::UmaDbServiceClient::connect(dst).await?;
-        Ok(Self { client })
-    }
-
-    // Optimized connect that configures the transport for lower latency and better concurrency.
-    // Takes a URL like "http://127.0.0.1:50051".
-    pub async fn connect_optimized_url(url: &str) -> Result<Self, tonic::transport::Error> {
-        use std::time::Duration;
-        use tonic::transport::Endpoint;
-
-        let endpoint = Endpoint::from_shared(url.to_string())?
-            .tcp_nodelay(true)
-            .http2_keep_alive_interval(Duration::from_secs(5))
-            .keep_alive_timeout(Duration::from_secs(10))
-            // Bump the window sizes to reduce flow-control stalls under high throughput
-            .initial_stream_window_size(Some(4 * 1024 * 1024))
-            .initial_connection_window_size(Some(8 * 1024 * 1024));
-
-        let channel = endpoint.connect().await?;
-        let client = umadb::uma_db_service_client::UmaDbServiceClient::new(channel);
-        Ok(Self { client })
-    }
-
-    // Async inherent methods: use the gRPC client directly (no trait required)
-    pub async fn read(
-        &self,
-        query: Option<crate::dcb::DCBQuery>,
-        after: Option<u64>,
-        limit: Option<usize>,
-        subscribe: bool,
-        batch_size: Option<usize>,
-    ) -> crate::dcb::DCBResult<GrpcReadResponse> {
-        // Convert API types to proto types
-        let query_proto = query.map(|q| QueryProto {
-            items: q
-                .items
-                .into_iter()
-                .map(|item| QueryItemProto { types: item.types, tags: item.tags })
-                .collect(),
-        });
-        let limit_proto = limit.map(|l| l as u32);
-        let request = ReadRequestProto { query: query_proto, after, limit: limit_proto, subscribe: Some(subscribe), batch_size: batch_size.map(|b| b as u32) };
-
-        let mut client = self.client.clone();
-        let response = client.read(request).await.map_err(|status| dcb_error_from_status(status))?;
-        let stream = response.into_inner();
-
-        Ok(GrpcReadResponse { stream, buffered: Vec::new(), last_head: None, ended: false })
-    }
-
-    pub async fn append(
-        &self,
-        events: Vec<crate::dcb::DCBEvent>,
-        condition: Option<crate::dcb::DCBAppendCondition>,
-    ) -> crate::dcb::DCBResult<u64> {
-        let events_proto: Vec<EventProto> = events
-            .into_iter()
-            .map(|e| EventProto { event_type: e.event_type, tags: e.tags, data: e.data })
-            .collect();
-
-        let condition_proto = condition.map(|c| AppendConditionProto {
-            fail_if_events_match: Some(QueryProto {
-                items: c
-                    .fail_if_events_match
-                    .items
-                    .into_iter()
-                    .map(|item| QueryItemProto { types: item.types, tags: item.tags })
-                    .collect(),
-            }),
-            after: c.after,
-        });
-
-        let request = AppendRequestProto { events: events_proto, condition: condition_proto };
-        let mut client = self.client.clone();
-        match client.append(request).await {
-            Ok(response) => Ok(response.into_inner().position),
-            Err(status) => Err(dcb_error_from_status(status)),
-        }
-    }
-
-    pub async fn head(&self) -> crate::dcb::DCBResult<Option<u64>> {
-        let mut client = self.client.clone();
-        match client.head(HeadRequestProto {}).await {
-            Ok(response) => Ok(response.into_inner().position),
-            Err(status) => Err(dcb_error_from_status(status)),
-        }
-    }
-}
-
 
 
 // Function to start the gRPC server
@@ -801,7 +801,7 @@ pub async fn start_grpc_server<P: AsRef<Path> + Send + 'static>(
     addr: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let addr = addr.parse()?;
-    let server = GrpcEventStoreServer::new(path)?;
+    let server = UmaDBServer::new(path)?;
 
     println!("gRPC server listening on {addr}");
 
@@ -831,7 +831,7 @@ pub async fn start_grpc_server_with_shutdown<P: AsRef<Path> + Send + 'static>(
     let addr = addr.parse()?;
     // Create a shutdown broadcast channel for terminating ongoing subscriptions
     let (srv_shutdown_tx, srv_shutdown_rx) = watch::channel(false);
-    let server = GrpcEventStoreServer::new_with_shutdown(path, srv_shutdown_rx)?;
+    let server = UmaDBServer::new_with_shutdown(path, srv_shutdown_rx)?;
     println!("gRPC server listening on {addr}");
 
     use std::time::Duration;

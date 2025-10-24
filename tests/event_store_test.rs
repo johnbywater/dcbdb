@@ -2,7 +2,7 @@ use umadb::dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem, DCBSequencedEvent,
 };
 // gRPC client sync trait support has been removed; tests use the local EventStore
-use umadb::db::EventStore;
+use umadb::db::UmaDB;
 use tempfile::tempdir;
 use uuid::Uuid;
 use umadb::grpc::{AsyncUmaDBClient, start_grpc_server_with_shutdown};
@@ -835,7 +835,7 @@ pub fn dcb_event_store_test<T: DCBEventStore>(event_store: &T) {
 #[test]
 fn test_direct_event_store() {
     let temp_dir = tempdir().unwrap();
-    let event_store = EventStore::new(temp_dir.path()).unwrap();
+    let event_store = UmaDB::new(temp_dir.path()).unwrap();
     dcb_event_store_test(&event_store);
 }
 
@@ -848,7 +848,7 @@ fn test_tag_hash_collision() {
 
     // Use a local EventStore backed by a temporary directory
     let temp_dir = tempdir().unwrap();
-    let store = EventStore::new(temp_dir.path()).unwrap();
+    let store = UmaDB::new(temp_dir.path()).unwrap();
 
     // Append two events, one per colliding tag
     let ev_student = DCBEvent {
@@ -983,7 +983,7 @@ impl SyncUmaDBClient {
 
 struct SyncReadResponse<'a> {
     rt: &'a tokio::runtime::Runtime,
-    resp: umadb::grpc::GrpcReadResponse,
+    resp: umadb::grpc::AsyncReadResponse,
     buffer: Vec<DCBSequencedEvent>,
     buf_idx: usize,
     finished: bool,

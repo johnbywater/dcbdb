@@ -17,18 +17,18 @@ use crate::tags_tree_nodes::TagHash;
 
 pub static DEFAULT_PAGE_SIZE: usize = 4096;
 
-/// LMDB-backed EventStore implementing the DCBEventStore
-pub struct EventStore {
+/// EventStore implementing the DCBEventStore interface
+pub struct UmaDB {
     mvcc: std::sync::Arc<Mvcc>,
 }
 
-impl EventStore {
+impl UmaDB {
     /// Create a new EventStore at the given directory or file path.
-    /// If a directory path is provided, a file named "dcb.db" will be used inside it.
+    /// If a directory path is provided, a file named "uma.db" will be used inside it.
     pub fn new<P: AsRef<Path>>(path: P) -> DCBResult<Self> {
         let p = path.as_ref();
         let file_path = if p.is_dir() {
-            p.join("dcb.db")
+            p.join("uma.db")
         } else {
             p.to_path_buf()
         };
@@ -387,7 +387,7 @@ pub fn read_conditional(
     Ok(out)
 }
 
-impl DCBEventStore for EventStore {
+impl DCBEventStore for UmaDB {
     fn read(
         &self,
         query: Option<DCBQuery>,
@@ -463,7 +463,7 @@ impl DCBEventStore for EventStore {
     }
 }
 
-impl EventStore {
+impl UmaDB {
     /// Appends a batch of (events, condition) using a single writer/transaction.
     /// For each item, behaves like append():
     /// - If condition is Some and matches any events (considering uncommitted writes), returns Err(IntegrityError) for that item and continues.
@@ -836,7 +836,7 @@ mod tests {
     #[serial]
     fn test_event_store() {
         let temp_dir = tempdir().unwrap();
-        let store = EventStore::new(temp_dir.path()).unwrap();
+        let store = UmaDB::new(temp_dir.path()).unwrap();
 
         // Head is None on empty store
         assert_eq!(None, store.head().unwrap());
@@ -945,7 +945,7 @@ mod tests {
     #[test]
     fn test_append_batch_mixed_conditions() {
         let temp_dir = tempdir().unwrap();
-        let store = EventStore::new(temp_dir.path()).unwrap();
+        let store = UmaDB::new(temp_dir.path()).unwrap();
 
         let e1 = DCBEvent { event_type: "A".into(), data: b"1".to_vec(), tags: vec!["t1".into()] };
         let e2 = DCBEvent { event_type: "B".into(), data: b"2".to_vec(), tags: vec!["t2".into()] };
@@ -994,7 +994,7 @@ mod tests {
     #[test]
     fn test_append_batch_dirty_visibility_with_tags() {
         let temp_dir = tempdir().unwrap();
-        let store = EventStore::new(temp_dir.path()).unwrap();
+        let store = UmaDB::new(temp_dir.path()).unwrap();
 
         // Item1 introduces tag "x"; Item2 condition queries tag "x" and must see it via dirty tags tree; Item3 uses after to ignore it
         let e1 = DCBEvent { event_type: "T".into(), data: b"one".to_vec(), tags: vec!["x".into()] };
@@ -1035,7 +1035,7 @@ mod tests {
     #[test]
     fn test_append_batch_dirty_visibility_with_types_small_and_big_overflow() {
         let temp_dir = tempdir().unwrap();
-        let store = EventStore::new(temp_dir.path()).unwrap();
+        let store = UmaDB::new(temp_dir.path()).unwrap();
 
         // Prepare events
         let small = DCBEvent { event_type: "S".into(), data: b"sm".to_vec(), tags: vec!["tS".into()] };
@@ -1094,7 +1094,7 @@ mod tests {
     #[test]
     fn test_append_batch_dirty_visibility_with_tags_and_types_small_and_big_overflow() {
         let temp_dir = tempdir().unwrap();
-        let store = EventStore::new(temp_dir.path()).unwrap();
+        let store = UmaDB::new(temp_dir.path()).unwrap();
 
         // Small inline event: type "S" with tag "x"
         let small = DCBEvent { event_type: "S".into(), data: b"sm".to_vec(), tags: vec!["x".into()] };

@@ -95,18 +95,18 @@ impl Node {
     /// No-allocation serialization into a provided buffer slice.
     /// Returns the number of bytes written.
     /// Implemented for key node types; for others it falls back to allocate-and-copy.
-    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
+    pub fn serialize_into(&self, out: &mut [u8]) -> DCBResult<usize> {
         match self {
-            Node::Header(node) => { let n = node.serialize_into(dst); Ok(n) }
-            Node::FreeListLeaf(node) => { let n = node.serialize_into(dst)?; Ok(n) }
-            Node::FreeListInternal(node) => { let n = node.serialize_into(dst)?; Ok(n) }
-            Node::EventLeaf(node) => { let n = node.serialize_into(dst)?; Ok(n) }
-            Node::EventInternal(node) => { let n = node.serialize_into(dst)?; Ok(n) }
-            Node::EventOverflow(node) => { let n = node.serialize_into(dst)?; Ok(n) }
-            Node::TagsLeaf(node) => { let n = node.serialize_into(dst)?; Ok(n) }
-            Node::TagsInternal(node) => { let n = node.serialize_into(dst)?; Ok(n) }
-            Node::TagLeaf(node) => { let n = node.serialize_into(dst)?; Ok(n) }
-            Node::TagInternal(node) => { let n = node.serialize_into(dst)?; Ok(n) }
+            Node::Header(node) => { let n = node.serialize_into(out); Ok(n) }
+            Node::FreeListLeaf(node) => { let n = node.serialize_into(out)?; Ok(n) }
+            Node::FreeListInternal(node) => { let n = node.serialize_into(out)?; Ok(n) }
+            Node::EventLeaf(node) => { let n = node.serialize_into(out)?; Ok(n) }
+            Node::EventInternal(node) => { let n = node.serialize_into(out)?; Ok(n) }
+            Node::EventOverflow(node) => { let n = node.serialize_into(out)?; Ok(n) }
+            Node::TagsLeaf(node) => { let n = node.serialize_into(out)?; Ok(n) }
+            Node::TagsInternal(node) => { let n = node.serialize_into(out)?; Ok(n) }
+            Node::TagLeaf(node) => { let n = node.serialize_into(out)?; Ok(n) }
+            Node::TagInternal(node) => { let n = node.serialize_into(out)?; Ok(n) }
         }
     }
 

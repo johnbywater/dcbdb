@@ -16,15 +16,15 @@ pub struct HeaderNode {
 impl HeaderNode {
     /// Writes the serialized HeaderNode into the provided buffer and returns the number of bytes written (48).
     /// The buffer must be at least 48 bytes long.
-    pub fn serialize_into(&self, dst: &mut [u8]) -> usize {
-        assert!(dst.len() >= 48, "HeaderNode::serialize_into dst must be at least 48 bytes");
+    pub fn serialize_into(&self, buf: &mut [u8]) -> usize {
+        assert!(buf.len() >= 48, "HeaderNode::serialize_into dst must be at least 48 bytes");
         // Write fields in little-endian order
-        dst[0..8].copy_from_slice(&self.tsn.0.to_le_bytes());
-        dst[8..16].copy_from_slice(&self.next_page_id.0.to_le_bytes());
-        dst[16..24].copy_from_slice(&self.free_lists_tree_root_id.0.to_le_bytes());
-        dst[24..32].copy_from_slice(&self.events_tree_root_id.0.to_le_bytes());
-        dst[32..40].copy_from_slice(&self.tags_tree_root_id.0.to_le_bytes());
-        dst[40..48].copy_from_slice(&self.next_position.0.to_le_bytes());
+        buf[0..8].copy_from_slice(&self.tsn.0.to_le_bytes());
+        buf[8..16].copy_from_slice(&self.next_page_id.0.to_le_bytes());
+        buf[16..24].copy_from_slice(&self.free_lists_tree_root_id.0.to_le_bytes());
+        buf[24..32].copy_from_slice(&self.events_tree_root_id.0.to_le_bytes());
+        buf[32..40].copy_from_slice(&self.tags_tree_root_id.0.to_le_bytes());
+        buf[40..48].copy_from_slice(&self.next_position.0.to_le_bytes());
         48
     }
 

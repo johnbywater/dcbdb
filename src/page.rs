@@ -140,21 +140,26 @@ mod tests {
         // Calculate the serialized size
         let calculated_size = page.calc_serialized_size();
 
-        // Serialize the page
-        let serialized = page.serialize().expect("Failed to serialize page");
+        // Serialize the page into a fixed-size buffer using serialize_into_vec
+        let mut page_buf = vec![0u8; crate::db::DEFAULT_PAGE_SIZE];
+        page
+            .serialize_into_vec(&mut page_buf)
+            .expect("Failed to serialize page into buffer");
 
-        // Check that the serialized data size matches the calculated size
+        // Check that the effective serialized data size (header + body_len from header) matches the calculated size
+        let body_len = u32::from_le_bytes(page_buf[5..9].try_into().unwrap()) as usize;
+        let effective_len = PAGE_HEADER_SIZE + body_len;
         assert_eq!(
             calculated_size,
-            serialized.len(),
-            "Calculated size {} should match actual serialized size {}",
+            effective_len,
+            "Calculated size {} should match effective serialized size {}",
             calculated_size,
-            serialized.len()
+            effective_len
         );
 
-        // Deserialize the serialized data
+        // Deserialize the serialized data from the full page buffer
         let deserialized =
-            Page::deserialize(page_id, &serialized).expect("Failed to deserialize page");
+            Page::deserialize(page_id, &page_buf).expect("Failed to deserialize page");
 
         // Check that the deserialized page is the same as the original
         assert_eq!(

@@ -13,48 +13,6 @@ use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::Mutex;
 
-// Reader transaction
-pub struct Reader {
-    pub header_page_id: PageID,
-    pub tsn: Tsn,
-    pub events_tree_root_id: PageID,
-    pub tags_tree_root_id: PageID,
-    pub next_position: Position,
-    reader_id: usize,
-    reader_tsns: *const Mutex<HashMap<usize, Tsn>>,
-}
-
-impl Drop for Reader {
-    fn drop(&mut self) {
-        // Safety: The Mutex is valid as long as the Db instance is valid,
-        // and the Reader doesn't outlive the Db instance.
-        unsafe {
-            if !self.reader_tsns.is_null() {
-                if let Ok(mut map) = (*self.reader_tsns).lock() {
-                    map.remove(&self.reader_id);
-                }
-            }
-        }
-    }
-}
-
-// Writer transaction
-pub struct Writer {
-    pub header_page_id: PageID,
-    pub tsn: Tsn,
-    pub next_page_id: PageID,
-    pub free_lists_tree_root_id: PageID,
-    pub events_tree_root_id: PageID,
-    pub tags_tree_root_id: PageID,
-    pub next_position: Position,
-    pub reusable_page_ids: VecDeque<(PageID, Tsn)>,
-    pub freed_page_ids: VecDeque<PageID>,
-    pub deserialized: HashMap<PageID, Page>,
-    pub dirty: HashMap<PageID, Page>,
-    pub reused_page_ids: VecDeque<(PageID, Tsn)>,
-    pub verbose: bool,
-}
-
 // Main MVCC structure
 pub struct Mvcc {
     pub pager: Pager,
@@ -269,8 +227,13 @@ impl Mvcc {
     }
 
     pub fn write_page(&self, page: &Page) -> DCBResult<()> {
-        let serialized = &page.serialize()?;
-        self.pager.write_page(page.page_id, serialized)?;
+        // Serialize directly into a reusable, page-sized buffer to avoid allocations
+        let mut buf = self.page_buf.lock().unwrap();
+        if buf.len() != self.page_size {
+            buf.resize(self.page_size, 0);
+        }
+        page.serialize_into_vec(&mut buf)?;
+        self.pager.write_page(page.page_id, &buf)?;
         if self.verbose {
             println!("Wrote {:?} to file", page.page_id);
         }
@@ -425,7 +388,23 @@ impl Mvcc {
     }
 }
 
-// Implementation for LmdbWriter
+// Writer transaction
+pub struct Writer {
+    pub header_page_id: PageID,
+    pub tsn: Tsn,
+    pub next_page_id: PageID,
+    pub free_lists_tree_root_id: PageID,
+    pub events_tree_root_id: PageID,
+    pub tags_tree_root_id: PageID,
+    pub next_position: Position,
+    pub reusable_page_ids: VecDeque<(PageID, Tsn)>,
+    pub freed_page_ids: VecDeque<PageID>,
+    pub deserialized: HashMap<PageID, Page>,
+    pub dirty: HashMap<PageID, Page>,
+    pub reused_page_ids: VecDeque<(PageID, Tsn)>,
+    pub verbose: bool,
+}
+
 impl Writer {
     pub fn new(
         header_page_id: PageID,
@@ -1121,6 +1100,32 @@ impl Writer {
         Ok(())
     }
 }
+
+// Reader transaction
+pub struct Reader {
+    pub header_page_id: PageID,
+    pub tsn: Tsn,
+    pub events_tree_root_id: PageID,
+    pub tags_tree_root_id: PageID,
+    pub next_position: Position,
+    reader_id: usize,
+    reader_tsns: *const Mutex<HashMap<usize, Tsn>>,
+}
+
+impl Drop for Reader {
+    fn drop(&mut self) {
+        // Safety: The Mutex is valid as long as the Db instance is valid,
+        // and the Reader doesn't outlive the Db instance.
+        unsafe {
+            if !self.reader_tsns.is_null() {
+                if let Ok(mut map) = (*self.reader_tsns).lock() {
+                    map.remove(&self.reader_id);
+                }
+            }
+        }
+    }
+}
+
 
 #[cfg(test)]
 mod tests {

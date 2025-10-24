@@ -1,5 +1,5 @@
 use umadb::dcb::DCBEvent;
-use umadb::grpc::{start_grpc_server_with_shutdown, GrpcEventStoreClient};
+use umadb::grpc::{start_grpc_server_with_shutdown, AsyncUmaDBClient};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn grpc_async_streams_large_reads_total_count() {
@@ -16,7 +16,7 @@ async fn grpc_async_streams_large_reads_total_count() {
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
     // Connect client
-    let client = GrpcEventStoreClient::connect(addr_http).await.expect("client connect");
+    let client = AsyncUmaDBClient::connect(addr_http).await.expect("client connect");
 
     // Append 1000 events
     let events: Vec<DCBEvent> = (0..1000)
@@ -55,7 +55,7 @@ async fn grpc_async_does_not_stream_past_starting_head() {
     });
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-    let client = GrpcEventStoreClient::connect(addr_http).await.expect("client connect");
+    let client = AsyncUmaDBClient::connect(addr_http).await.expect("client connect");
 
     // Append initial 300 events
     let initial_events: Vec<DCBEvent> = (0..300)
@@ -100,7 +100,7 @@ async fn grpc_async_subscription_catch_up_and_continue() {
     });
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-    let client = GrpcEventStoreClient::connect(addr_http).await.expect("client connect");
+    let client = AsyncUmaDBClient::connect(addr_http).await.expect("client connect");
 
     // Append initial events
     let initial_count = 40usize;
@@ -163,7 +163,7 @@ async fn grpc_async_stream_catch_up_and_continue() {
 
     sleep(TokioDuration::from_millis(200)).await;
 
-    let client = GrpcEventStoreClient::connect(addr_http).await.expect("client connect");
+    let client = AsyncUmaDBClient::connect(addr_http).await.expect("client connect");
 
     // Append initial events via async API
     let initial_count = 15usize;

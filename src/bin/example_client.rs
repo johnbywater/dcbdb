@@ -1,7 +1,7 @@
 use std::cmp::max;
 use clap::Parser;
 use umadb::dcb::DCBEvent;
-use umadb::grpc::GrpcEventStoreClient;
+use umadb::grpc::AsyncUmaDBClient;
 use std::time::Instant;
 
 #[derive(Parser)]
@@ -25,7 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Connect to the gRPC server
     let t_connect = Instant::now();
-    let client = GrpcEventStoreClient::connect(args.address).await?;
+    let client = AsyncUmaDBClient::connect(args.address).await?;
     let connect_elapsed = t_connect.elapsed();
     println!("Connected client to server");
 

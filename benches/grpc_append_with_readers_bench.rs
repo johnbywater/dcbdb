@@ -1,7 +1,7 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput, black_box};
 use umadb::dcb::{DCBEvent, DCBEventStore};
 use umadb::db::EventStore;
-use umadb::grpc::{GrpcEventStoreClient, start_grpc_server_with_shutdown};
+use umadb::grpc::{AsyncUmaDBClient, start_grpc_server_with_shutdown};
 use std::net::TcpListener;
 use std::thread;
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
@@ -101,10 +101,10 @@ pub fn grpc_append_with_readers_benchmark(c: &mut Criterion) {
             .expect("build tokio rt (readers)");
 
         // Create independent reader clients
-        let mut reader_clients: Vec<Arc<GrpcEventStoreClient>> = Vec::with_capacity(READER_COUNT);
+        let mut reader_clients: Vec<Arc<AsyncUmaDBClient>> = Vec::with_capacity(READER_COUNT);
         for _ in 0..READER_COUNT {
             let c = readers_rt
-                .block_on(GrpcEventStoreClient::connect_optimized_url(&addr_http))
+                .block_on(AsyncUmaDBClient::connect_optimized_url(&addr_http))
                 .expect("connect reader client");
             reader_clients.push(Arc::new(c));
         }
@@ -149,10 +149,10 @@ pub fn grpc_append_with_readers_benchmark(c: &mut Criterion) {
             .enable_all()
             .build()
             .expect("build tokio rt (writers)");
-        let mut clients: Vec<Arc<GrpcEventStoreClient>> = Vec::with_capacity(threads);
+        let mut clients: Vec<Arc<AsyncUmaDBClient>> = Vec::with_capacity(threads);
         for _ in 0..threads {
             let c = rt
-                .block_on(GrpcEventStoreClient::connect_optimized_url(&addr_http))
+                .block_on(AsyncUmaDBClient::connect_optimized_url(&addr_http))
                 .expect("connect client");
             clients.push(Arc::new(c));
         }

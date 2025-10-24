@@ -26,7 +26,7 @@ use umadb::{
     AppendConditionProto, AppendRequestProto, AppendResponseProto, EventProto, HeadRequestProto,
     HeadResponseProto, QueryItemProto, QueryProto, ReadRequestProto, ReadResponseProto,
     SequencedEventProto,
-    event_store_service_server::{EventStoreService, EventStoreServiceServer},
+    uma_db_service_server::{UmaDbService, UmaDbServiceServer},
 };
 
 // Conversion functions between proto and API types
@@ -428,13 +428,13 @@ impl GrpcEventStoreServer {
         Ok(Self { event_store, shutdown_rx })
     }
 
-    pub fn into_service(self) -> EventStoreServiceServer<Self> {
-        EventStoreServiceServer::new(self)
+    pub fn into_service(self) -> UmaDbServiceServer<Self> {
+        UmaDbServiceServer::new(self)
     }
 }
 
 #[tonic::async_trait]
-impl EventStoreService for GrpcEventStoreServer {
+impl UmaDbService for GrpcEventStoreServer {
     type ReadStream =
         Pin<Box<dyn Stream<Item = Result<ReadResponseProto, Status>> + Send + 'static>>;
 
@@ -636,8 +636,8 @@ impl EventStoreService for GrpcEventStoreServer {
 }
 
 // gRPC client implementation
-pub struct GrpcEventStoreClient {
-    client: umadb::event_store_service_client::EventStoreServiceClient<tonic::transport::Channel>,
+pub struct AsyncUmaDBClient {
+    client: umadb::uma_db_service_client::UmaDbServiceClient<tonic::transport::Channel>,
 }
 
 // Async read response wrapper that provides batched access and head metadata
@@ -697,14 +697,14 @@ impl GrpcReadResponse {
     }
 }
 
-impl GrpcEventStoreClient {
+impl AsyncUmaDBClient {
     pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
     where
         D: std::convert::TryInto<tonic::transport::Endpoint>,
         D::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
         let client =
-            umadb::event_store_service_client::EventStoreServiceClient::connect(dst).await?;
+            umadb::uma_db_service_client::UmaDbServiceClient::connect(dst).await?;
         Ok(Self { client })
     }
 
@@ -723,7 +723,7 @@ impl GrpcEventStoreClient {
             .initial_connection_window_size(Some(8 * 1024 * 1024));
 
         let channel = endpoint.connect().await?;
-        let client = umadb::event_store_service_client::EventStoreServiceClient::new(channel);
+        let client = umadb::uma_db_service_client::UmaDbServiceClient::new(channel);
         Ok(Self { client })
     }
 

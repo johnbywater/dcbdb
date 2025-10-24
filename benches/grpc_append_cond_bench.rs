@@ -1,7 +1,7 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput, black_box};
 use umadb::dcb::{DCBEvent, DCBEventStore, DCBAppendCondition, DCBQuery, DCBQueryItem};
 use umadb::db::EventStore;
-use umadb::grpc::{GrpcEventStoreClient, start_grpc_server_with_shutdown};
+use umadb::grpc::{AsyncUmaDBClient, start_grpc_server_with_shutdown};
 use std::net::TcpListener;
 use std::thread;
 use std::sync::Arc;
@@ -102,11 +102,11 @@ pub fn grpc_append_cond_benchmark(c: &mut Criterion) {
             .expect("build tokio rt (writers)");
 
         // Establish independent gRPC connections and per-writer state (tag, last_pos)
-        let mut clients: Vec<Arc<GrpcEventStoreClient>> = Vec::with_capacity(threads);
+        let mut clients: Vec<Arc<AsyncUmaDBClient>> = Vec::with_capacity(threads);
         let mut tags: Vec<String> = Vec::with_capacity(threads);
         for i in 0..threads {
             let c = rt
-                .block_on(GrpcEventStoreClient::connect_optimized_url(&addr_http))
+                .block_on(AsyncUmaDBClient::connect_optimized_url(&addr_http))
                 .expect("connect client");
             clients.push(Arc::new(c));
             tags.push(format!("writer-{}", i));

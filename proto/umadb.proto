@@ -81,8 +81,8 @@ message ErrorResponseProto {
   }
 }
 
-// EventStore service
-service EventStoreService {
+// UmaDB service
+service UmaDBService {
   // Read events from the store
   rpc Read(ReadRequestProto) returns (stream ReadResponseProto);
 

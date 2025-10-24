@@ -39,6 +39,148 @@ impl UmaDB {
     pub fn from_arc(mvcc: std::sync::Arc<Mvcc>) -> Self {
         Self { mvcc }
     }
+
+    /// Appends a batch of (events, condition) using a single writer/transaction.
+    /// For each item, behaves like append():
+    /// - If condition is Some and matches any events (considering uncommitted writes), returns Err(IntegrityError) for that item and continues.
+    /// - If events is empty, returns Ok(0) for that item and continues.
+    /// - Otherwise performs unconditional append and records Ok(last_position) for that item.
+    /// At the end, commits the writer once. If commit fails, returns the commit error and discards per-item results.
+    pub fn append_batch(
+        &self,
+        items: Vec<(Vec<DCBEvent>, Option<DCBAppendCondition>)>,
+    ) -> DCBResult<Vec<DCBResult<u64>>> {
+        // println!("Processing batch of {} items", items.len());
+
+        let mvcc = &self.mvcc;
+        let mut writer = mvcc.writer()?;
+        let mut results: Vec<DCBResult<u64>> = Vec::with_capacity(items.len());
+
+        for (events, condition) in items.into_iter() {
+            // Check condition using read_conditional (limit 1), starting after the provided position
+            if let Some(cond) = condition {
+                let after = Position(cond.after.unwrap_or(0));
+                let found = read_conditional(
+                    mvcc,
+                    &writer.dirty,
+                    writer.events_tree_root_id,
+                    writer.tags_tree_root_id,
+                    cond.fail_if_events_match.clone(),
+                    after,
+                    Some(1),
+                );
+                match found {
+                    Ok(found_vec) => {
+                        if let Some(matched) = found_vec.first() {
+                            let msg = format!("matching event: {:?}, condition: {:?}", matched, cond.fail_if_events_match.clone());
+                            results.push(Err(DCBError::IntegrityError(msg)));
+                            continue;
+                        }
+                    }
+                    Err(e) => {
+                        // Propagate read error for this item but continue with others
+                        results.push(Err(e));
+                        continue;
+                    }
+                }
+            }
+
+            if events.is_empty() {
+                results.push(Ok(0));
+                continue;
+            }
+
+            // Append unconditionally
+            match unconditional_append(mvcc, &mut writer, events) {
+                Ok(last) => results.push(Ok(last)),
+                Err(e) => {
+                    // Record error for this item and continue
+                    results.push(Err(e));
+                }
+            }
+        }
+
+        // Single commit at the end of the batch
+        mvcc.commit(&mut writer)?;
+        Ok(results)
+    }
+}
+
+
+impl DCBEventStore for UmaDB {
+    fn read(
+        &self,
+        query: Option<DCBQuery>,
+        after: Option<u64>,
+        limit: Option<usize>,
+        _subscribe: bool,
+    ) -> DCBResult<Box<dyn DCBReadResponse + '_>> {
+        let mvcc = &self.mvcc;
+        let reader = mvcc.reader()?;
+
+        // Compute last committed position for unlimited head
+        let last_committed_position = reader.next_position.0.saturating_sub(1);
+
+        // Build query and after
+        let q = query.unwrap_or(DCBQuery { items: vec![] });
+        let after_pos = Position(after.unwrap_or(0));
+
+        // Delegate to read_conditional
+        let events = read_conditional(mvcc, &HashMap::new(), reader.events_tree_root_id, reader.tags_tree_root_id, q, after_pos, limit)?;
+
+        // Compute head according to semantics
+        let head = if limit.is_none() {
+            if last_committed_position == 0 {
+                None
+            } else {
+                Some(last_committed_position)
+            }
+        } else {
+            events.last().map(|e| e.position)
+        };
+
+        Ok(Box::new(ReadResponse {
+            events,
+            idx: 0,
+            head,
+        }))
+    }
+
+    fn head(&self) -> DCBResult<Option<u64>> {
+        let db = &self.mvcc;
+        let (_, header) = db.get_latest_header()?;
+        let last = header.next_position.0.saturating_sub(1);
+        if last == 0 { Ok(None) } else { Ok(Some(last)) }
+    }
+
+    fn append(
+        &self,
+        events: Vec<DCBEvent>,
+        condition: Option<DCBAppendCondition>,
+    ) -> DCBResult<u64> {
+        let mvcc = &self.mvcc;
+        let mut writer = mvcc.writer()?;
+
+        // Check condition using read_conditional (limit 1), starting after the provided position
+        if let Some(cond) = condition {
+            let after = Position(cond.after.unwrap_or(0));
+            let found = read_conditional(mvcc, &writer.dirty, writer.events_tree_root_id, writer.tags_tree_root_id, cond.fail_if_events_match.clone(), after, Some(1))?;
+            if let Some(matched) = found.first() {
+                let msg = format!("matching event: {:?} condition: {:?}", matched, cond.fail_if_events_match);
+                return Err(DCBError::IntegrityError(msg));
+            }
+        }
+
+        // If no events to append then return 0
+        if events.is_empty() {
+            return Ok(0);
+        }
+
+        // Append unconditionally then commit
+        let last = unconditional_append(mvcc, &mut writer, events)?;
+        mvcc.commit(&mut writer)?;
+        Ok(last)
+    }
 }
 
 struct ReadResponse {
@@ -72,30 +214,6 @@ impl DCBReadResponse for ReadResponse {
         Ok(batch)
     }
 }
-
-/// Compute a TagHash ([u8; 8]) from a tag string using a stable 64-bit hash.
-#[inline(always)]
-pub fn tag_to_hash(tag: &str) -> TagHash {
-    const SALT: [u8; 4] = [0x9E, 0x37, 0x79, 0xB9];
-    // Build a 64-bit value by combining two crc32 hashes for stability and simplicity.
-    let mut hasher1 = crc32fast::Hasher::new();
-    hasher1.update(tag.as_bytes());
-    let a = hasher1.finalize();
-
-    let mut hasher2 = crc32fast::Hasher::new();
-    // Note: Benchmark (benches/tag_hash_bench.rs) shows two update() calls
-    // are consistently faster than concatenating bytes+salt into a buffer
-    // and calling update() once, because concatenation requires allocation
-    // and copying. Keeping the two calls avoids extra work and is at least
-    // as fast across sizes from 0..8192 bytes.
-    hasher2.update(tag.as_bytes());
-    hasher2.update(&SALT);
-    let b = hasher2.finalize();
-
-    let value = ((a as u64) << 32) | (b as u64);
-    value.to_le_bytes()
-}
-
 
 /// Append events unconditionally to the database.
 ///
@@ -386,149 +504,29 @@ pub fn read_conditional(
 
     Ok(out)
 }
+/// Compute a TagHash ([u8; 8]) from a tag string using a stable 64-bit hash.
+#[inline(always)]
+pub fn tag_to_hash(tag: &str) -> TagHash {
+    const SALT: [u8; 4] = [0x9E, 0x37, 0x79, 0xB9];
+    // Build a 64-bit value by combining two crc32 hashes for stability and simplicity.
+    let mut hasher1 = crc32fast::Hasher::new();
+    hasher1.update(tag.as_bytes());
+    let a = hasher1.finalize();
 
-impl DCBEventStore for UmaDB {
-    fn read(
-        &self,
-        query: Option<DCBQuery>,
-        after: Option<u64>,
-        limit: Option<usize>,
-        _subscribe: bool,
-    ) -> DCBResult<Box<dyn DCBReadResponse + '_>> {
-        let mvcc = &self.mvcc;
-        let reader = mvcc.reader()?;
+    let mut hasher2 = crc32fast::Hasher::new();
+    // Note: Benchmark (benches/tag_hash_bench.rs) shows two update() calls
+    // are consistently faster than concatenating bytes+salt into a buffer
+    // and calling update() once, because concatenation requires allocation
+    // and copying. Keeping the two calls avoids extra work and is at least
+    // as fast across sizes from 0..8192 bytes.
+    hasher2.update(tag.as_bytes());
+    hasher2.update(&SALT);
+    let b = hasher2.finalize();
 
-        // Compute last committed position for unlimited head
-        let last_committed_position = reader.next_position.0.saturating_sub(1);
-
-        // Build query and after
-        let q = query.unwrap_or(DCBQuery { items: vec![] });
-        let after_pos = Position(after.unwrap_or(0));
-
-        // Delegate to read_conditional
-        let events = read_conditional(mvcc, &HashMap::new(), reader.events_tree_root_id, reader.tags_tree_root_id, q, after_pos, limit)?;
-
-        // Compute head according to semantics
-        let head = if limit.is_none() {
-            if last_committed_position == 0 {
-                None
-            } else {
-                Some(last_committed_position)
-            }
-        } else {
-            events.last().map(|e| e.position)
-        };
-
-        Ok(Box::new(ReadResponse {
-            events,
-            idx: 0,
-            head,
-        }))
-    }
-
-    fn head(&self) -> DCBResult<Option<u64>> {
-        let db = &self.mvcc;
-        let (_, header) = db.get_latest_header()?;
-        let last = header.next_position.0.saturating_sub(1);
-        if last == 0 { Ok(None) } else { Ok(Some(last)) }
-    }
-
-    fn append(
-        &self,
-        events: Vec<DCBEvent>,
-        condition: Option<DCBAppendCondition>,
-    ) -> DCBResult<u64> {
-        let mvcc = &self.mvcc;
-        let mut writer = mvcc.writer()?;
-
-        // Check condition using read_conditional (limit 1), starting after the provided position
-        if let Some(cond) = condition {
-            let after = Position(cond.after.unwrap_or(0));
-            let found = read_conditional(mvcc, &writer.dirty, writer.events_tree_root_id, writer.tags_tree_root_id, cond.fail_if_events_match.clone(), after, Some(1))?;
-            if let Some(matched) = found.first() {
-                let msg = format!("matching event: {:?} condition: {:?}", matched, cond.fail_if_events_match);
-                return Err(DCBError::IntegrityError(msg));
-            }
-        }
-
-        // If no events to append then return 0
-        if events.is_empty() {
-            return Ok(0);
-        }
-
-        // Append unconditionally then commit
-        let last = unconditional_append(mvcc, &mut writer, events)?;
-        mvcc.commit(&mut writer)?;
-        Ok(last)
-    }
+    let value = ((a as u64) << 32) | (b as u64);
+    value.to_le_bytes()
 }
 
-impl UmaDB {
-    /// Appends a batch of (events, condition) using a single writer/transaction.
-    /// For each item, behaves like append():
-    /// - If condition is Some and matches any events (considering uncommitted writes), returns Err(IntegrityError) for that item and continues.
-    /// - If events is empty, returns Ok(0) for that item and continues.
-    /// - Otherwise performs unconditional append and records Ok(last_position) for that item.
-    /// At the end, commits the writer once. If commit fails, returns the commit error and discards per-item results.
-    pub fn append_batch(
-        &self,
-        items: Vec<(Vec<DCBEvent>, Option<DCBAppendCondition>)>,
-    ) -> DCBResult<Vec<DCBResult<u64>>> {
-        // println!("Processing batch of {} items", items.len());
-
-        let mvcc = &self.mvcc;
-        let mut writer = mvcc.writer()?;
-        let mut results: Vec<DCBResult<u64>> = Vec::with_capacity(items.len());
-
-        for (events, condition) in items.into_iter() {
-            // Check condition using read_conditional (limit 1), starting after the provided position
-            if let Some(cond) = condition {
-                let after = Position(cond.after.unwrap_or(0));
-                let found = read_conditional(
-                    mvcc,
-                    &writer.dirty,
-                    writer.events_tree_root_id,
-                    writer.tags_tree_root_id,
-                    cond.fail_if_events_match.clone(),
-                    after,
-                    Some(1),
-                );
-                match found {
-                    Ok(found_vec) => {
-                        if let Some(matched) = found_vec.first() {
-                            let msg = format!("matching event: {:?}, condition: {:?}", matched, cond.fail_if_events_match.clone());
-                            results.push(Err(DCBError::IntegrityError(msg)));
-                            continue;
-                        }
-                    }
-                    Err(e) => {
-                        // Propagate read error for this item but continue with others
-                        results.push(Err(e));
-                        continue;
-                    }
-                }
-            }
-
-            if events.is_empty() {
-                results.push(Ok(0));
-                continue;
-            }
-
-            // Append unconditionally
-            match unconditional_append(mvcc, &mut writer, events) {
-                Ok(last) => results.push(Ok(last)),
-                Err(e) => {
-                    // Record error for this item and continue
-                    results.push(Err(e));
-                }
-            }
-        }
-
-        // Single commit at the end of the batch
-        mvcc.commit(&mut writer)?;
-        Ok(results)
-    }
-}
 
 #[cfg(test)]
 mod tests {

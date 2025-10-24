@@ -165,17 +165,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tags: vec!["tag1".to_string()],
         }],
     };
-    let mut stream = client.read(Some(query), None, None, false, None).await?;
+    let mut resp = client.read(Some(query), None, None, false, None).await?;
 
-    // Iterate through the events from the async stream
-    use futures::StreamExt;
-    while let Some(item) = stream.next().await {
-        match item {
-            Ok(event) => println!("Event at position {}: {:?}", event.position, event.event),
-            Err(e) => {
-                eprintln!("Stream error: {:?}", e);
-                break;
-            }
+    // Iterate through the events from the async batched response
+    loop {
+        let batch = resp.next_batch().await?;
+        if batch.is_empty() { break; }
+        for event in batch.into_iter() {
+            println!("Event at position {}: {:?}", event.position, event.event);
         }
     }
 
@@ -263,16 +260,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = GrpcEventStoreClient::connect("http://127.0.0.1:50051").await?;
 
     // Start a subscription: catch up all events and continue with new ones
-    let mut stream = client.read(None, None, None, true, None).await?;
+    let mut resp = client.read(None, None, None, true, None).await?;
 
-    // Consume events as they arrive
-    while let Some(item) = stream.next().await {
-        match item {
-            Ok(se) => println!("event {} type={} tags={:?}", se.position, se.event.event_type, se.event.tags),
-            Err(e) => {
-                eprintln!("subscription error: {e:?}");
-                break;
-            }
+    // Consume events as they arrive (in batches)
+    loop {
+        let batch = resp.next_batch().await?;
+        for se in batch.into_iter() {
+            println!("event {} type={} tags={:?}", se.position, se.event.event_type, se.event.tags);
         }
     }
     Ok(())
@@ -291,18 +285,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Find current head, then subscribe to only future events
     let head = client.head().await?.unwrap_or(0);
-    let mut stream = client.read(None, Some(head), None, true, None).await?;
+    let mut resp = client.read(None, Some(head), None, true, None).await?;
 
-    while let Some(item) = stream.next().await {
-        println!("new event: {:?}", item?);
+    loop {
+        let batch = resp.next_batch().await?;
+        for item in batch.into_iter() {
+            println!("new event: {:?}", item);
+        }
     }
-    Ok(())
+    // never returns in this simple example
+    // Ok(())
 }
 ```
 
 Notes:
-- The async client’s streaming API yields events only (it flattens batches). If you need the starting head value for boundary-aware logic in non-subscription reads, you can call client.head() before starting the read.
-- Server shutdown: When the server is asked to shut down, it signals all active subscription tasks so they terminate promptly. Your client iterator/stream will end.
+- The async client’s read now returns a batched response wrapper. You can access the starting head via `resp.head().await?` and iterate with `resp.next_batch().await?`.
+- Server shutdown: When the server is asked to shut down, it signals all active subscription tasks so they terminate promptly. Your client’s loop will end when `next_batch()` returns an empty batch.
 - Performance: You can tune per-message batch size with the optional batch_size argument to client.read(...). The server caps this to a safe maximum.
 
 ### Using Other gRPC Clients

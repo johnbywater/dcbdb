@@ -3,7 +3,6 @@ use clap::Parser;
 use umadb::dcb::DCBEvent;
 use umadb::grpc::GrpcEventStoreClient;
 use std::time::Instant;
-use futures::StreamExt;
 
 #[derive(Parser)]
 #[command(author, version, about = "UmaDB Example Client", long_about = None)]
@@ -63,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let t_read = Instant::now();
     let head_opt = client.head().await?;
     let read_after_position = max(head_opt.unwrap_or(0).saturating_sub(tail as u64), 0);
-    let mut stream = client.read(
+    let mut resp = client.read(
         None,
         Some(read_after_position),
         Some(tail),
@@ -72,19 +71,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
 
-    // Iterate through the events from the async stream
+    // Iterate through the events from the async batched response
     let mut ev_count = 0usize;
     let mut total_bytes = 0usize;
-    while let Some(item) = stream.next().await {
-        match item {
-            Ok(event) => {
-                ev_count += 1;
-                total_bytes += event.event.data.len();
-            }
-            Err(e) => {
-                eprintln!("Stream error: {:?}", e);
-                break;
-            }
+    loop {
+        let batch = resp.next_batch().await?;
+        if batch.is_empty() { break; }
+        for event in batch.into_iter() {
+            ev_count += 1;
+            total_bytes += event.event.data.len();
         }
     }
     let read_elapsed = t_read.elapsed();

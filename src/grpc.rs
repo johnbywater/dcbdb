@@ -640,6 +640,63 @@ pub struct GrpcEventStoreClient {
     client: umadb::event_store_service_client::EventStoreServiceClient<tonic::transport::Channel>,
 }
 
+// Async read response wrapper that provides batched access and head metadata
+pub struct GrpcReadResponse {
+    stream: tonic::Streaming<ReadResponseProto>,
+    buffered: Vec<crate::dcb::DCBSequencedEvent>,
+    last_head: Option<Option<u64>>, // None = unknown yet; Some(x) = known
+    ended: bool,
+}
+
+impl GrpcReadResponse {
+    async fn fetch_next_if_needed(&mut self) -> crate::dcb::DCBResult<()> {
+        if !self.buffered.is_empty() || self.ended { return Ok(()); }
+        match self.stream.message().await {
+            Ok(Some(resp)) => {
+                self.last_head = Some(resp.head);
+                self.buffered.clear();
+                for e in resp.events.into_iter() {
+                    if let Some(ev) = e.event {
+                        self.buffered.push(crate::dcb::DCBSequencedEvent {
+                            position: e.position,
+                            event: crate::dcb::DCBEvent { event_type: ev.event_type, tags: ev.tags, data: ev.data },
+                        });
+                    }
+                }
+                Ok(())
+            }
+            Ok(None) => { self.ended = true; Ok(()) }
+            Err(status) => Err(dcb_error_from_status(status)),
+        }
+    }
+
+    pub async fn head(&mut self) -> crate::dcb::DCBResult<Option<u64>> {
+        if let Some(h) = self.last_head { return Ok(h); }
+        // Need to read at least one message to learn head
+        self.fetch_next_if_needed().await?;
+        Ok(self.last_head.unwrap_or(None))
+    }
+
+    // Returns the next batch of events; empty vec indicates end of stream
+    pub async fn next_batch(&mut self) -> crate::dcb::DCBResult<Vec<crate::dcb::DCBSequencedEvent>> {
+        // If we have buffered events from a previous fetch, return them first
+        if !self.buffered.is_empty() {
+            let mut out = Vec::new();
+            std::mem::swap(&mut out, &mut self.buffered);
+            return Ok(out);
+        }
+        // Otherwise fetch a new message (which may be empty but carries head)
+        self.fetch_next_if_needed().await?;
+        if !self.buffered.is_empty() {
+            let mut out = Vec::new();
+            std::mem::swap(&mut out, &mut self.buffered);
+            return Ok(out);
+        }
+        // No buffered events. If stream ended or message had no events, return empty.
+        Ok(Vec::new())
+    }
+}
+
 impl GrpcEventStoreClient {
     pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
     where
@@ -678,7 +735,7 @@ impl GrpcEventStoreClient {
         limit: Option<usize>,
         subscribe: bool,
         batch_size: Option<usize>,
-    ) -> crate::dcb::DCBResult<Pin<Box<dyn futures::Stream<Item = crate::dcb::DCBResult<crate::dcb::DCBSequencedEvent>> + Send>>> {
+    ) -> crate::dcb::DCBResult<GrpcReadResponse> {
         // Convert API types to proto types
         let query_proto = query.map(|q| QueryProto {
             items: q
@@ -692,35 +749,9 @@ impl GrpcEventStoreClient {
 
         let mut client = self.client.clone();
         let response = client.read(request).await.map_err(|status| dcb_error_from_status(status))?;
-        let mut stream = response.into_inner();
+        let stream = response.into_inner();
 
-        // Increase channel buffer to reduce backpressure when the consumer is slightly slower,
-        // especially under concurrent readers. A deeper buffer improves throughput scaling.
-        let (tx, rx) = mpsc::channel::<crate::dcb::DCBResult<crate::dcb::DCBSequencedEvent>>(2048);
-        tokio::spawn(async move {
-            loop {
-                match stream.message().await {
-                    Ok(Some(resp)) => {
-                        for e in resp.events.into_iter() {
-                            if let Some(ev) = e.event {
-                                let out = crate::dcb::DCBSequencedEvent {
-                                    position: e.position,
-                                    event: crate::dcb::DCBEvent { event_type: ev.event_type, tags: ev.tags, data: ev.data },
-                                };
-                                if tx.send(Ok(out)).await.is_err() { return; }
-                            }
-                        }
-                    }
-                    Ok(None) => { break; }
-                    Err(status) => {
-                        let _ = tx.send(Err(dcb_error_from_status(status))).await;
-                        break;
-                    }
-                }
-            }
-        });
-
-        Ok(Box::pin(ReceiverStream::new(rx)))
+        Ok(GrpcReadResponse { stream, buffered: Vec::new(), last_head: None, ended: false })
     }
 
     pub async fn append(

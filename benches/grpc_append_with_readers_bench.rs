@@ -9,7 +9,7 @@ use tempfile::tempdir;
 use tokio::runtime::Builder as RtBuilder;
 use tokio::sync::oneshot;
 use futures::future::join_all;
-use futures::StreamExt;
+// use futures::StreamExt;
 use std::time::Duration;
 
 fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
@@ -116,18 +116,19 @@ pub fn grpc_append_with_readers_benchmark(c: &mut Criterion) {
             let running = readers_running.clone();
             let handle = readers_rt.spawn(async move {
                 while running.load(Ordering::Relaxed) {
-                    let mut stream = match client
+                    let mut resp = match client
                         .read(None, None, Some(TOTAL_EVENTS), false, Some(READ_BATCH_SIZE))
                         .await
                     {
                         Ok(s) => s,
                         Err(_) => break,
                     };
-                    // let mut count = 0usize;
-                    while let Some(item) = stream.next().await {
-                        if item.is_err() { break; }
-                        let _evt = black_box(item.unwrap());
-                        // count += 1;
+                    loop {
+                        let batch = match resp.next_batch().await { Ok(b) => b, Err(_) => break };
+                        if batch.is_empty() { break; }
+                        for item in batch.into_iter() {
+                            let _evt = black_box(item);
+                        }
                     }
                     // Keep the loop light to avoid starving writers
                     tokio::task::yield_now().await;

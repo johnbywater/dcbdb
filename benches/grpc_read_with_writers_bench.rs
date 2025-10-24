@@ -9,7 +9,7 @@ use std::time::Duration;
 use tempfile::tempdir;
 use tokio::runtime::Builder as RtBuilder;
 use tokio::sync::oneshot;
-use futures::StreamExt;
+// use futures::StreamExt;
 use futures::future::join_all;
 
 fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
@@ -166,14 +166,18 @@ pub fn grpc_read_with_writers_benchmark(c: &mut Criterion) {
                     let futs = (0..threads).map(|i| {
                         let client = clients[i].clone();
                         async move {
-                            let mut stream = client
+                            let mut resp = client
                                 .read(None, None, Some(TOTAL_EVENTS), false, Some(READ_BATCH_SIZE))
                                 .await
-                                .expect("start read stream");
+                                .expect("start read response");
                             let mut count = 0usize;
-                            while let Some(item) = stream.next().await {
-                                let _evt = black_box(item.expect("stream item ok"));
-                                count += 1;
+                            loop {
+                                let batch = resp.next_batch().await.expect("next_batch ok");
+                                if batch.is_empty() { break; }
+                                for item in batch.into_iter() {
+                                    let _evt = black_box(item);
+                                    count += 1;
+                                }
                             }
                             assert_eq!(count, TOTAL_EVENTS, "expected to read all preloaded events");
                         }

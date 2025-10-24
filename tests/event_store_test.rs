@@ -1023,23 +1023,19 @@ impl DCBEventStore for SyncGrpcEventStoreClient {
         limit: Option<usize>,
         subscribe: bool,
     ) -> Result<Box<dyn umadb::dcb::DCBReadResponse + '_>, DCBError> {
-        use futures::StreamExt as _;
         // We only support subscribe=false in this sync wrapper for tests
         assert!(!subscribe, "SyncGrpcEventStore::read only supports subscribe=false in tests");
-        let mut stream = self.rt.block_on(self.client.read(query, after, limit, false, None))?;
+        let mut resp = self.rt.block_on(self.client.read(query, after, limit, false, None))?;
         let mut events = Vec::new();
         self.rt.block_on(async {
-            while let Some(item) = stream.next().await {
-                let ev = item?;
-                events.push(ev);
+            loop {
+                let batch = resp.next_batch().await?;
+                if batch.is_empty() { break; }
+                events.extend(batch);
             }
             Ok::<(), DCBError>(())
         })?;
-        let head = match limit {
-            Some(0) => None,
-            Some(_) => events.last().map(|e| e.position),
-            None => self.rt.block_on(self.client.head())?,
-        };
+        let head = self.rt.block_on(async { resp.head().await })?;
         Ok(Box::new(SyncReadResponse { events, idx: 0, head }))
     }
 

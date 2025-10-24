@@ -100,7 +100,6 @@ impl Mvcc {
                 values: Vec::new(),
             };
             let free_list_page = Page::new(freetree_root_id, Node::FreeListLeaf(free_list_leaf));
-            mvcc.write_page(&free_list_page)?;
 
             // Create and write an empty position index root page
             let event_leaf = EventLeafNode {
@@ -108,7 +107,6 @@ impl Mvcc {
                 values: Vec::new(),
             };
             let position_page = Page::new(position_root_id, Node::EventLeaf(event_leaf));
-            mvcc.write_page(&position_page)?;
 
             // Create and write an empty tags index root page
             let tags_leaf = TagsLeafNode {
@@ -116,7 +114,9 @@ impl Mvcc {
                 values: Vec::new(),
             };
             let tags_page = Page::new(tags_root_id, Node::TagsLeaf(tags_leaf));
-            mvcc.write_page(&tags_page)?;
+
+            // Write all three initial root pages using the shared write_pages helper
+            let _ = mvcc.write_pages([&free_list_page, &position_page, &tags_page].into_iter())?;
 
             mvcc.flush()?;
         } else {
@@ -226,19 +226,11 @@ impl Mvcc {
         Page::deserialize(page_id, mapped.as_slice())
     }
 
-    pub fn write_page(&self, page: &Page) -> DCBResult<()> {
-        let serialized = &page.serialize()?;
-        self.pager.write_page(page.page_id, serialized)?;
-        if self.verbose {
-            println!("Wrote {:?} to file", page.page_id);
-        }
-        Ok(())
-    }
-
     pub fn flush(&self) -> DCBResult<()> {
         self.pager.flush()?;
         Ok(())
     }
+
 
     pub fn reader(&self) -> DCBResult<Reader> {
         let (header_page_id, header_node) = self.get_latest_header()?;
@@ -301,6 +293,28 @@ impl Mvcc {
         Ok(writer)
     }
 
+    /// Write one or more pages to disk using the shared preallocated page buffer.
+    /// Returns the number of pages written.
+    pub fn write_pages<'a, I>(&self, pages: I) -> DCBResult<usize>
+    where
+        I: IntoIterator<Item = &'a Page>,
+    {
+        let mut buf = self.page_buf.lock().unwrap();
+        if buf.len() != self.page_size {
+            buf.resize(self.page_size, 0);
+        }
+        let mut count = 0usize;
+        for page in pages {
+            page.serialize_into_vec(&mut buf)?;
+            self.pager.write_page(page.page_id, &buf)?;
+            if self.verbose {
+                println!("Wrote {:?} to file", page.page_id);
+            }
+            count += 1;
+        }
+        Ok(count)
+    }
+
     pub fn commit(&self, writer: &mut Writer) -> DCBResult<()> {
         // Process reused and freed page IDs
         if self.verbose {
@@ -326,16 +340,8 @@ impl Mvcc {
         }
 
         // Write all dirty pages (except for the header page) to the file
-        // Stream pages directly to the pager to avoid allocating an intermediate Vec
         if !writer.dirty.is_empty() {
-            let mut count = 0usize;
-            // Reuse a single buffer for all page serializations
-            let mut buf = self.page_buf.lock().unwrap();
-            for page in writer.dirty.values() {
-                page.serialize_into_vec(&mut buf)?;
-                self.pager.write_page(page.page_id, &buf)?;
-                count += 1;
-            }
+            let count = self.write_pages(writer.dirty.values())?;
             if self.verbose {
                 println!("Wrote {} dirty page(s) to file", count);
             }

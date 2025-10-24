@@ -397,21 +397,30 @@ impl CommandHandler {
                                     }
                                 }
                                 Err(e) => {
-                                    // If the batch failed as a whole (e.g., commit failed), propagate an error to all responders
-                                    // We cannot clone DCBError, so move it into the last sender and send IO-wrapped messages to others.
-                                    let total = responders.len();
-                                    let mut iter = responders.into_iter();
-                                    if total > 1 {
-                                        for _ in 0..(total - 1) {
-                                            if let Some(tx) = iter.next() {
-                                                let _ = tx.send(Err(DCBError::Io(std::io::Error::other(
-                                                    "Batched append failed; see a concurrent request error for details",
-                                                ))));
-                                            }
+                                    // If the batch failed as a whole (e.g., commit failed), propagate the SAME error to all responders.
+                                    // DCBError is not Clone (contains io::Error), so reconstruct a best-effort copy by using its Display text
+                                    // for Io and cloning data for other variants.
+                                    fn clone_dcb_error(src: &DCBError) -> DCBError {
+                                        match src {
+                                            DCBError::Io(err) => DCBError::Io(std::io::Error::other(err.to_string())),
+                                            DCBError::IntegrityError(s) => DCBError::IntegrityError(s.clone()),
+                                            DCBError::Corruption(s) => DCBError::Corruption(s.clone()),
+                                            DCBError::PageNotFound(id) => DCBError::PageNotFound(*id),
+                                            DCBError::DirtyPageNotFound(id) => DCBError::DirtyPageNotFound(*id),
+                                            DCBError::RootIDMismatch(old_id, new_id) => DCBError::RootIDMismatch(*old_id, *new_id),
+                                            DCBError::DatabaseCorrupted(s) => DCBError::DatabaseCorrupted(s.clone()),
+                                            DCBError::SerializationError(s) => DCBError::SerializationError(s.clone()),
+                                            DCBError::DeserializationError(s) => DCBError::DeserializationError(s.clone()),
+                                            DCBError::PageAlreadyFreed(id) => DCBError::PageAlreadyFreed(*id),
+                                            DCBError::PageAlreadyDirty(id) => DCBError::PageAlreadyDirty(*id),
                                         }
                                     }
-                                    if let Some(tx) = iter.next() {
-                                        let _ = tx.send(Err(e));
+                                    let total = responders.len();
+                                    let mut iter = responders.into_iter();
+                                    for _ in 0..total {
+                                        if let Some(tx) = iter.next() {
+                                            let _ = tx.send(Err(clone_dcb_error(&e)));
+                                        }
                                     }
                                 }
                             }

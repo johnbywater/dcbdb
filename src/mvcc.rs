@@ -305,7 +305,7 @@ impl Mvcc {
         }
         let mut count = 0usize;
         for page in pages {
-            page.serialize_into_vec(&mut buf)?;
+            page.serialize_into(&mut buf)?;
             self.pager.write_page(page.page_id, &buf)?;
             if self.verbose {
                 println!("Wrote {:?} to file", page.page_id);

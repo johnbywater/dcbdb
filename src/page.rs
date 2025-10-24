@@ -44,7 +44,7 @@ impl Page {
     /// No-allocation (reusable Vec) serializer. Writes a full page (header + body + zero padding)
     /// into `out`. The vector is cleared and zero-filled to its capacity (expected to be DB page size)
     /// before serialization, avoiding per-call resizing based on body length.
-    pub fn serialize_into_vec(&self, out: &mut Vec<u8>) -> DCBResult<()> {
+    pub fn serialize_into(&self, out: &mut Vec<u8>) -> DCBResult<()> {
         // We assume `out` was created with capacity equal to the DB page size and reused across calls.
 
         // Serialize body into the front of the body region using the space after header
@@ -143,7 +143,7 @@ mod tests {
         // Serialize the page into a fixed-size buffer using serialize_into_vec
         let mut page_buf = vec![0u8; crate::db::DEFAULT_PAGE_SIZE];
         page
-            .serialize_into_vec(&mut page_buf)
+            .serialize_into(&mut page_buf)
             .expect("Failed to serialize page into buffer");
 
         // Check that the effective serialized data size (header + body_len from header) matches the calculated size

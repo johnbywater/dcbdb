@@ -77,21 +77,6 @@ impl Node {
         }
     }
 
-    pub fn serialize(&self) -> DCBResult<Vec<u8>> {
-        match self {
-            Node::Header(node) => Ok(node.serialize()),
-            Node::FreeListLeaf(node) => node.serialize(),
-            Node::FreeListInternal(node) => node.serialize(),
-            Node::EventLeaf(node) => node.serialize(),
-            Node::EventInternal(node) => node.serialize(),
-            Node::EventOverflow(node) => node.serialize(),
-            Node::TagsLeaf(node) => node.serialize(),
-            Node::TagsInternal(node) => node.serialize(),
-            Node::TagLeaf(node) => node.serialize(),
-            Node::TagInternal(node) => node.serialize(),
-        }
-    }
-
     /// No-allocation serialization into a provided buffer slice.
     /// Returns the number of bytes written.
     /// Implemented for key node types; for others it falls back to allocate-and-copy.

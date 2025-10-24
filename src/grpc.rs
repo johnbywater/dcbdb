@@ -7,7 +7,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Code, transport::Server};
 
 use crate::dcb::{
-    DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem, DCBResult,
+    DCBAppendCondition, DCBError, DCBEvent, DCBQuery, DCBQueryItem, DCBResult,
     DCBSequencedEvent,
 };
 use crate::db::{UmaDB, read_conditional, DEFAULT_PAGE_SIZE};
@@ -382,12 +382,19 @@ impl CommandHandler {
                             let batch_result = db.append_batch(items);
                             match batch_result {
                                 Ok(results) => {
+                                    // Send individual results back to requesters
+                                    // Also compute the new head as the maximum successful last position in this batch
+                                    let mut max_ok: Option<u64> = None;
                                     for (res, tx) in results.into_iter().zip(responders.into_iter()) {
+                                        if let Ok(v) = &res {
+                                            max_ok = Some(max_ok.map_or(*v, |m| m.max(*v)));
+                                        }
                                         let _ = tx.send(res);
                                     }
-                                    // After successful batch commit, publish updated head
-                                    let new_head = db.head().ok().flatten();
-                                    let _ = head_tx_writer.send(new_head);
+                                    // After successful batch commit, publish updated head if there were successful appends
+                                    if let Some(h) = max_ok {
+                                        let _ = head_tx_writer.send(Some(h));
+                                    }
                                 }
                                 Err(e) => {
                                     // If the batch failed as a whole (e.g., commit failed), propagate an error to all responders

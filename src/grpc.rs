@@ -25,7 +25,7 @@ use umadb::{
     ErrorResponseProto,
     AppendConditionProto, AppendRequestProto, AppendResponseProto, EventProto, HeadRequestProto,
     HeadResponseProto, QueryItemProto, QueryProto, ReadRequestProto, ReadResponseProto,
-    SequencedEventBatchProto, SequencedEventProto,
+    SequencedEventProto,
     event_store_service_server::{EventStoreService, EventStoreServiceServer},
 };
 
@@ -494,8 +494,7 @@ impl EventStoreService for GrpcEventStoreServer {
                             if !sent_any {
                                 // For unlimited overall reads, use precomputed global head (non-subscribe)
                                 let head_to_send = if remaining.is_none() && !subscribe { global_head } else { head };
-                                let batch = SequencedEventBatchProto { events: vec![], head: head_to_send };
-                                let response = ReadResponseProto { batch: Some(batch) };
+                                let response = ReadResponseProto { events: vec![], head: head_to_send };
                                 let _ = tx.send(Ok(response)).await;
                             }
                             // For subscriptions, wait for new events instead of terminating
@@ -546,8 +545,7 @@ impl EventStoreService for GrpcEventStoreServer {
                             // If we haven't sent anything yet, still send an empty batch with head to convey metadata
                             if !sent_any {
                                 let head_to_send = if remaining.is_none() { global_head } else { head };
-                                let batch = SequencedEventBatchProto { events: vec![], head: head_to_send };
-                                let response = ReadResponseProto { batch: Some(batch) };
+                                let response = ReadResponseProto { events: vec![], head: head_to_send };
                                 let _ = tx.send(Ok(response)).await;
                             }
                             break;
@@ -559,7 +557,7 @@ impl EventStoreService for GrpcEventStoreServer {
                         for e in events[slice_start..slice_start + slice_len].iter() {
                             ev_out.push(SequencedEventProto::from(e.clone()));
                         }
-                        let response = ReadResponseProto { batch: Some(SequencedEventBatchProto { events: ev_out, head: batch_head }) };
+                        let response = ReadResponseProto { events: ev_out, head: batch_head };
 
                         if tx.send(Ok(response)).await.is_err() {
                             break;
@@ -703,15 +701,13 @@ impl GrpcEventStoreClient {
             loop {
                 match stream.message().await {
                     Ok(Some(resp)) => {
-                        if let Some(batch) = resp.batch {
-                            for e in batch.events.into_iter() {
-                                if let Some(ev) = e.event {
-                                    let out = crate::dcb::DCBSequencedEvent {
-                                        position: e.position,
-                                        event: crate::dcb::DCBEvent { event_type: ev.event_type, tags: ev.tags, data: ev.data },
-                                    };
-                                    if tx.send(Ok(out)).await.is_err() { return; }
-                                }
+                        for e in resp.events.into_iter() {
+                            if let Some(ev) = e.event {
+                                let out = crate::dcb::DCBSequencedEvent {
+                                    position: e.position,
+                                    event: crate::dcb::DCBEvent { event_type: ev.event_type, tags: ev.tags, data: ev.data },
+                                };
+                                if tx.send(Ok(out)).await.is_err() { return; }
                             }
                         }
                     }

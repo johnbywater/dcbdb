@@ -15,12 +15,6 @@ message SequencedEventProto {
   EventProto event = 2;
 }
 
-// Sequenced Event Batch message
-message SequencedEventBatchProto {
-  repeated SequencedEventProto events = 1;
-  optional uint64 head = 2;
-}
-
 // Query Item message
 message QueryItemProto {
   repeated string types = 1;
@@ -49,7 +43,8 @@ message ReadRequestProto {
 
 // Read response message
 message ReadResponseProto {
-  SequencedEventBatchProto batch = 1;
+  repeated SequencedEventProto events = 1;
+  optional uint64 head = 2;
 }
 
 // Append request message

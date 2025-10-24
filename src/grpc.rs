@@ -67,14 +67,14 @@ pub async fn start_server<P: AsRef<Path> + Send + 'static>(
 
 // gRPC server implementation
 pub struct UmaDBServer {
-    event_store: EventStoreHandle,
+    command_handler: CommandHandler,
     shutdown_rx: watch::Receiver<bool>,
 }
 
 impl UmaDBServer {
     pub fn new<P: AsRef<Path> + Send + 'static>(path: P, shutdown_rx: watch::Receiver<bool>) -> std::io::Result<Self> {
-        let event_store = EventStoreHandle::new(path)?;
-        Ok(Self { event_store, shutdown_rx })
+        let command_handler = CommandHandler::new(path)?;
+        Ok(Self { command_handler, shutdown_rx })
     }
 
     pub fn into_service(self) -> UmaDbServiceServer<Self> {
@@ -100,7 +100,7 @@ impl UmaDbService for UmaDBServer {
 
         // Create a channel for streaming responses (deeper buffer to reduce backpressure under concurrency)
         let (tx, rx) = mpsc::channel(2048);
-        let event_store = self.event_store.clone();
+        let command_handler = self.command_handler.clone();
         let mut shutdown_rx = self.shutdown_rx.clone();
 
         // Spawn a task to handle the read operation and stream multiple batches
@@ -112,10 +112,10 @@ impl UmaDbService for UmaDBServer {
             let mut remaining = limit;
             let subscribe = req.subscribe.unwrap_or(false);
             // Create a watch receiver for head updates (for subscriptions)
-            let mut head_rx = event_store.watch_head();
+            let mut head_rx = command_handler.watch_head();
             // If overall read is unlimited, compute global head once to preserve semantics
             let global_head = if remaining.is_none() && !subscribe {
-                match event_store.head().await { Ok(h) => h, Err(_) => None }
+                match command_handler.head().await { Ok(h) => h, Err(_) => None }
             } else { None };
             // Server-side batch cap to ensure streaming in multiple messages
             // Keep this modest so tests expecting multiple batches (e.g., 300 items) will split.
@@ -136,10 +136,10 @@ impl UmaDbService for UmaDBServer {
                 if subscribe {
                     if let Some(rem) = remaining { if rem == 0 { break; } }
                 }
-                match event_store.read(query_clone.clone(), next_after, per_iter_limit).await {
+                match command_handler.read(query_clone.clone(), next_after, per_iter_limit).await {
                     Ok((events, head)) => {
                         if events.is_empty() {
-                            // Only send an empty batch to communicate head if this is the first batch
+                            // Only send an empty response to communicate head if this is the first
                             if !sent_any {
                                 // For unlimited overall reads, use precomputed global head (non-subscribe)
                                 let head_to_send = if remaining.is_none() && !subscribe { global_head } else { head };
@@ -263,7 +263,7 @@ impl UmaDbService for UmaDBServer {
         let condition = req.condition.map(|c| c.into());
 
         // Call the event store append method
-        match self.event_store.append(events, condition).await {
+        match self.command_handler.append(events, condition).await {
             Ok(position) => Ok(Response::new(AppendResponseProto { position })),
             Err(e) => Err(status_from_dcb_error(&e)),
         }
@@ -274,7 +274,7 @@ impl UmaDbService for UmaDBServer {
         _request: Request<HeadRequestProto>,
     ) -> Result<Response<HeadResponseProto>, Status> {
         // Call the event store head method
-        match self.event_store.head().await {
+        match self.command_handler.head().await {
             Ok(position) => {
                 // Return the position as a response
                 Ok(Response::new(HeadResponseProto { position }))
@@ -286,39 +286,29 @@ impl UmaDbService for UmaDBServer {
 
 
 
-// Message types for communication between the gRPC server and the EventStore thread
-enum EventStoreRequest {
-    // Read {
-    //     query: Option<DCBQuery>,
-    //     after: Option<u64>,
-    //     limit: Option<usize>,
-    //     response_tx: oneshot::Sender<DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)>>,
-    // },
+// Message types for communication between the gRPC server and the command handler thread
+enum Command {
     Append {
         events: Vec<DCBEvent>,
         condition: Option<DCBAppendCondition>,
         response_tx: oneshot::Sender<DCBResult<u64>>,
     },
-    // Head {
-    //     response_tx: oneshot::Sender<DCBResult<Option<u64>>>,
-    // },
-    #[allow(dead_code)]
     Shutdown,
 }
 
-// Thread-safe wrapper for EventStore
-struct EventStoreHandle {
+// Thread-safe command handler
+struct CommandHandler {
     mvcc: std::sync::Arc<Mvcc>,
     head_tx: watch::Sender<Option<u64>>,
-    request_tx: mpsc::Sender<EventStoreRequest>,
+    request_tx: mpsc::Sender<Command>,
 }
 
-impl EventStoreHandle {
+impl CommandHandler {
     fn new<P: AsRef<Path> + Send + 'static>(path: P) -> std::io::Result<Self> {
         // Create a channel for sending requests to the EventStore thread (for writes)
-        let (request_tx, mut request_rx) = mpsc::channel::<EventStoreRequest>(1024);
+        let (request_tx, mut request_rx) = mpsc::channel::<Command>(1024);
 
-        // Build a shared LMDB instance (Arc) upfront so reads can proceed concurrently on this thread
+        // Build a shared Mvcc instance (Arc) upfront so reads can proceed concurrently on this thread
         let p = path.as_ref();
         let file_path = if p.is_dir() { p.join("dcb.db") } else { p.to_path_buf() };
         let mvcc = std::sync::Arc::new(
@@ -336,11 +326,11 @@ impl EventStoreHandle {
         };
         let (head_tx, _head_rx) = watch::channel::<Option<u64>>(init_head);
 
-        // Spawn a thread to run the EventStore for serialized write operations
+        // Spawn a thread for serialized write operations
         let mvcc_for_writer = mvcc.clone();
         let head_tx_writer = head_tx.clone();
         thread::spawn(move || {
-            let event_store = UmaDB::from_arc(mvcc_for_writer);
+            let db = UmaDB::from_arc(mvcc_for_writer);
 
             // Create a runtime for async operations
             let rt = tokio::runtime::Runtime::new().unwrap();
@@ -349,10 +339,7 @@ impl EventStoreHandle {
             rt.block_on(async {
                 while let Some(request) = request_rx.recv().await {
                     match request {
-                        // EventStoreRequest::Read { .. } => {
-                        //     // No-op: reads should not be routed here anymore.
-                        // }
-                        EventStoreRequest::Append {
+                        Command::Append {
                             events,
                             condition,
                             response_tx,
@@ -375,31 +362,31 @@ impl EventStoreHandle {
                                     break;
                                 }
                                 match request_rx.try_recv() {
-                                    Ok(EventStoreRequest::Append { events, condition, response_tx }) => {
+                                    Ok(Command::Append { events, condition, response_tx }) => {
                                         let ev_len = events.len();
                                         items.push((events, condition));
                                         responders.push(response_tx);
                                         total_events += ev_len;
                                     }
-                                    Ok(EventStoreRequest::Shutdown) => {
+                                    Ok(Command::Shutdown) => {
                                         // Push back the shutdown signal by breaking and letting outer loop handle after batch.
                                         // We'll process current batch first, then break outer loop on next iteration when channel is empty.
                                         break;
                                     }
-                                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
-                                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+                                    Err(mpsc::error::TryRecvError::Empty) => break,
+                                    Err(mpsc::error::TryRecvError::Disconnected) => break,
                                 }
                             }
 
                             // Execute a single batched append
-                            let batch_result = event_store.append_batch(items);
+                            let batch_result = db.append_batch(items);
                             match batch_result {
                                 Ok(results) => {
                                     for (res, tx) in results.into_iter().zip(responders.into_iter()) {
                                         let _ = tx.send(res);
                                     }
                                     // After successful batch commit, publish updated head
-                                    let new_head = event_store.head().ok().flatten();
+                                    let new_head = db.head().ok().flatten();
                                     let _ = head_tx_writer.send(new_head);
                                 }
                                 Err(e) => {
@@ -422,11 +409,7 @@ impl EventStoreHandle {
                                 }
                             }
                         }
-                        // EventStoreRequest::Head { response_tx } => {
-                        //     let result = event_store.head();
-                        //     let _ = response_tx.send(result);
-                        // }
-                        EventStoreRequest::Shutdown => {
+                        Command::Shutdown => {
                             break;
                         }
                     }
@@ -477,10 +460,10 @@ impl EventStoreHandle {
     ) -> DCBResult<u64> {
         // Concurrent pre-check of condition using a read-only view in a blocking thread.
         let adjusted_condition = if let Some(cond_in) = condition {
-            let db = self.mvcc.clone();
+            let mvcc = self.mvcc.clone();
             tokio::task::spawn_blocking(move || -> DCBResult<Option<DCBAppendCondition>> {
                 let mut cond = cond_in;
-                let reader = db.reader()?;
+                let reader = mvcc.reader()?;
                 let current_head = {
                     let last = reader.next_position.0.saturating_sub(1);
                     if last == 0 { None } else { Some(last) }
@@ -489,7 +472,7 @@ impl EventStoreHandle {
                 // Perform conditional read on the snapshot (limit 1) starting after the provided position
                 let after_pos = crate::common::Position(cond.after.unwrap_or(0));
                 let found = read_conditional(
-                    &db,
+                    &mvcc,
                     &std::collections::HashMap::new(),
                     reader.events_tree_root_id,
                     reader.tags_tree_root_id,
@@ -518,7 +501,7 @@ impl EventStoreHandle {
         let (response_tx, response_rx) = oneshot::channel();
 
         self.request_tx
-            .send(EventStoreRequest::Append {
+            .send(Command::Append {
                 events,
                 condition: adjusted_condition,
                 response_tx,
@@ -543,9 +526,9 @@ impl EventStoreHandle {
 
     async fn head(&self) -> DCBResult<Option<u64>> {
         // Offload blocking head read to a dedicated threadpool
-        let db = self.mvcc.clone();
+        let mvcc = self.mvcc.clone();
         tokio::task::spawn_blocking(move || -> DCBResult<Option<u64>> {
-            let (_, header) = db
+            let (_, header) = mvcc
                 .get_latest_header()
                 .map_err(|e| DCBError::Corruption(format!("{e}")))?;
             let last = header.next_position.0.saturating_sub(1);
@@ -557,12 +540,12 @@ impl EventStoreHandle {
 
     #[allow(dead_code)]
     async fn shutdown(&self) {
-        let _ = self.request_tx.send(EventStoreRequest::Shutdown).await;
+        let _ = self.request_tx.send(Command::Shutdown).await;
     }
 }
 
 // Clone implementation for EventStoreHandle
-impl Clone for EventStoreHandle {
+impl Clone for CommandHandler {
     fn clone(&self) -> Self {
         Self {
             mvcc: self.mvcc.clone(),

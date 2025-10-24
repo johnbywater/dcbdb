@@ -27,7 +27,7 @@ memmap2 = "0.9.4"
 # Add test dependencies as needed
 serial_test = "2.0.0"
 criterion = { version = "0.5", features = ["html_reports", "csv_output"] }
-pprof = { version = "0.13", features = ["criterion", "flamegraph"] }
+pprof = { version = "0.14", features = ["criterion", "flamegraph"] }
 
 [build-dependencies]
 tonic-build = "0.13.1"

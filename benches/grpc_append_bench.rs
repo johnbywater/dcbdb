@@ -1,7 +1,7 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput, black_box};
 use umadb::dcb::{DCBEvent, DCBEventStore};
 use umadb::db::UmaDB;
-use umadb::grpc::{AsyncUmaDBClient, start_grpc_server_with_shutdown};
+use umadb::grpc::{AsyncUmaDBClient, start_server};
 use std::net::TcpListener;
 use std::thread;
 use std::sync::Arc;
@@ -69,7 +69,7 @@ pub fn grpc_append_benchmark(c: &mut Criterion) {
                 .build()
                 .expect("build tokio rt for server");
             rt.block_on(async move {
-                start_grpc_server_with_shutdown(db_path_clone, &addr_clone, shutdown_rx)
+                start_server(db_path_clone, &addr_clone, shutdown_rx)
                     .await
                     .expect("start server");
             });

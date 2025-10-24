@@ -5,7 +5,7 @@ use umadb::dcb::{
 use umadb::db::UmaDB;
 use tempfile::tempdir;
 use uuid::Uuid;
-use umadb::grpc::{AsyncUmaDBClient, start_grpc_server_with_shutdown};
+use umadb::grpc::{AsyncUmaDBClient, start_server};
 use tokio::runtime::Builder as RtBuilder;
 use std::net::TcpListener;
 // Import the EventStore and related types from the main crate
@@ -940,7 +940,7 @@ fn test_grpc_event_store_client() {
     // Start the server
     let data_dir = temp_dir.path().to_path_buf();
     rt.spawn(async move {
-        let _ = start_grpc_server_with_shutdown(data_dir, &addr_noscheme, shutdown_rx).await;
+        let _ = start_server(data_dir, &addr_noscheme, shutdown_rx).await;
     });
 
     // Connect the client (retry until server is ready)

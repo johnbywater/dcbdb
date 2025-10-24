@@ -1,5 +1,5 @@
 use umadb::dcb::DCBEvent;
-use umadb::grpc::{start_grpc_server_with_shutdown, AsyncUmaDBClient};
+use umadb::grpc::{start_server, AsyncUmaDBClient};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn grpc_async_streams_large_reads_total_count() {
@@ -11,7 +11,7 @@ async fn grpc_async_streams_large_reads_total_count() {
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let server_task = tokio::spawn(async move {
-        let _ = start_grpc_server_with_shutdown(db_path, &addr, shutdown_rx).await;
+        let _ = start_server(db_path, &addr, shutdown_rx).await;
     });
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
@@ -51,7 +51,7 @@ async fn grpc_async_does_not_stream_past_starting_head() {
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let server_task = tokio::spawn(async move {
-        let _ = start_grpc_server_with_shutdown(db_path, &addr, shutdown_rx).await;
+        let _ = start_server(db_path, &addr, shutdown_rx).await;
     });
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
@@ -96,7 +96,7 @@ async fn grpc_async_subscription_catch_up_and_continue() {
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let server_task = tokio::spawn(async move {
-        let _ = start_grpc_server_with_shutdown(db_path, &addr, shutdown_rx).await;
+        let _ = start_server(db_path, &addr, shutdown_rx).await;
     });
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
@@ -158,7 +158,7 @@ async fn grpc_async_stream_catch_up_and_continue() {
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let server_task = tokio::spawn(async move {
-        let _ = start_grpc_server_with_shutdown(db_path, &addr, shutdown_rx).await;
+        let _ = start_server(db_path, &addr, shutdown_rx).await;
     });
 
     sleep(TokioDuration::from_millis(200)).await;

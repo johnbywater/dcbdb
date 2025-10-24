@@ -39,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Start the gRPC server with shutdown capability
-    grpc::start_grpc_server_with_shutdown(args.path, &args.address, shutdown_rx).await?;
+    grpc::start_server(args.path, &args.address, shutdown_rx).await?;
 
     println!("Server has been gracefully shut down");
     Ok(())

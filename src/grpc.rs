@@ -409,6 +409,7 @@ impl CommandHandler {
                                             DCBError::DirtyPageNotFound(id) => DCBError::DirtyPageNotFound(*id),
                                             DCBError::RootIDMismatch(old_id, new_id) => DCBError::RootIDMismatch(*old_id, *new_id),
                                             DCBError::DatabaseCorrupted(s) => DCBError::DatabaseCorrupted(s.clone()),
+                                            DCBError::InternalError(s) => DCBError::InternalError(s.clone()),
                                             DCBError::SerializationError(s) => DCBError::SerializationError(s.clone()),
                                             DCBError::DeserializationError(s) => DCBError::DeserializationError(s.clone()),
                                             DCBError::PageAlreadyFreed(id) => DCBError::PageAlreadyFreed(*id),
@@ -794,6 +795,8 @@ fn status_from_dcb_error(e: &DCBError) -> Status {
     let (code, error_type) = match e {
         DCBError::IntegrityError(_) => (Code::FailedPrecondition, umadb::error_response_proto::ErrorType::Integrity as i32),
         DCBError::Corruption(_) | DCBError::DatabaseCorrupted(_) | DCBError::DeserializationError(_) => (Code::DataLoss, umadb::error_response_proto::ErrorType::Corruption as i32),
+        DCBError::SerializationError(_) => (Code::InvalidArgument, umadb::error_response_proto::ErrorType::Serialization as i32),
+        DCBError::InternalError(_) => (Code::Internal, umadb::error_response_proto::ErrorType::Internal as i32),
         _ => (Code::Internal, umadb::error_response_proto::ErrorType::Io as i32),
     };
     let msg = e.to_string();
@@ -812,6 +815,7 @@ fn dcb_error_from_status(status: Status) -> DCBError {
                 x if x == umadb::error_response_proto::ErrorType::Integrity as i32 => DCBError::IntegrityError(err.message),
                 x if x == umadb::error_response_proto::ErrorType::Corruption as i32 => DCBError::Corruption(err.message),
                 x if x == umadb::error_response_proto::ErrorType::Serialization as i32 => DCBError::SerializationError(err.message),
+                x if x == umadb::error_response_proto::ErrorType::Internal as i32 => DCBError::InternalError(err.message),
                 _ => DCBError::Io(std::io::Error::other(err.message)),
             };
         }
@@ -820,7 +824,8 @@ fn dcb_error_from_status(status: Status) -> DCBError {
     match status.code() {
         Code::FailedPrecondition => DCBError::IntegrityError(status.message().to_string()),
         Code::DataLoss => DCBError::Corruption(status.message().to_string()),
-        Code::Internal => DCBError::Io(std::io::Error::other(status.message().to_string())),
+        Code::InvalidArgument => DCBError::SerializationError(status.message().to_string()),
+        Code::Internal => DCBError::InternalError(status.message().to_string()),
         _ => DCBError::Io(std::io::Error::other(format!("gRPC error: {}", status))),
     }
 }

@@ -128,6 +128,8 @@ pub enum DCBError {
     RootIDMismatch(PageID, PageID),
     #[error("Database corrupted: {0}")]
     DatabaseCorrupted(String),
+    #[error("Internal error: {0}")]
+    InternalError(String),
     #[error("Serialization error: {0}")]
     SerializationError(String),
     #[error("Deserialization error: {0}")]

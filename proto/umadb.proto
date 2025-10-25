@@ -78,6 +78,7 @@ message ErrorResponseProto {
     SERIALIZATION = 1;
     INTEGRITY = 2;
     CORRUPTION = 3;
+    INTERNAL = 4;
   }
 }
 

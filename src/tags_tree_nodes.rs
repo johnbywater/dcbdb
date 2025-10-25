@@ -38,42 +38,33 @@ impl TagsLeafNode {
 
 
     /// No-allocation serialization into the provided buffer. Returns bytes written.
-    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
-        let need = self.calc_serialized_size();
-        if dst.len() < need {
-            return Err(DCBError::SerializationError(format!(
-                "TagsLeafNode::serialize_into needs at least {} bytes, got {}",
-                need,
-                dst.len()
-            )));
-        }
+    pub fn serialize_into(&self, buf: &mut [u8]) -> usize {
         let mut i = 0usize;
         // keys_len
         let klen = self.keys.len() as u16;
-        dst[i..i + 2].copy_from_slice(&klen.to_le_bytes());
+        buf[i..i + 2].copy_from_slice(&klen.to_le_bytes());
         i += 2;
         // keys
         for key in &self.keys {
-            dst[i..i + TAG_HASH_LEN].copy_from_slice(key);
+            buf[i..i + TAG_HASH_LEN].copy_from_slice(key);
             i += TAG_HASH_LEN;
         }
         // values
         for v in &self.values {
             // root_id
-            dst[i..i + 8].copy_from_slice(&v.root_id.0.to_le_bytes());
+            buf[i..i + 8].copy_from_slice(&v.root_id.0.to_le_bytes());
             i += 8;
             // positions length
             let plen = v.positions.len() as u16;
-            dst[i..i + 2].copy_from_slice(&plen.to_le_bytes());
+            buf[i..i + 2].copy_from_slice(&plen.to_le_bytes());
             i += 2;
             // positions
             for pos in &v.positions {
-                dst[i..i + 8].copy_from_slice(&pos.0.to_le_bytes());
+                buf[i..i + 8].copy_from_slice(&pos.0.to_le_bytes());
                 i += 8;
             }
         }
-        debug_assert_eq!(i, need);
-        Ok(i)
+        i
     }
 
     pub fn from_slice(slice: &[u8]) -> DCBResult<Self> {
@@ -188,32 +179,23 @@ impl TagsInternalNode {
 
 
     /// No-allocation serialization into the provided buffer. Returns bytes written.
-    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
-        let need = self.calc_serialized_size();
-        if dst.len() < need {
-            return Err(DCBError::SerializationError(format!(
-                "TagsInternalNode::serialize_into needs at least {} bytes, got {}",
-                need,
-                dst.len()
-            )));
-        }
+    pub fn serialize_into(&self, buf: &mut [u8]) -> usize {
         let mut i = 0usize;
         // keys_len
         let klen = self.keys.len() as u16;
-        dst[i..i + 2].copy_from_slice(&klen.to_le_bytes());
+        buf[i..i + 2].copy_from_slice(&klen.to_le_bytes());
         i += 2;
         // keys
         for key in &self.keys {
-            dst[i..i + TAG_HASH_LEN].copy_from_slice(key);
+            buf[i..i + TAG_HASH_LEN].copy_from_slice(key);
             i += TAG_HASH_LEN;
         }
         // child ids (len implied as keys_len + 1)
         for id in &self.child_ids {
-            dst[i..i + 8].copy_from_slice(&id.0.to_le_bytes());
+            buf[i..i + 8].copy_from_slice(&id.0.to_le_bytes());
             i += 8;
         }
-        debug_assert_eq!(i, need);
-        Ok(i)
+        i
     }
 
     pub fn from_slice(slice: &[u8]) -> DCBResult<Self> {
@@ -325,25 +307,16 @@ impl TagLeafNode {
 
 
     /// No-allocation serialization into the provided buffer. Returns bytes written.
-    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
-        let need = self.calc_serialized_size();
-        if dst.len() < need {
-            return Err(DCBError::SerializationError(format!(
-                "TagLeafNode::serialize_into needs at least {} bytes, got {}",
-                need,
-                dst.len()
-            )));
-        }
+    pub fn serialize_into(&self, buf: &mut [u8]) -> usize {
         let mut i = 0usize;
         let plen = self.positions.len() as u16;
-        dst[i..i + 2].copy_from_slice(&plen.to_le_bytes());
+        buf[i..i + 2].copy_from_slice(&plen.to_le_bytes());
         i += 2;
         for pos in &self.positions {
-            dst[i..i + 8].copy_from_slice(&pos.0.to_le_bytes());
+            buf[i..i + 8].copy_from_slice(&pos.0.to_le_bytes());
             i += 8;
         }
-        debug_assert_eq!(i, need);
-        Ok(i)
+        i
     }
 
     pub fn from_slice(slice: &[u8]) -> DCBResult<Self> {
@@ -402,29 +375,20 @@ impl TagInternalNode {
 
 
     /// No-allocation serialization into the provided buffer. Returns bytes written.
-    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
-        let need = self.calc_serialized_size();
-        if dst.len() < need {
-            return Err(DCBError::SerializationError(format!(
-                "TagInternalNode::serialize_into needs at least {} bytes, got {}",
-                need,
-                dst.len()
-            )));
-        }
+    pub fn serialize_into(&self, buf: &mut [u8]) -> usize {
         let mut i = 0usize;
         let klen = self.keys.len() as u16;
-        dst[i..i + 2].copy_from_slice(&klen.to_le_bytes());
+        buf[i..i + 2].copy_from_slice(&klen.to_le_bytes());
         i += 2;
         for k in &self.keys {
-            dst[i..i + 8].copy_from_slice(&k.0.to_le_bytes());
+            buf[i..i + 8].copy_from_slice(&k.0.to_le_bytes());
             i += 8;
         }
         for id in &self.child_ids {
-            dst[i..i + 8].copy_from_slice(&id.0.to_le_bytes());
+            buf[i..i + 8].copy_from_slice(&id.0.to_le_bytes());
             i += 8;
         }
-        debug_assert_eq!(i, need);
-        Ok(i)
+        i
     }
 
     pub fn from_slice(slice: &[u8]) -> DCBResult<Self> {
@@ -502,7 +466,7 @@ mod tests {
             positions: vec![Position(10), Position(20), Position(30)],
         };
         let mut ser = vec![0u8; leaf.calc_serialized_size()];
-        leaf.serialize_into(&mut ser).unwrap();
+        leaf.serialize_into(&mut ser);
         let de = TagLeafNode::from_slice(&ser).unwrap();
         assert_eq!(leaf, de);
     }
@@ -514,7 +478,7 @@ mod tests {
             child_ids: vec![PageID(100), PageID(200), PageID(300), PageID(400)],
         };
         let mut ser = vec![0u8; node.calc_serialized_size()];
-        node.serialize_into(&mut ser).unwrap();
+        node.serialize_into(&mut ser);
         let de = TagInternalNode::from_slice(&ser).unwrap();
         assert_eq!(node, de);
     }
@@ -547,7 +511,7 @@ mod tests {
         };
 
         let mut ser = vec![0u8; leaf.calc_serialized_size()];
-        leaf.serialize_into(&mut ser).unwrap();
+        leaf.serialize_into(&mut ser);
         let de = TagsLeafNode::from_slice(&ser).unwrap();
         assert_eq!(leaf, de);
     }
@@ -567,7 +531,7 @@ mod tests {
         };
 
         let mut ser = vec![0u8; node.calc_serialized_size()];
-        node.serialize_into(&mut ser).unwrap();
+        node.serialize_into(&mut ser);
         let de = TagsInternalNode::from_slice(&ser).unwrap();
         assert_eq!(node, de);
     }
@@ -576,7 +540,7 @@ mod tests {
     fn test_tag_leaf_node_empty_positions_roundtrip() {
         let leaf = TagLeafNode { positions: vec![] };
         let mut ser = vec![0u8; leaf.calc_serialized_size()];
-        leaf.serialize_into(&mut ser).unwrap();
+        leaf.serialize_into(&mut ser);
         let de = TagLeafNode::from_slice(&ser).unwrap();
         assert_eq!(leaf, de);
     }
@@ -588,7 +552,7 @@ mod tests {
             child_ids: vec![PageID(42)],
         };
         let mut ser = vec![0u8; node.calc_serialized_size()];
-        node.serialize_into(&mut ser).unwrap();
+        node.serialize_into(&mut ser);
         let de = TagInternalNode::from_slice(&ser).unwrap();
         assert_eq!(node, de);
     }
@@ -616,7 +580,7 @@ mod tests {
             positions: vec![Position(7), Position(9), Position(11)],
         };
         let mut ser = vec![0u8; leaf.calc_serialized_size()];
-        let written = leaf.serialize_into(&mut ser).unwrap();
+        let written = leaf.serialize_into(&mut ser);
         assert_eq!(written, leaf.calc_serialized_size());
         let de = TagLeafNode::from_slice(&ser).unwrap();
         assert_eq!(leaf, de);
@@ -629,7 +593,7 @@ mod tests {
             child_ids: vec![PageID(10), PageID(20), PageID(30), PageID(40)],
         };
         let mut ser = vec![0u8; node.calc_serialized_size()];
-        let written = node.serialize_into(&mut ser).unwrap();
+        let written = node.serialize_into(&mut ser);
         assert_eq!(written, node.calc_serialized_size());
         let de = TagInternalNode::from_slice(&ser).unwrap();
         assert_eq!(node, de);

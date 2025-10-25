@@ -104,68 +104,59 @@ impl EventLeafNode {
 
 
     /// No-allocation serialization into the provided buffer. Returns number of bytes written.
-    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
-        let need = self.calc_serialized_size();
-        if dst.len() < need {
-            return Err(DCBError::SerializationError(format!(
-                "EventLeafNode::serialize_into needs at least {} bytes, got {}",
-                need,
-                dst.len()
-            )));
-        }
+    pub fn serialize_into(&self, buf: &mut [u8]) -> usize {
         let mut i = 0usize;
         // keys_len
         let klen = self.keys.len() as u16;
-        dst[i..i + 2].copy_from_slice(&klen.to_le_bytes());
+        buf[i..i + 2].copy_from_slice(&klen.to_le_bytes());
         i += 2;
         // keys
         for key in &self.keys {
             let b = key.0.to_le_bytes();
-            dst[i..i + 8].copy_from_slice(&b);
+            buf[i..i + 8].copy_from_slice(&b);
             i += 8;
         }
         // values
         for value in &self.values {
             match value {
                 EventValue::Inline(rec) => {
-                    dst[i] = 0u8; i += 1;
+                    buf[i] = 0u8; i += 1;
                     let et_len = rec.event_type.len() as u16;
-                    dst[i..i + 2].copy_from_slice(&et_len.to_le_bytes()); i += 2;
+                    buf[i..i + 2].copy_from_slice(&et_len.to_le_bytes()); i += 2;
                     let s = rec.event_type.as_bytes();
-                    dst[i..i + s.len()].copy_from_slice(s); i += s.len();
+                    buf[i..i + s.len()].copy_from_slice(s); i += s.len();
                     let dlen = rec.data.len() as u16;
-                    dst[i..i + 2].copy_from_slice(&dlen.to_le_bytes()); i += 2;
-                    dst[i..i + rec.data.len()].copy_from_slice(&rec.data); i += rec.data.len();
+                    buf[i..i + 2].copy_from_slice(&dlen.to_le_bytes()); i += 2;
+                    buf[i..i + rec.data.len()].copy_from_slice(&rec.data); i += rec.data.len();
                     let tlen = rec.tags.len() as u16;
-                    dst[i..i + 2].copy_from_slice(&tlen.to_le_bytes()); i += 2;
+                    buf[i..i + 2].copy_from_slice(&tlen.to_le_bytes()); i += 2;
                     for tag in &rec.tags {
                         let tl = tag.len() as u16;
-                        dst[i..i + 2].copy_from_slice(&tl.to_le_bytes()); i += 2;
+                        buf[i..i + 2].copy_from_slice(&tl.to_le_bytes()); i += 2;
                         let tb = tag.as_bytes();
-                        dst[i..i + tb.len()].copy_from_slice(tb); i += tb.len();
+                        buf[i..i + tb.len()].copy_from_slice(tb); i += tb.len();
                     }
                 }
                 EventValue::Overflow { event_type, data_len, tags, root_id } => {
-                    dst[i] = 1u8; i += 1;
+                    buf[i] = 1u8; i += 1;
                     let et_len = event_type.len() as u16;
-                    dst[i..i + 2].copy_from_slice(&et_len.to_le_bytes()); i += 2;
+                    buf[i..i + 2].copy_from_slice(&et_len.to_le_bytes()); i += 2;
                     let s = event_type.as_bytes();
-                    dst[i..i + s.len()].copy_from_slice(s); i += s.len();
-                    dst[i..i + 8].copy_from_slice(&data_len.to_le_bytes()); i += 8;
+                    buf[i..i + s.len()].copy_from_slice(s); i += s.len();
+                    buf[i..i + 8].copy_from_slice(&data_len.to_le_bytes()); i += 8;
                     let tlen = tags.len() as u16;
-                    dst[i..i + 2].copy_from_slice(&tlen.to_le_bytes()); i += 2;
+                    buf[i..i + 2].copy_from_slice(&tlen.to_le_bytes()); i += 2;
                     for tag in tags {
                         let tl = tag.len() as u16;
-                        dst[i..i + 2].copy_from_slice(&tl.to_le_bytes()); i += 2;
+                        buf[i..i + 2].copy_from_slice(&tl.to_le_bytes()); i += 2;
                         let tb = tag.as_bytes();
-                        dst[i..i + tb.len()].copy_from_slice(tb); i += tb.len();
+                        buf[i..i + tb.len()].copy_from_slice(tb); i += tb.len();
                     }
-                    dst[i..i + 8].copy_from_slice(&root_id.0.to_le_bytes()); i += 8;
+                    buf[i..i + 8].copy_from_slice(&root_id.0.to_le_bytes()); i += 8;
                 }
             }
         }
-        debug_assert_eq!(i, need);
-        Ok(i)
+        i
     }
 
     pub fn from_slice(slice: &[u8]) -> DCBResult<Self> {
@@ -410,18 +401,11 @@ impl EventOverflowNode {
     }
 
 
-    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
-        let need = self.calc_serialized_size();
-        if dst.len() < need {
-            return Err(DCBError::SerializationError(format!(
-                "EventOverflowNode::serialize_into needs at least {} bytes, got {}",
-                need,
-                dst.len()
-            )));
-        }
-        dst[0..8].copy_from_slice(&self.next.0.to_le_bytes());
-        dst[8..8 + self.data.len()].copy_from_slice(&self.data);
-        Ok(need)
+    pub fn serialize_into(&self, buf: &mut [u8]) -> usize {
+        let size = self.calc_serialized_size();
+        buf[0..8].copy_from_slice(&self.next.0.to_le_bytes());
+        buf[8..size].copy_from_slice(&self.data);
+        size
     }
 
     pub fn from_slice(slice: &[u8]) -> DCBResult<Self> {
@@ -459,25 +443,16 @@ impl EventInternalNode {
     }
 
 
-    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
-        let need = self.calc_serialized_size();
-        if dst.len() < need {
-            return Err(DCBError::SerializationError(format!(
-                "EventInternalNode::serialize_into needs at least {} bytes, got {}",
-                need,
-                dst.len()
-            )));
-        }
+    pub fn serialize_into(&self, buf: &mut [u8]) -> DCBResult<usize> {
         let mut i = 0usize;
         let klen = self.keys.len() as u16;
-        dst[i..i + 2].copy_from_slice(&klen.to_le_bytes()); i += 2;
+        buf[i..i + 2].copy_from_slice(&klen.to_le_bytes()); i += 2;
         for key in &self.keys {
-            dst[i..i + 8].copy_from_slice(&key.0.to_le_bytes()); i += 8;
+            buf[i..i + 8].copy_from_slice(&key.0.to_le_bytes()); i += 8;
         }
         for child_id in &self.child_ids {
-            dst[i..i + 8].copy_from_slice(&child_id.0.to_le_bytes()); i += 8;
+            buf[i..i + 8].copy_from_slice(&child_id.0.to_le_bytes()); i += 8;
         }
-        debug_assert_eq!(i, need);
         Ok(i)
     }
 
@@ -656,7 +631,7 @@ mod tests {
 
         // Serialize the EventLeafNode
         let mut serialized = vec![0u8; leaf_node.calc_serialized_size()];
-        leaf_node.serialize_into(&mut serialized).unwrap();
+        leaf_node.serialize_into(&mut serialized);
 
         // Verify the serialized output is not empty
         assert!(!serialized.is_empty());
@@ -732,7 +707,7 @@ mod tests {
         };
         // Serialize
         let mut serialized = vec![0u8; leaf_node.calc_serialized_size()];
-        leaf_node.serialize_into(&mut serialized).unwrap();
+        leaf_node.serialize_into(&mut serialized);
         assert!(!serialized.is_empty());
         // Deserialize
         let deserialized = EventLeafNode::from_slice(&serialized)
@@ -777,7 +752,7 @@ mod tests {
             values: vec![inline.clone(), overflow.clone()],
         };
         let mut serialized = vec![0u8; leaf_node.calc_serialized_size()];
-        leaf_node.serialize_into(&mut serialized).unwrap();
+        leaf_node.serialize_into(&mut serialized);
         let deserialized = EventLeafNode::from_slice(&serialized).unwrap();
         assert_eq!(leaf_node, deserialized);
 
@@ -813,7 +788,7 @@ mod tests {
             data: vec![7, 8, 9, 10],
         };
         let mut ser = vec![0u8; node.calc_serialized_size()];
-        node.serialize_into(&mut ser).unwrap();
+        node.serialize_into(&mut ser);
         assert_eq!(8 + 4, ser.len()); // 8 bytes next + 4 bytes data
         let de = EventOverflowNode::from_slice(&ser).unwrap();
         assert_eq!(node, de);

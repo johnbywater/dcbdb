@@ -41,7 +41,7 @@ impl FreeListLeafNode {
     }
 
 
-    pub fn serialize_into(&self, buf: &mut [u8]) -> DCBResult<usize> {
+    pub fn serialize_into(&self, buf: &mut [u8]) -> usize {
         let mut i = 0usize;
         let klen = self.keys.len() as u16;
         buf[i..i + 2].copy_from_slice(&klen.to_le_bytes()); i += 2;
@@ -56,7 +56,7 @@ impl FreeListLeafNode {
             }
             buf[i..i + 8].copy_from_slice(&value.root_id.0.to_le_bytes()); i += 8;
         }
-        Ok(i)
+        i
     }
 
     /// Creates a FreeListLeafNode from a byte slice
@@ -238,28 +238,19 @@ impl FreeListInternalNode {
     }
 
 
-    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
-        let need = self.calc_serialized_size();
-        if dst.len() < need {
-            return Err(DCBError::SerializationError(format!(
-                "FreeListInternalNode::serialize_into needs at least {} bytes, got {}",
-                need,
-                dst.len()
-            )));
-        }
+    pub fn serialize_into(&self, buf: &mut [u8]) -> usize {
         let mut i = 0usize;
         let klen = self.keys.len() as u16;
-        dst[i..i + 2].copy_from_slice(&klen.to_le_bytes()); i += 2;
+        buf[i..i + 2].copy_from_slice(&klen.to_le_bytes()); i += 2;
         for key in &self.keys {
-            dst[i..i + 8].copy_from_slice(&key.0.to_le_bytes()); i += 8;
+            buf[i..i + 8].copy_from_slice(&key.0.to_le_bytes()); i += 8;
         }
         let clen = self.child_ids.len() as u16;
-        dst[i..i + 2].copy_from_slice(&clen.to_le_bytes()); i += 2;
+        buf[i..i + 2].copy_from_slice(&clen.to_le_bytes()); i += 2;
         for child_id in &self.child_ids {
-            dst[i..i + 8].copy_from_slice(&child_id.0.to_le_bytes()); i += 8;
+            buf[i..i + 8].copy_from_slice(&child_id.0.to_le_bytes()); i += 8;
         }
-        debug_assert_eq!(i, need);
-        Ok(i)
+        i
     }
 
     /// Creates a FreeListInternalNode from a byte slice
@@ -390,22 +381,14 @@ impl FreeListTsnLeafNode {
         2 + self.page_ids.len() * 8
     }
 
-    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
-        let need = self.calc_serialized_size();
-        if dst.len() < need {
-            return Err(DCBError::SerializationError(format!(
-                "FreeListTsnLeafNode::serialize_into needs at least {} bytes, got {}",
-                need,
-                dst.len()
-            )));
-        }
+    pub fn serialize_into(&self, dst: &mut [u8]) -> usize {
         let mut i = 0usize;
         let plen = self.page_ids.len() as u16;
         dst[i..i + 2].copy_from_slice(&plen.to_le_bytes()); i += 2;
         for page_id in &self.page_ids {
             dst[i..i + 8].copy_from_slice(&page_id.0.to_le_bytes()); i += 8;
         }
-        Ok(i)
+        i
     }
 
     pub fn from_slice(slice: &[u8]) -> DCBResult<Self> {
@@ -452,15 +435,7 @@ impl FreeListTsnInternalNode {
         2 + self.keys.len() * 8 + 2 + self.child_ids.len() * 8
     }
 
-    pub fn serialize_into(&self, dst: &mut [u8]) -> DCBResult<usize> {
-        let need = self.calc_serialized_size();
-        if dst.len() < need {
-            return Err(DCBError::SerializationError(format!(
-                "FreeListTsnInternalNode::serialize_into needs at least {} bytes, got {}",
-                need,
-                dst.len()
-            )));
-        }
+    pub fn serialize_into(&self, dst: &mut [u8]) -> usize {
         let mut i = 0usize;
         let klen = self.keys.len() as u16;
         dst[i..i + 2].copy_from_slice(&klen.to_le_bytes()); i += 2;
@@ -472,7 +447,7 @@ impl FreeListTsnInternalNode {
         for child_id in &self.child_ids {
             dst[i..i + 8].copy_from_slice(&child_id.0.to_le_bytes()); i += 8;
         }
-        Ok(i)
+        i
     }
 
     pub fn from_slice(slice: &[u8]) -> DCBResult<Self> {
@@ -559,7 +534,7 @@ mod tests {
 
         // Serialize the FreeListLeafNode
         let mut serialized = vec![0u8; leaf_node.calc_serialized_size()];
-        leaf_node.serialize_into(&mut serialized).unwrap();
+        leaf_node.serialize_into(&mut serialized);
 
         // Verify the serialized output is not empty
         assert!(!serialized.is_empty());
@@ -609,7 +584,7 @@ mod tests {
 
         // Serialize the FreeListInternalNode
         let mut serialized = vec![0u8; internal_node.calc_serialized_size()];
-        internal_node.serialize_into(&mut serialized).unwrap();
+        internal_node.serialize_into(&mut serialized);
 
         // Verify the serialized output is not empty
         assert!(!serialized.is_empty());
@@ -664,7 +639,7 @@ mod tests {
 
         // Serialize
         let mut serialized = vec![0u8; node.calc_serialized_size()];
-        node.serialize_into(&mut serialized).unwrap();
+        node.serialize_into(&mut serialized);
 
         // Validate structure: 2 bytes length, then 4 page IDs
         assert_eq!(&[4, 0], &serialized[0..2]);
@@ -695,7 +670,7 @@ mod tests {
 
         // Serialize
         let mut serialized = vec![0u8; node.calc_serialized_size()];
-        node.serialize_into(&mut serialized).unwrap();
+        node.serialize_into(&mut serialized);
 
         // Validate structure
         // keys len = 3

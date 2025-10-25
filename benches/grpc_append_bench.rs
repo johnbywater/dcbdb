@@ -46,7 +46,7 @@ pub fn grpc_append_benchmark(c: &mut Criterion) {
 
     for &threads in &[1usize, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024] {
         // Initialize DB and server with 10_000 events (as requested)
-        let initial_events = 1_000usize;
+        let initial_events = 1_000_000usize;
         let (_tmp_dir, db_path) = init_db_with_events(initial_events);
 
         // Find a free localhost port

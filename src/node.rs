@@ -93,17 +93,17 @@ impl Node {
     pub fn serialize_into(&self, buf: &mut [u8]) -> DCBResult<usize> {
         match self {
             Node::Header(node) => { let n = node.serialize_into(buf); Ok(n) }
-            Node::FreeListLeaf(node) => { let n = node.serialize_into(buf)?; Ok(n) }
-            Node::FreeListInternal(node) => { let n = node.serialize_into(buf)?; Ok(n) }
-            Node::EventLeaf(node) => { let n = node.serialize_into(buf)?; Ok(n) }
+            Node::FreeListLeaf(node) => { let n = node.serialize_into(buf); Ok(n) }
+            Node::FreeListInternal(node) => { let n = node.serialize_into(buf); Ok(n) }
+            Node::EventLeaf(node) => { let n = node.serialize_into(buf); Ok(n) }
             Node::EventInternal(node) => { let n = node.serialize_into(buf)?; Ok(n) }
-            Node::EventOverflow(node) => { let n = node.serialize_into(buf)?; Ok(n) }
-            Node::TagsLeaf(node) => { let n = node.serialize_into(buf)?; Ok(n) }
-            Node::TagsInternal(node) => { let n = node.serialize_into(buf)?; Ok(n) }
-            Node::TagLeaf(node) => { let n = node.serialize_into(buf)?; Ok(n) }
-            Node::TagInternal(node) => { let n = node.serialize_into(buf)?; Ok(n) }
-            Node::FreeListTsnLeaf(node) => { let n = node.serialize_into(buf)?; Ok(n) }
-            Node::FreeListTsnInternal(node) => { let n = node.serialize_into(buf)?; Ok(n) }
+            Node::EventOverflow(node) => { let n = node.serialize_into(buf); Ok(n) }
+            Node::TagsLeaf(node) => { let n = node.serialize_into(buf); Ok(n) }
+            Node::TagsInternal(node) => { let n = node.serialize_into(buf); Ok(n) }
+            Node::TagLeaf(node) => { let n = node.serialize_into(buf); Ok(n) }
+            Node::TagInternal(node) => { let n = node.serialize_into(buf); Ok(n) }
+            Node::FreeListTsnLeaf(node) => { let n = node.serialize_into(buf); Ok(n) }
+            Node::FreeListTsnInternal(node) => { let n = node.serialize_into(buf); Ok(n) }
         }
     }
 

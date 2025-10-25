@@ -40,6 +40,20 @@ impl FreeListLeafNode {
         total_size
     }
 
+    /// Returns true if adding a new (tsn -> [page_id]) pair would fit into page_size
+    /// Assumes new entry has one page_id and no subtree (root_id == 0)
+    pub fn would_fit_new_pair(&self, page_size: usize) -> bool {
+        // New pair increases size by: 8 (key) + 2 (len) + 8 (one page_id) + 8 (root_id) = 26 bytes
+        self.calc_serialized_size() + 8 + 2 + 8 + 8 <= page_size
+    }
+
+    /// Returns true if appending one page_id to the value at idx would fit into page_size
+    pub fn would_fit_append_at(&self, idx: usize, page_size: usize) -> bool {
+        // Only grows by 8 bytes for the extra PageID
+        if idx >= self.values.len() { return false; }
+        self.calc_serialized_size() + 8 <= page_size
+    }
+
 
     pub fn serialize_into(&self, buf: &mut [u8]) -> usize {
         let mut i = 0usize;

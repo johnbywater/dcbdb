@@ -2,7 +2,7 @@ use crate::common::Position;
 use crate::common::{PageID, Tsn};
 use crate::dcb::{DCBError, DCBResult};
 use crate::events_tree_nodes::EventLeafNode;
-use crate::free_lists_tree_nodes::{FreeListInternalNode, FreeListLeafNode};
+use crate::free_lists_tree_nodes::{FreeListInternalNode, FreeListLeafNode, FreeListLeafValue};
 use crate::header_node::HeaderNode;
 use crate::node::Node;
 use crate::page::Page;
@@ -670,70 +670,139 @@ impl Writer {
         // Get a mutable leaf node....
         let dirty_leaf_page = self.get_mut_dirty(dirty_page_id)?;
 
-        // Insert or append freed page ID to the list of page IDs for the TSN.
+        // Proactive insert logic with capacity checks and optional split
+        let mut split_info: Option<(Tsn, PageID)> = None;
         if let Node::FreeListLeaf(dirty_leaf_node) = &mut dirty_leaf_page.node {
-            dirty_leaf_node.insert_or_append(tsn, freed_page_id)?;
-            if verbose {
-                println!(
-                    "Inserted {freed_page_id:?} for {tsn:?} in {dirty_page_id:?}: {dirty_leaf_node:?}"
-                );
+            // Is the TSN already present?
+            match dirty_leaf_node.keys.binary_search(&tsn) {
+                Ok(idx) => {
+                    // Existing TSN
+                    if dirty_leaf_node.values[idx].root_id != PageID(0) {
+                        return Err(DCBError::DatabaseCorrupted(
+                            "Free list subtree not implemented".to_string(),
+                        ));
+                    }
+                    if dirty_leaf_node.would_fit_append_at(idx, mvcc.page_size) {
+                        // Fits, simply append
+                        dirty_leaf_node.values[idx].page_ids.push(freed_page_id);
+                        if verbose {
+                            println!(
+                                "Appended {freed_page_id:?} for existing {tsn:?} in {dirty_page_id:?}: {:?}",
+                                dirty_leaf_node
+                            );
+                        }
+                    } else {
+                        // Doesn't fit. If only one key, cannot split to fix; error out.
+                        if dirty_leaf_node.keys.len() == 1 {
+                            return Err(DCBError::InternalError(
+                                "Overflow freed page IDs for TSN to subtree not implemented".to_string(),
+                            ));
+                        }
+                        // Split by popping the last key/value
+                        let (last_key, mut last_value) = dirty_leaf_node.pop_last_key_and_value()?;
+                        if verbose {
+                            println!(
+                                "Split (proactive) leaf {:?}: {:?}",
+                                dirty_page_id,
+                                dirty_leaf_node.clone()
+                            );
+                        }
+                        if last_key == tsn {
+                            // The overflowing TSN was the last one; move it to a new page and append there
+                            last_value.page_ids.push(freed_page_id);
+                            let new_leaf_node = FreeListLeafNode {
+                                keys: vec![last_key],
+                                values: vec![last_value],
+                            };
+                            let new_leaf_page_id = self.alloc_page_id();
+                            let new_leaf_page = Page::new(new_leaf_page_id, Node::FreeListLeaf(new_leaf_node));
+                            let serialized_size = new_leaf_page.calc_serialized_size();
+                            if serialized_size > mvcc.page_size {
+                                return Err(DCBError::InternalError(
+                                    "Overflow freed page IDs for TSN to subtree not implemented".to_string(),
+                                ));
+                            }
+                            if verbose {
+                                println!(
+                                    "Created new leaf {:?} (moved target TSN): {:?}",
+                                    new_leaf_page_id, new_leaf_page.node
+                                );
+                            }
+                            self.insert_dirty(new_leaf_page)?;
+                            split_info = Some((tsn, new_leaf_page_id));
+                        } else {
+                            // Target TSN remains in current page; after popping last, it should fit to append now
+                            if !dirty_leaf_node.would_fit_append_at(idx, mvcc.page_size) {
+                                return Err(DCBError::InternalError(
+                                    "Append still does not fit after split".to_string(),
+                                ));
+                            }
+                            dirty_leaf_node.values[idx].page_ids.push(freed_page_id);
+
+                            // Create a new page for the popped last key/value
+                            let new_leaf_node = FreeListLeafNode {
+                                keys: vec![last_key],
+                                values: vec![last_value],
+                            };
+                            let new_leaf_page_id = self.alloc_page_id();
+                            let new_leaf_page = Page::new(new_leaf_page_id, Node::FreeListLeaf(new_leaf_node));
+                            let serialized_size = new_leaf_page.calc_serialized_size();
+                            if serialized_size > mvcc.page_size {
+                                return Err(DCBError::InternalError(
+                                    "Overflow freed page IDs for TSN to subtree not implemented".to_string(),
+                                ));
+                            }
+                            if verbose {
+                                println!(
+                                    "Created new leaf {:?} (popped last): {:?}",
+                                    new_leaf_page_id, new_leaf_page.node
+                                );
+                            }
+                            self.insert_dirty(new_leaf_page)?;
+                            split_info = Some((last_key, new_leaf_page_id));
+                        }
+                    }
+                }
+                Err(_) => {
+                    // New TSN
+                    if dirty_leaf_node.would_fit_new_pair(mvcc.page_size) {
+                        dirty_leaf_node.keys.push(tsn);
+                        dirty_leaf_node.values.push(FreeListLeafValue { page_ids: vec![freed_page_id], root_id: PageID(0) });
+                        if verbose {
+                            println!(
+                                "Inserted new pair ({tsn:?} -> {freed_page_id:?}) in {dirty_page_id:?}: {:?}",
+                                dirty_leaf_node
+                            );
+                        }
+                    } else {
+                        // Create a brand-new leaf for this TSN only and promote it
+                        let new_leaf_node = FreeListLeafNode {
+                            keys: vec![tsn],
+                            values: vec![FreeListLeafValue { page_ids: vec![freed_page_id], root_id: PageID(0) }],
+                        };
+                        let new_leaf_page_id = self.alloc_page_id();
+                        let new_leaf_page = Page::new(new_leaf_page_id, Node::FreeListLeaf(new_leaf_node));
+                        let serialized_size = new_leaf_page.calc_serialized_size();
+                        if serialized_size > mvcc.page_size {
+                            return Err(DCBError::InternalError(
+                                "Overflow freed page IDs for TSN to subtree not implemented".to_string(),
+                            ));
+                        }
+                        if verbose {
+                            println!(
+                                "Created new leaf {:?} (new TSN): {:?}",
+                                new_leaf_page_id, new_leaf_page.node
+                            );
+                        }
+                        self.insert_dirty(new_leaf_page)?;
+                        split_info = Some((tsn, new_leaf_page_id));
+                    }
+                }
             }
         } else {
             return Err(DCBError::DatabaseCorrupted(
                 "Expected FreeListLeaf node".to_string(),
             ));
-        }
-
-        // Check if the leaf needs splitting by estimating the serialized size
-        let mut split_info: Option<(Tsn, PageID)> = None;
-
-        if dirty_leaf_page.calc_serialized_size() > mvcc.page_size {
-            // Split the leaf node
-            if let Node::FreeListLeaf(dirty_leaf_node) = &mut dirty_leaf_page.node {
-                let (last_key, last_value) = dirty_leaf_node.pop_last_key_and_value()?;
-
-                if verbose {
-                    println!(
-                        "Split leaf {:?}: {:?}",
-                        dirty_page_id,
-                        dirty_leaf_node.clone()
-                    );
-                }
-                let new_leaf_node = FreeListLeafNode {
-                    keys: vec![last_key],
-                    values: vec![last_value],
-                };
-
-                let new_leaf_page_id = self.alloc_page_id();
-                let new_leaf_page = Page::new(new_leaf_page_id, Node::FreeListLeaf(new_leaf_node));
-
-                // Check if the new leaf page needs splitting
-
-                let serialized_size = new_leaf_page.calc_serialized_size();
-                if serialized_size > mvcc.page_size {
-                    return Err(DCBError::InternalError(
-                        "Overflow freed page IDs for TSN to subtree not implemented".to_string(),
-                    ));
-                }
-
-                if verbose {
-                    println!(
-                        "Created new leaf {:?}: {:?}",
-                        new_leaf_page_id, new_leaf_page.node
-                    );
-                }
-                self.insert_dirty(new_leaf_page)?;
-
-                // Propagate the split up the tree
-                if verbose {
-                    println!("Promoting {last_key:?} and {new_leaf_page_id:?}");
-                }
-                split_info = Some((last_key, new_leaf_page_id));
-            } else {
-                return Err(DCBError::DatabaseCorrupted(
-                    "Expected FreeListLeaf node".to_string(),
-                ));
-            }
         }
         // Propagate splits and replacements up the stack
         let mut current_replacement_info = replacement_info;

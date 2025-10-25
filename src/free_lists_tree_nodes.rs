@@ -172,7 +172,7 @@ impl FreeListLeafNode {
 
     pub fn insert_or_append(&mut self, tsn: Tsn, page_id: PageID) -> DCBResult<()> {
         // Find the place to insert the value
-        let leaf_idx = self.keys.iter().position(|&k| k == tsn);
+        let leaf_idx = self.keys.binary_search(&tsn).ok();
 
         // Insert the value
         if let Some(idx) = leaf_idx {

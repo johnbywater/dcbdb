@@ -2313,7 +2313,7 @@ mod tests {
             // until the first internal node is removed, using a new writer each time
             // to avoid the internal node becoming dirty before the last key is removed,
             // so that its parent internal node (which is the root internal node here)
-            // will not have already has the old child page ID replaced with a dirty
+            // will not already have the old child page ID replaced with a dirty
             // child page ID.
             let (_temp_dir, mut db) = construct_db(128);
 

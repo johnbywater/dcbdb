@@ -599,19 +599,23 @@ impl Writer {
                                 reusable_page_ids.push_back((page_id, tsn));
                             }
                         } else {
-                            // Traverse into the TSN-subtree rooted at root_id and collect page IDs
-                            let mut tsn_stack: Vec<PageID> = vec![leaf_value.root_id];
-                            while let Some(sub_id) = tsn_stack.pop() {
+                            // Traverse into the TSN-subtree rooted at root_id using the same (node, idx)
+                            // iterative DFS pattern as the main FreeList traversal. This preserves
+                            // left-to-right order deterministically.
+                            let mut tsn_stack: Vec<(PageID, usize)> = vec![(leaf_value.root_id, 0)];
+                            while let Some((sub_id, sidx)) = tsn_stack.pop() {
                                 let sub_node = { self.get_page_ref(mvcc, sub_id)?.node.clone() };
                                 match sub_node {
+                                    Node::FreeListTsnInternal(tsn_internal) => {
+                                        if sidx < tsn_internal.child_ids.len() {
+                                            let child_id = tsn_internal.child_ids[sidx];
+                                            tsn_stack.push((sub_id, sidx + 1));
+                                            tsn_stack.push((child_id, 0));
+                                        }
+                                    }
                                     Node::FreeListTsnLeaf(tsn_leaf) => {
                                         for &pid in &tsn_leaf.page_ids {
                                             reusable_page_ids.push_back((pid, tsn));
-                                        }
-                                    }
-                                    Node::FreeListTsnInternal(tsn_internal) => {
-                                        for &child_id in &tsn_internal.child_ids {
-                                            tsn_stack.push(child_id);
                                         }
                                     }
                                     other => {
@@ -2735,10 +2739,10 @@ mod tests {
             writer.find_reusable_page_ids(&db).unwrap();
             // Expect entries from leaf1 then leaf2
             assert_eq!(4, writer.reusable_page_ids.len());
-            assert_eq!((pid3, tsn), writer.reusable_page_ids[0]);
-            assert_eq!((pid4, tsn), writer.reusable_page_ids[1]);
-            assert_eq!((pid1, tsn), writer.reusable_page_ids[2]);
-            assert_eq!((pid2, tsn), writer.reusable_page_ids[3]);
+            assert_eq!((pid1, tsn), writer.reusable_page_ids[0]);
+            assert_eq!((pid2, tsn), writer.reusable_page_ids[1]);
+            assert_eq!((pid3, tsn), writer.reusable_page_ids[2]);
+            assert_eq!((pid4, tsn), writer.reusable_page_ids[3]);
         }
 
         #[test]
@@ -2804,14 +2808,14 @@ mod tests {
             writer.find_reusable_page_ids(&db).unwrap();
             // Expect entries from leaf1 then leaf2
             assert_eq!(8, writer.reusable_page_ids.len());
-            assert_eq!((pid7, tsn), writer.reusable_page_ids[0]);
-            assert_eq!((pid8, tsn), writer.reusable_page_ids[1]);
-            assert_eq!((pid5, tsn), writer.reusable_page_ids[2]);
-            assert_eq!((pid6, tsn), writer.reusable_page_ids[3]);
-            assert_eq!((pid3, tsn), writer.reusable_page_ids[4]);
-            assert_eq!((pid4, tsn), writer.reusable_page_ids[5]);
-            assert_eq!((pid1, tsn), writer.reusable_page_ids[6]);
-            assert_eq!((pid2 , tsn), writer.reusable_page_ids[7]);
+            assert_eq!((pid1, tsn), writer.reusable_page_ids[0]);
+            assert_eq!((pid2, tsn), writer.reusable_page_ids[1]);
+            assert_eq!((pid3, tsn), writer.reusable_page_ids[2]);
+            assert_eq!((pid4, tsn), writer.reusable_page_ids[3]);
+            assert_eq!((pid5, tsn), writer.reusable_page_ids[4]);
+            assert_eq!((pid6, tsn), writer.reusable_page_ids[5]);
+            assert_eq!((pid7, tsn), writer.reusable_page_ids[6]);
+            assert_eq!((pid8 , tsn), writer.reusable_page_ids[7]);
         }
     }
 }

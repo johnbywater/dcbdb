@@ -1095,6 +1095,7 @@ impl Writer {
                 // We'll update the root_id pointer in the main leaf if needed, but we do NOT
                 // free the old TSN-root page unless the TSN entry itself is removed.
             }
+            let mut tsn_root_replaced: Option<PageID> = None;
             let tsn_dirty_page = self.get_mut_dirty(tsn_dirty_id)?;
             let mut tsn_leaf_became_empty = false;
             match &mut tsn_dirty_page.node {
@@ -1132,7 +1133,7 @@ impl Writer {
                     // Clone the internal node to inspect without holding mutable borrows that would
                     // conflict with later child mutations.
                     let tsn_internal_owned = { self.get_page_ref(mvcc, tsn_dirty_id)?.node.clone() };
-                    let Node::FreeListTsnInternal(mut tsn_internal) = tsn_internal_owned else {
+                    let Node::FreeListTsnInternal(tsn_internal) = tsn_internal_owned else {
                         return Err(DCBError::DatabaseCorrupted("Expected TSN-subtree internal node".to_string()));
                     };
 
@@ -1230,9 +1231,9 @@ impl Writer {
                         if internal_node_mut.child_ids.len() == 1 {
                             // Promote the sole remaining child to become the TSN-subtree root
                             let remaining_child = internal_node_mut.child_ids[0];
-                            // Schedule current internal for freeing and update tsn_dirty_id to the child
+                            // Schedule current internal for freeing; update root pointer later in main leaf
                             removed_page_ids.push(tsn_dirty_id);
-                            tsn_dirty_id = remaining_child;
+                            tsn_root_replaced = Some(remaining_child);
                         } else {
                             // Keep the internal as new root (already dirty).
                         }
@@ -3077,6 +3078,23 @@ mod tests {
 
         #[test]
         #[serial]
+        fn test_remove_freed_page_id_from_tsn_subtree_leaf_all() {
+            let (_temp_dir, db) = construct_db(128);
+            let mut writer = db.writer().unwrap();
+
+            let (pid1, pid2, tsn1) = build_free_list_tree_leaf_tsn_subtree_leaf(&mut writer);
+
+            writer.remove_free_page_id(&db, tsn1, pid1).unwrap();
+            writer.remove_free_page_id(&db, tsn1, pid2).unwrap();
+            writer.find_reusable_page_ids(&db).unwrap();
+            assert_eq!(0, writer.reusable_page_ids.len());
+
+            assert_eq!(1, writer.freed_page_ids.len());
+        }
+
+
+        #[test]
+        #[serial]
         fn test_remove_freed_page_id_from_tsn_subtree_internal_leaf_pid1() {
             let (_temp_dir, db) = construct_db(128);
             let mut writer = db.writer().unwrap();
@@ -3089,6 +3107,15 @@ mod tests {
             assert_eq!((pid2, tsn1), writer.reusable_page_ids[0]);
             assert_eq!((pid3, tsn1), writer.reusable_page_ids[1]);
             assert_eq!((pid4, tsn1), writer.reusable_page_ids[2]);
+
+            assert_eq!(0, writer.freed_page_ids.len());
+
+            writer.remove_free_page_id(&db, tsn1, pid2).unwrap();
+            writer.find_reusable_page_ids(&db).unwrap();
+            assert_eq!(2, writer.reusable_page_ids.len());
+            assert_eq!((pid3, tsn1), writer.reusable_page_ids[0]);
+            assert_eq!((pid4, tsn1), writer.reusable_page_ids[1]);
+
         }
 
     }

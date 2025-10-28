@@ -640,12 +640,7 @@ impl Writer {
 
         // Traverse the tree to find a leaf node
         let mut stack: Vec<PageID> = Vec::new();
-        let mut plan_is_push_new_tsn_and_page_id_onto_free_list_leaf = false;
-        let mut plan_is_push_new_page_id_onto_free_list_leaf = false;
-        let mut plan_is_push_page_id_onto_existing_tsn_subtree = false;
-        let mut plan_is_move_tsn_page_ids_onto_new_tsn_subtree = false;
-        let mut plan_is_split_free_list_leaf = false;
-        let mut plan_is_create_and_promote_free_list_leaf = false;
+        let plan: FreePageIDInsertStrategy;
         loop {
             let current_page_ref = self.get_page_ref(mvcc, current_page_id)?;
             if let Node::FreeListLeaf(leaf_node) = &current_page_ref.node {
@@ -654,30 +649,35 @@ impl Writer {
                     if !leaf_node.would_fit_new_tsn_and_page_id(max_node_size) {
                         return Err(DCBError::InternalError("Page size too small".to_string()));
                     }
-                    plan_is_push_new_tsn_and_page_id_onto_free_list_leaf = true;
+                    plan = FreePageIDInsertStrategy::PushTsnOntoFreeListLeaf;
                 } else {
                     let last_idx = len_keys - 1;
                     let last_key = leaf_node.keys[last_idx];
                     if tsn == last_key {
                         // Append to the existing last TSN
                         if leaf_node.values[last_idx].root_id != PageID(0) {
-                            plan_is_push_page_id_onto_existing_tsn_subtree = true;
+                            plan = FreePageIDInsertStrategy::PushPageIdOntoExistingTsnSubtree;
+
                         }
-                        if leaf_node.would_fit_new_page_id(max_node_size) {
-                            plan_is_push_new_page_id_onto_free_list_leaf = true;
+                        else if leaf_node.would_fit_new_page_id(max_node_size) {
+                            plan = FreePageIDInsertStrategy::PushPageIdOntoFreeListLeaf;
+
                         } else {
                             if leaf_node.keys.len() == 1 {
-                                plan_is_move_tsn_page_ids_onto_new_tsn_subtree = true;
-                            }
-                            plan_is_split_free_list_leaf = true;
+                                plan = FreePageIDInsertStrategy::MoveTsnToNewTsnSubtree;
 
+                            } else {
+                                plan = FreePageIDInsertStrategy::SplitFreeListLeaf;
+
+                            }
                         }
                     } else if tsn > last_key {
                         // New last TSN
                         if leaf_node.would_fit_new_tsn_and_page_id(max_node_size) {
-                            plan_is_push_new_tsn_and_page_id_onto_free_list_leaf = true;
+                            plan = FreePageIDInsertStrategy::PushTsnOntoFreeListLeaf;
                         } else {
-                            plan_is_create_and_promote_free_list_leaf = true;
+                            plan = FreePageIDInsertStrategy::CreateAndPromoteFreeListLeaf;
+
                         }
                     } else {
                         // We assume freed page IDs are always inserted for the last TSN
@@ -718,92 +718,95 @@ impl Writer {
         // Proactive insert logic with capacity checks and optional split
         let mut split_info: Option<(Tsn, PageID)> = None;
         if let Node::FreeListLeaf(dirty_leaf_node) = &mut dirty_leaf_page.node {
-            if plan_is_push_new_tsn_and_page_id_onto_free_list_leaf {
-                dirty_leaf_node.push_new_key_and_value(tsn, freed_page_id);
-                if verbose {
-                    println!(
-                        "Inserted first pair ({tsn:?} -> {freed_page_id:?}) in {dirty_leaf_page_id:?}: {:?}",
-                        dirty_leaf_node
-                    );
+            match plan {
+                FreePageIDInsertStrategy::PushTsnOntoFreeListLeaf => {
+                    dirty_leaf_node.push_new_key_and_value(tsn, freed_page_id);
+                    if verbose {
+                        println!(
+                            "Inserted first pair ({tsn:?} -> {freed_page_id:?}) in {dirty_leaf_page_id:?}: {:?}",
+                            dirty_leaf_node
+                        );
+                    }
                 }
-            }
-            if plan_is_push_new_page_id_onto_free_list_leaf {
-                let len_keys = dirty_leaf_node.keys.len();
-                let last_idx = len_keys - 1;
-                dirty_leaf_node.push_new_page_id(last_idx, freed_page_id);
-                if verbose {
-                    println!(
-                        "Appended {freed_page_id:?} for existing last {tsn:?} in {dirty_leaf_page_id:?}: {:?}",
-                        dirty_leaf_node
-                    );
+                FreePageIDInsertStrategy::PushPageIdOntoFreeListLeaf => {
+                    let len_keys = dirty_leaf_node.keys.len();
+                    let last_idx = len_keys - 1;
+                    dirty_leaf_node.push_new_page_id(last_idx, freed_page_id);
+                    if verbose {
+                        println!(
+                            "Appended {freed_page_id:?} for existing last {tsn:?} in {dirty_leaf_page_id:?}: {:?}",
+                            dirty_leaf_node
+                        );
+                    }
                 }
-            }
-            if plan_is_push_page_id_onto_existing_tsn_subtree {
-                return Err(DCBError::DatabaseCorrupted(
-                    "Free list subtree not implemented".to_string(),
-                ));
-            }
-            if plan_is_move_tsn_page_ids_onto_new_tsn_subtree {
-                return Err(DCBError::InternalError(
-                    "Overflow freed page IDs for TSN to subtree not implemented".to_string(),
-                ));
-            }
-            if plan_is_split_free_list_leaf {
-                let (popped_key, mut popped_value) = dirty_leaf_node.pop_last_key_and_value()?;
-                debug_assert_eq!(popped_key, tsn);
-                if verbose {
-                    println!(
-                        "Split (last TSN) leaf {:?}: {:?}",
-                        dirty_leaf_page_id,
-                        dirty_leaf_node.clone()
-                    );
-                }
-                // Move the overflowing TSN to a new page and append there
-                popped_value.page_ids.push(freed_page_id);
-                let new_leaf_node = FreeListLeafNode {
-                    keys: vec![popped_key],
-                    values: vec![popped_value],
-                };
-                let new_leaf_page_id = self.alloc_page_id();
-                let new_leaf_page = Page::new(new_leaf_page_id, Node::FreeListLeaf(new_leaf_node));
-                let serialized_size = new_leaf_page.calc_serialized_size();
-                if serialized_size > mvcc.page_size {
-                    return Err(DCBError::InternalError(
-                        "Shouldn't get here: page size is too small for a FreeListLeafNode with one TSN and one PageID".to_string(),
+                FreePageIDInsertStrategy::PushPageIdOntoExistingTsnSubtree => {
+                    return Err(DCBError::DatabaseCorrupted(
+                        "Free list subtree not implemented".to_string(),
                     ));
-                }
-                if verbose {
-                    println!(
-                        "Created new leaf {:?} (moved last TSN): {:?}",
-                        new_leaf_page_id, new_leaf_page.node
-                    );
-                }
-                self.insert_dirty(new_leaf_page)?;
-                split_info = Some((tsn, new_leaf_page_id));
-            }
-            if plan_is_create_and_promote_free_list_leaf {
-                // Create a new leaf containing only this last TSN and promote it
-                let new_leaf_node = FreeListLeafNode {
-                    keys: vec![tsn],
-                    values: vec![FreeListLeafValue { page_ids: vec![freed_page_id], root_id: PageID(0) }],
-                };
-                let new_leaf_page_id = self.alloc_page_id();
-                let new_leaf_page = Page::new(new_leaf_page_id, Node::FreeListLeaf(new_leaf_node));
-                let serialized_size = new_leaf_page.calc_serialized_size();
-                if serialized_size > mvcc.page_size {
-                    return Err(DCBError::InternalError(
-                        "Shouldn't get here: page size is too small for a FreeListLeafNode with one TSN and one PageID".to_string(),
-                    ));
-                }
-                if verbose {
-                    println!(
-                        "Created new leaf {:?} (new last TSN): {:?}",
-                        new_leaf_page_id, new_leaf_page.node
-                    );
-                }
-                self.insert_dirty(new_leaf_page)?;
-                split_info = Some((tsn, new_leaf_page_id));
 
+                }
+                FreePageIDInsertStrategy::MoveTsnToNewTsnSubtree => {
+                    return Err(DCBError::InternalError(
+                        "Overflow freed page IDs for TSN to subtree not implemented".to_string(),
+                    ));
+
+                }
+                FreePageIDInsertStrategy::SplitFreeListLeaf => {
+                    let (popped_key, mut popped_value) = dirty_leaf_node.pop_last_key_and_value()?;
+                    debug_assert_eq!(popped_key, tsn);
+                    if verbose {
+                        println!(
+                            "Split (last TSN) leaf {:?}: {:?}",
+                            dirty_leaf_page_id,
+                            dirty_leaf_node.clone()
+                        );
+                    }
+                    // Move the overflowing TSN to a new page and append there
+                    popped_value.page_ids.push(freed_page_id);
+                    let new_leaf_node = FreeListLeafNode {
+                        keys: vec![popped_key],
+                        values: vec![popped_value],
+                    };
+                    let new_leaf_page_id = self.alloc_page_id();
+                    let new_leaf_page = Page::new(new_leaf_page_id, Node::FreeListLeaf(new_leaf_node));
+                    let serialized_size = new_leaf_page.calc_serialized_size();
+                    if serialized_size > mvcc.page_size {
+                        return Err(DCBError::InternalError(
+                            "Shouldn't get here: page size is too small for a FreeListLeafNode with one TSN and one PageID".to_string(),
+                        ));
+                    }
+                    if verbose {
+                        println!(
+                            "Created new leaf {:?} (moved last TSN): {:?}",
+                            new_leaf_page_id, new_leaf_page.node
+                        );
+                    }
+                    self.insert_dirty(new_leaf_page)?;
+                    split_info = Some((tsn, new_leaf_page_id));
+                }
+                FreePageIDInsertStrategy::CreateAndPromoteFreeListLeaf => {
+                    // Create a new leaf containing only this last TSN and promote it
+                    let new_leaf_node = FreeListLeafNode {
+                        keys: vec![tsn],
+                        values: vec![FreeListLeafValue { page_ids: vec![freed_page_id], root_id: PageID(0) }],
+                    };
+                    let new_leaf_page_id = self.alloc_page_id();
+                    let new_leaf_page = Page::new(new_leaf_page_id, Node::FreeListLeaf(new_leaf_node));
+                    let serialized_size = new_leaf_page.calc_serialized_size();
+                    if serialized_size > mvcc.page_size {
+                        return Err(DCBError::InternalError(
+                            "Shouldn't get here: page size is too small for a FreeListLeafNode with one TSN and one PageID".to_string(),
+                        ));
+                    }
+                    if verbose {
+                        println!(
+                            "Created new leaf {:?} (new last TSN): {:?}",
+                            new_leaf_page_id, new_leaf_page.node
+                        );
+                    }
+                    self.insert_dirty(new_leaf_page)?;
+                    split_info = Some((tsn, new_leaf_page_id));
+                }
             }
         } else {
             return Err(DCBError::DatabaseCorrupted(
@@ -1175,6 +1178,15 @@ impl Writer {
 
         Ok(())
     }
+}
+
+enum FreePageIDInsertStrategy {
+    PushTsnOntoFreeListLeaf,
+    PushPageIdOntoFreeListLeaf,
+    PushPageIdOntoExistingTsnSubtree,
+    MoveTsnToNewTsnSubtree,
+    SplitFreeListLeaf,
+    CreateAndPromoteFreeListLeaf,
 }
 
 // Reader transaction

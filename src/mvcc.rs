@@ -657,10 +657,9 @@ impl Writer {
                         // Append to the existing last TSN
                         if leaf_node.values[last_idx].root_id != PageID(0) {
                             plan = FreePageIDInsertStrategy::PushPageIdOntoExistingTsnSubtree;
-
                         }
                         else if leaf_node.would_fit_new_page_id(max_node_size) {
-                            plan = FreePageIDInsertStrategy::PushPageIdOntoFreeListLeaf;
+                            plan = FreePageIDInsertStrategy::PushPageIdOntoFreeListLeaf(last_idx);
 
                         } else {
                             if leaf_node.keys.len() == 1 {
@@ -728,9 +727,7 @@ impl Writer {
                         );
                     }
                 }
-                FreePageIDInsertStrategy::PushPageIdOntoFreeListLeaf => {
-                    let len_keys = dirty_leaf_node.keys.len();
-                    let last_idx = len_keys - 1;
+                FreePageIDInsertStrategy::PushPageIdOntoFreeListLeaf(last_idx) => {
                     dirty_leaf_node.push_new_page_id(last_idx, freed_page_id);
                     if verbose {
                         println!(
@@ -1182,7 +1179,7 @@ impl Writer {
 
 enum FreePageIDInsertStrategy {
     PushTsnOntoFreeListLeaf,
-    PushPageIdOntoFreeListLeaf,
+    PushPageIdOntoFreeListLeaf(usize),
     PushPageIdOntoExistingTsnSubtree,
     MoveTsnToNewTsnSubtree,
     SplitFreeListLeaf,

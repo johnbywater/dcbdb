@@ -678,7 +678,7 @@ impl Writer {
             // Insertions always target the last TSN in the rightmost leaf.
             let len_keys = dirty_leaf_node.keys.len();
             if len_keys == 0 {
-                if !dirty_leaf_node.would_fit_new_key(max_node_size) {
+                if !dirty_leaf_node.would_fit_new_tsn_and_page_id(max_node_size) {
                     return Err(DCBError::InternalError("Page size too small".to_string()));
                 }
                 dirty_leaf_node.push_new_key_and_value(tsn, freed_page_id);
@@ -748,7 +748,7 @@ impl Writer {
                     }
                 } else if tsn > last_key {
                     // New last TSN
-                    if dirty_leaf_node.would_fit_new_key(mvcc.page_size - crate::page::PAGE_HEADER_SIZE) {
+                    if dirty_leaf_node.would_fit_new_tsn_and_page_id(mvcc.page_size - crate::page::PAGE_HEADER_SIZE) {
                         dirty_leaf_node.keys.push(tsn);
                         dirty_leaf_node.values.push(FreeListLeafValue { page_ids: vec![freed_page_id], root_id: PageID(0) });
                         if verbose {
@@ -1462,6 +1462,7 @@ mod tests {
         use super::*;
         use serial_test::serial;
         use tempfile::tempdir;
+        use crate::page::PAGE_HEADER_SIZE;
 
         // Helper function to create a test database with a specified page size
         fn construct_db(page_size: usize) -> (tempfile::TempDir, Mvcc) {
@@ -2439,6 +2440,52 @@ mod tests {
                 let mut writer = db.writer().unwrap();
                 writer.remove_free_page_id(&db, tsn, page_id).unwrap();
                 db.commit(&mut writer).unwrap();
+            }
+        }
+
+        #[test]
+        #[serial]
+        fn test_insert_freed_page_ids_overflow_single_key_returns_internal_error() {
+            // Use tiny pages to force the inline list to overflow quickly
+            let page_size = 64;
+            let max_node_size = page_size - PAGE_HEADER_SIZE;
+            let (_temp_dir, mut db) = construct_db(page_size);
+
+            // Start a writer
+            let mut writer = db.writer().unwrap();
+            let tsn = writer.tsn;
+            println!("Next page IDs: {:?}", writer.next_page_id);
+
+            // With page_size=64, max_node_size = 55. A single key/value with 4 page IDs
+            // takes 52 bytes, and adding the 5th (+8) would exceed capacity.
+            loop {
+                let pid = writer.alloc_page_id();
+                println!("Inserting page ID: {:?}", pid);
+
+                writer.insert_freed_page_id(&mut db, tsn, pid).unwrap();
+                let mut keys = writer.dirty.keys();
+                println!("Dirty page IDs: {:?}", keys);
+                assert_eq!(keys.len(), 1);
+                let dirty_page_id = *keys.next().unwrap();
+                let dirty_page = writer.get_mut_dirty(dirty_page_id).unwrap();
+                if let Node::FreeListLeaf(leaf_node) = &dirty_page.node {
+                    if !leaf_node.would_fit_new_page_id(max_node_size) {
+                        break
+                    }
+                } else {
+                    panic!("Expected leaf node")
+                }
+
+            }
+
+            // The next insert for the same TSN should hit the InternalError at line ~711
+            let pid5 = writer.alloc_page_id();
+            let err = writer.insert_freed_page_id(&mut db, tsn, pid5).unwrap_err();
+            match err {
+                DCBError::InternalError(msg) => {
+                    assert_eq!(msg, "Overflow freed page IDs for TSN to subtree not implemented");
+                }
+                other => panic!("Expected InternalError, got: {:?}", other),
             }
         }
     }

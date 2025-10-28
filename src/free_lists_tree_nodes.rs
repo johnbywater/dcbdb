@@ -170,7 +170,7 @@ impl FreeListLeafNode {
     }
 
     /// Returns true if calculated size with new (tsn -> [page_id]) doesn't exceed the given size
-    pub fn would_fit_new_key(&self, max_node_size: usize) -> bool {
+    pub fn would_fit_new_tsn_and_page_id(&self, max_node_size: usize) -> bool {
         // New pair increases size by: 8 (key) + 2 (len) + 8 (one page_id) + 8 (root_id) = 26 bytes
         self.calc_serialized_size() + 8 + 2 + 8 + 8 <= max_node_size
     }

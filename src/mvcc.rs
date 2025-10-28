@@ -1110,13 +1110,13 @@ impl Writer {
         } else {
             // TSN-subtree case: mutate the TSN leaf first
             let tsn_root_id = leaf_value_root_id;
-            let tsn_dirty_id = { self.get_dirty_page_id(tsn_root_id)? };
-            if tsn_dirty_id != tsn_root_id {
+            let dirty_tsn_root_id = { self.get_dirty_page_id(tsn_root_id)? };
+            if dirty_tsn_root_id != tsn_root_id {
                 // We'll update the root_id pointer in the main leaf if needed, but we do NOT
                 // free the old TSN-root page unless the TSN entry itself is removed.
             }
             let mut tsn_root_replaced: Option<PageID> = None;
-            let tsn_dirty_page = self.get_mut_dirty(tsn_dirty_id)?;
+            let tsn_dirty_page = self.get_mut_dirty(dirty_tsn_root_id)?;
             let mut tsn_leaf_became_empty = false;
             let mut tsn_child_leaf_became_empty = false;
             match &mut tsn_dirty_page.node {
@@ -1130,12 +1130,12 @@ impl Writer {
                     }
                     if verbose {
                         println!(
-                            "Removed {used_page_id:?} from TSN-subtree leaf {tsn_dirty_id:?} for {tsn:?}"
+                            "Removed {used_page_id:?} from TSN-subtree leaf {dirty_tsn_root_id:?} for {tsn:?}"
                         );
                     }
                     if tsn_leaf_node.page_ids.is_empty() {
                         tsn_leaf_became_empty = true;
-                        removed_page_ids.push(tsn_dirty_id);
+                        removed_page_ids.push(dirty_tsn_root_id);
                     }
                 }
                 Node::FreeListTsnInternal(_) => {
@@ -1149,7 +1149,7 @@ impl Writer {
 
                     // Build the path of (internal_id, child_index_chosen) down to the leaf.
                     let mut path: Vec<(PageID, usize)> = Vec::new();
-                    let mut current_id = tsn_dirty_id;
+                    let mut current_id = dirty_tsn_root_id;
                     loop {
                         let node_owned = { self.get_page_ref(mvcc, current_id)?.node.clone() };
                         match node_owned {
@@ -1277,7 +1277,7 @@ impl Writer {
                     if subtree_emptied {
                         tsn_leaf_became_empty = true;
                     } else if let Some(new_root) = new_root_id_opt {
-                        if new_root != tsn_dirty_id {
+                        if new_root != dirty_tsn_root_id {
                             tsn_root_replaced = Some(new_root);
                         }
                     }
@@ -1321,9 +1321,9 @@ impl Writer {
                 } else if let Some(new_root) = tsn_root_replaced {
                     // TSN-subtree root changed (internal collapsed to single child)
                     dirty_leaf_node.values[0].root_id = new_root;
-                } else if tsn_dirty_id != tsn_root_id {
+                } else if dirty_tsn_root_id != tsn_root_id {
                     // Update the pointer to the new dirty TSN leaf (COW of root leaf)
-                    dirty_leaf_node.values[0].root_id = tsn_dirty_id;
+                    dirty_leaf_node.values[0].root_id = dirty_tsn_root_id;
                 }
             } else {
                 return Err(DCBError::DatabaseCorrupted("Expected FreeListLeaf node".to_string()));

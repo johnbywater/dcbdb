@@ -568,21 +568,21 @@ impl Writer {
             if is_finished {
                 break;
             }
-            let page = { self.get_page_ref(mvcc, page_id)? };
-            match &page.node {
+            let node_owned = { self.get_page_ref(mvcc, page_id)?.node.clone() };
+            match node_owned {
                 Node::FreeListInternal(node) => {
                     if verbose {
-                        println!("{:?} is internal node", page.page_id);
+                        println!("{:?} is internal node", page_id);
                     }
                     if idx < node.child_ids.len() {
                         let child_page_id = node.child_ids[idx];
-                        stack.push((page.page_id, idx + 1));
+                        stack.push((page_id, idx + 1));
                         stack.push((child_page_id, 0));
                     }
                 }
                 Node::FreeListLeaf(node) => {
                     if verbose {
-                        println!("{:?} is leaf node", page.page_id);
+                        println!("{:?} is leaf node", page_id);
                     }
                     for i in 0..node.keys.len() {
                         let tsn = node.keys[i];
@@ -599,10 +599,29 @@ impl Writer {
                                 reusable_page_ids.push_back((page_id, tsn));
                             }
                         } else {
-                            // TODO: Traverse into free list subtree
-                            return Err(DCBError::DatabaseCorrupted(
-                                "Free list subtree not implemented".to_string(),
-                            ));
+                            // Traverse into the TSN-subtree rooted at root_id and collect page IDs
+                            let mut tsn_stack: Vec<PageID> = vec![leaf_value.root_id];
+                            while let Some(sub_id) = tsn_stack.pop() {
+                                let sub_node = { self.get_page_ref(mvcc, sub_id)?.node.clone() };
+                                match sub_node {
+                                    Node::FreeListTsnLeaf(tsn_leaf) => {
+                                        for &pid in &tsn_leaf.page_ids {
+                                            reusable_page_ids.push_back((pid, tsn));
+                                        }
+                                    }
+                                    Node::FreeListTsnInternal(tsn_internal) => {
+                                        for &child_id in &tsn_internal.child_ids {
+                                            tsn_stack.push(child_id);
+                                        }
+                                    }
+                                    other => {
+                                        return Err(DCBError::DatabaseCorrupted(format!(
+                                            "Invalid node type in TSN subtree: {}",
+                                            other.type_name()
+                                        )));
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -2606,8 +2625,114 @@ mod tests {
             // Recompute
             writer.find_reusable_page_ids(&db).unwrap();
             // Expect entries from leaf1 then leaf2
-            assert_eq!(2, writer.reusable_page_ids.len());
+            assert_eq!(1, writer.reusable_page_ids.len());
             assert_eq!((pid, tsn), writer.reusable_page_ids[0]);
+        }
+
+        #[test]
+        #[serial]
+        fn test_find_reusable_page_ids_leaf_with_subtree_root_internal_leaf() {
+            let (_temp_dir, db) = construct_db(64);
+            let mut writer = db.writer().unwrap();
+
+            // Create a TSN-subtree leaf with a PageID
+            let tsn_sub_leaf_id1 = writer.alloc_page_id();
+            let pid1 = PageID(777);
+            let tsn_sub_leaf1 = crate::free_lists_tree_nodes::FreeListTsnLeafNode { page_ids: vec![pid1] };
+            writer.insert_dirty(Page::new(tsn_sub_leaf_id1, Node::FreeListTsnLeaf(tsn_sub_leaf1))).unwrap();
+
+            // Create a TSN-subtree leaf with a PageID
+            let tsn_sub_leaf_id2 = writer.alloc_page_id();
+            let pid2 = PageID(888);
+            let tsn_sub_leaf2 = crate::free_lists_tree_nodes::FreeListTsnLeafNode { page_ids: vec![pid2] };
+            writer.insert_dirty(Page::new(tsn_sub_leaf_id2, Node::FreeListTsnLeaf(tsn_sub_leaf2))).unwrap();
+
+            // Create a TSN-subtree internal node
+            let tsn_sub_internal_id = writer.alloc_page_id();
+            let tsn_sub_internal = crate::free_lists_tree_nodes::FreeListTsnInternalNode { keys: vec![pid2], child_ids: vec![tsn_sub_leaf_id1, tsn_sub_leaf_id2] };
+            writer.insert_dirty(Page::new(tsn_sub_internal_id, Node::FreeListTsnInternal(tsn_sub_internal))).unwrap();
+
+            // Make a leaf value point to the internal node
+            let tsn = Tsn(33);
+            let leaf = FreeListLeafNode {
+                keys: vec![tsn],
+                values: vec![FreeListLeafValue { page_ids: vec![], root_id: tsn_sub_internal_id }],
+            };
+            let root_id = writer.alloc_page_id();
+            writer.insert_dirty(Page::new(root_id, Node::FreeListLeaf(leaf))).unwrap();
+            writer.free_lists_tree_root_id = root_id;
+
+            // Recompute
+            writer.find_reusable_page_ids(&db).unwrap();
+            // Expect entries from leaf1 then leaf2
+            assert_eq!(2, writer.reusable_page_ids.len());
+            assert_eq!((pid2, tsn), writer.reusable_page_ids[0]);
+            assert_eq!((pid1, tsn), writer.reusable_page_ids[1]);
+        }
+
+        #[test]
+        #[serial]
+        fn test_find_reusable_page_ids_leaf_with_subtree_root_internal_internal() {
+            let (_temp_dir, db) = construct_db(64);
+            let mut writer = db.writer().unwrap();
+
+            // Create a TSN-subtree leaf with a PageID
+            let tsn_sub_leaf_id1 = writer.alloc_page_id();
+            let pid1 = PageID(777);
+            let tsn_sub_leaf1 = crate::free_lists_tree_nodes::FreeListTsnLeafNode { page_ids: vec![pid1] };
+            writer.insert_dirty(Page::new(tsn_sub_leaf_id1, Node::FreeListTsnLeaf(tsn_sub_leaf1))).unwrap();
+
+            // Create a TSN-subtree leaf with a PageID
+            let tsn_sub_leaf_id2 = writer.alloc_page_id();
+            let pid2 = PageID(888);
+            let tsn_sub_leaf2 = crate::free_lists_tree_nodes::FreeListTsnLeafNode { page_ids: vec![pid2] };
+            writer.insert_dirty(Page::new(tsn_sub_leaf_id2, Node::FreeListTsnLeaf(tsn_sub_leaf2))).unwrap();
+
+            // Create a TSN-subtree internal node
+            let tsn_sub_internal_id1 = writer.alloc_page_id();
+            let tsn_sub_internal1 = crate::free_lists_tree_nodes::FreeListTsnInternalNode { keys: vec![pid2], child_ids: vec![tsn_sub_leaf_id1, tsn_sub_leaf_id2] };
+            writer.insert_dirty(Page::new(tsn_sub_internal_id1, Node::FreeListTsnInternal(tsn_sub_internal1))).unwrap();
+
+            // Create a TSN-subtree leaf with a PageID
+            let tsn_sub_leaf_id3 = writer.alloc_page_id();
+            let pid3 = PageID(999);
+            let tsn_sub_leaf3 = crate::free_lists_tree_nodes::FreeListTsnLeafNode { page_ids: vec![pid3] };
+            writer.insert_dirty(Page::new(tsn_sub_leaf_id3, Node::FreeListTsnLeaf(tsn_sub_leaf3))).unwrap();
+
+            // Create a TSN-subtree leaf with a PageID
+            let tsn_sub_leaf_id4 = writer.alloc_page_id();
+            let pid4 = PageID(1111);
+            let tsn_sub_leaf4 = crate::free_lists_tree_nodes::FreeListTsnLeafNode { page_ids: vec![pid4] };
+            writer.insert_dirty(Page::new(tsn_sub_leaf_id4, Node::FreeListTsnLeaf(tsn_sub_leaf4))).unwrap();
+
+            // Create a TSN-subtree internal node
+            let tsn_sub_internal_id2 = writer.alloc_page_id();
+            let tsn_sub_internal2 = crate::free_lists_tree_nodes::FreeListTsnInternalNode { keys: vec![pid4], child_ids: vec![tsn_sub_leaf_id3, tsn_sub_leaf_id4] };
+            writer.insert_dirty(Page::new(tsn_sub_internal_id2, Node::FreeListTsnInternal(tsn_sub_internal2))).unwrap();
+
+            // Create a TSN-subtree internal node
+            let tsn_sub_internal_id3 = writer.alloc_page_id();
+            let tsn_sub_internal3 = crate::free_lists_tree_nodes::FreeListTsnInternalNode { keys: vec![pid3], child_ids: vec![tsn_sub_internal_id1, tsn_sub_internal_id2] };
+            writer.insert_dirty(Page::new(tsn_sub_internal_id3, Node::FreeListTsnInternal(tsn_sub_internal3))).unwrap();
+
+            // Make a leaf value point to the internal node
+            let tsn = Tsn(33);
+            let leaf = FreeListLeafNode {
+                keys: vec![tsn],
+                values: vec![FreeListLeafValue { page_ids: vec![], root_id: tsn_sub_internal_id3 }],
+            };
+            let root_id = writer.alloc_page_id();
+            writer.insert_dirty(Page::new(root_id, Node::FreeListLeaf(leaf))).unwrap();
+            writer.free_lists_tree_root_id = root_id;
+
+            // Recompute
+            writer.find_reusable_page_ids(&db).unwrap();
+            // Expect entries from leaf1 then leaf2
+            assert_eq!(4, writer.reusable_page_ids.len());
+            assert_eq!((pid4, tsn), writer.reusable_page_ids[0]);
+            assert_eq!((pid3, tsn), writer.reusable_page_ids[1]);
+            assert_eq!((pid2, tsn), writer.reusable_page_ids[2]);
+            assert_eq!((pid1, tsn), writer.reusable_page_ids[3]);
         }
     }
 }

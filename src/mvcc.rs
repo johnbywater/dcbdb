@@ -734,7 +734,7 @@ impl Writer {
                         let serialized_size = new_leaf_page.calc_serialized_size();
                         if serialized_size > mvcc.page_size {
                             return Err(DCBError::InternalError(
-                                "Overflow freed page IDs for TSN to subtree not implemented".to_string(),
+                                "Shouldn't get here: page size is too small for a FreeListLeafNode with one TSN and one PageID".to_string(),
                             ));
                         }
                         if verbose {
@@ -768,7 +768,7 @@ impl Writer {
                         let serialized_size = new_leaf_page.calc_serialized_size();
                         if serialized_size > mvcc.page_size {
                             return Err(DCBError::InternalError(
-                                "Overflow freed page IDs for TSN to subtree not implemented".to_string(),
+                                "Shouldn't get here: page size is too small for a FreeListLeafNode with one TSN and one PageID".to_string(),
                             ));
                         }
                         if verbose {

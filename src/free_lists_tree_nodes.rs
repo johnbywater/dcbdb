@@ -40,21 +40,6 @@ impl FreeListLeafNode {
         total_size
     }
 
-    /// Returns true if adding a new (tsn -> [page_id]) pair would fit into page_size
-    /// Assumes new entry has one page_id and no subtree (root_id == 0)
-    pub fn would_fit_new_pair(&self, page_size: usize) -> bool {
-        // New pair increases size by: 8 (key) + 2 (len) + 8 (one page_id) + 8 (root_id) = 26 bytes
-        self.calc_serialized_size() + 8 + 2 + 8 + 8 <= page_size
-    }
-
-    /// Returns true if appending one page_id to the value at idx would fit into page_size
-    pub fn would_fit_append_at(&self, idx: usize, page_size: usize) -> bool {
-        // Only grows by 8 bytes for the extra PageID
-        if idx >= self.values.len() { return false; }
-        self.calc_serialized_size() + 8 <= page_size
-    }
-
-
     pub fn serialize_into(&self, buf: &mut [u8]) -> usize {
         let mut i = 0usize;
         let klen = self.keys.len() as u16;
@@ -184,37 +169,29 @@ impl FreeListLeafNode {
         Ok(FreeListLeafNode { keys, values })
     }
 
-    pub fn insert_or_append(&mut self, tsn: Tsn, page_id: PageID) -> DCBResult<()> {
-        // Find the place to insert the value
-        let leaf_idx = self.keys.binary_search(&tsn).ok();
+    /// Returns true if calculated size with new (tsn -> [page_id]) doesn't exceed the given size
+    pub fn would_fit_new_key(&self, max_node_size: usize) -> bool {
+        // New pair increases size by: 8 (key) + 2 (len) + 8 (one page_id) + 8 (root_id) = 26 bytes
+        self.calc_serialized_size() + 8 + 2 + 8 + 8 <= max_node_size
+    }
 
-        // Insert the value
-        if let Some(idx) = leaf_idx {
-            // TSN already exists, append to its page_ids
-            if self.values[idx].root_id == PageID(0) {
-                self.values[idx].page_ids.push(page_id);
-            } else {
-                return Err(DCBError::DatabaseCorrupted(
-                    "Free list subtree not implemented".to_string(),
-                ));
-            }
-            // println!(
-            //     "Appended page ID {:?} to TSN {:?} in page {:?}: {:?}",
-            //     freed_page_id, tsn, dirty_page_id, dirty_leaf_node
-            // );
-        } else {
-            // New TSN, add a new entry
-            self.keys.push(tsn);
-            self.values.push(FreeListLeafValue {
-                page_ids: vec![page_id],
-                root_id: PageID(0),
-            });
-            // println!(
-            //     "Inserted {:?} and appended {:?} in {:?}: {:?}",
-            //     tsn, freed_page_id, dirty_page_id, dirty_leaf_node
-            // );
-        }
-        Ok(())
+    pub fn push_new_key_and_value(&mut self, tsn: Tsn, page_id: PageID) {
+        // New TSN, add a new entry
+        self.keys.push(tsn);
+        self.values.push(FreeListLeafValue {
+            page_ids: vec![page_id],
+            root_id: PageID(0),
+        });
+    }
+
+    /// Returns true if calculated size with new page_id doesn't exceed the given size
+    pub fn would_fit_new_page_id(&self, max_node_size: usize) -> bool {
+        // Only grows by 8 bytes for the extra PageID
+        self.calc_serialized_size() + 8 <= max_node_size
+    }
+
+    pub fn push_new_page_id(&mut self, idx: usize, page_id: PageID) {
+        self.values[idx].page_ids.push(page_id);
     }
 
     pub fn pop_last_key_and_value(&mut self) -> DCBResult<(Tsn, FreeListLeafValue)> {

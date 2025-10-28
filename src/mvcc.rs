@@ -636,6 +636,8 @@ impl Writer {
         // Get the root page ID.
         let mut current_page_id = self.free_lists_tree_root_id;
 
+        let max_node_size = mvcc.page_size - crate::page::PAGE_HEADER_SIZE;
+
         // Traverse the tree to find a leaf node
         let mut stack: Vec<PageID> = Vec::new();
         loop {
@@ -673,50 +675,21 @@ impl Writer {
         // Proactive insert logic with capacity checks and optional split
         let mut split_info: Option<(Tsn, PageID)> = None;
         if let Node::FreeListLeaf(dirty_leaf_node) = &mut dirty_leaf_page.node {
-            // We simplify: insertions always target the last TSN in the rightmost leaf.
-            let len = dirty_leaf_node.keys.len();
-            if len == 0 {
-                // Empty leaf: either insert in-place or create a new leaf to promote.
-                if dirty_leaf_node.would_fit_new_pair(mvcc.page_size) {
-                    dirty_leaf_node.keys.push(tsn);
-                    dirty_leaf_node.values.push(FreeListLeafValue { page_ids: vec![freed_page_id], root_id: PageID(0) });
-                    if verbose {
-                        println!(
-                            "Inserted first pair ({tsn:?} -> {freed_page_id:?}) in {dirty_page_id:?}: {:?}",
-                            dirty_leaf_node
-                        );
-                    }
-                    // Sanity: ensure serialized size is still within page size
-                    if dirty_leaf_page.calc_serialized_size() > mvcc.page_size {
-                        return Err(DCBError::InternalError(
-                            "Leaf grew beyond page size after insertion".to_string(),
-                        ));
-                    }
-                } else {
-                    // Create brand new leaf with this single pair and promote
-                    let new_leaf_node = FreeListLeafNode {
-                        keys: vec![tsn],
-                        values: vec![FreeListLeafValue { page_ids: vec![freed_page_id], root_id: PageID(0) }],
-                    };
-                    let new_leaf_page_id = self.alloc_page_id();
-                    let new_leaf_page = Page::new(new_leaf_page_id, Node::FreeListLeaf(new_leaf_node));
-                    let serialized_size = new_leaf_page.calc_serialized_size();
-                    if serialized_size > mvcc.page_size {
-                        return Err(DCBError::InternalError(
-                            "Overflow freed page IDs for TSN to subtree not implemented".to_string(),
-                        ));
-                    }
-                    if verbose {
-                        println!(
-                            "Created new leaf {:?} (empty -> new TSN): {:?}",
-                            new_leaf_page_id, new_leaf_page.node
-                        );
-                    }
-                    self.insert_dirty(new_leaf_page)?;
-                    split_info = Some((tsn, new_leaf_page_id));
+            // Insertions always target the last TSN in the rightmost leaf.
+            let len_keys = dirty_leaf_node.keys.len();
+            if len_keys == 0 {
+                if !dirty_leaf_node.would_fit_new_key(max_node_size) {
+                    return Err(DCBError::InternalError("Page size too small".to_string()));
+                }
+                dirty_leaf_node.push_new_key_and_value(tsn, freed_page_id);
+                if verbose {
+                    println!(
+                        "Inserted first pair ({tsn:?} -> {freed_page_id:?}) in {dirty_page_id:?}: {:?}",
+                        dirty_leaf_node
+                    );
                 }
             } else {
-                let last_idx = len - 1;
+                let last_idx = len_keys - 1;
                 let last_key = dirty_leaf_node.keys[last_idx];
                 if tsn == last_key {
                     // Append to the existing last TSN
@@ -725,18 +698,13 @@ impl Writer {
                             "Free list subtree not implemented".to_string(),
                         ));
                     }
-                    if dirty_leaf_node.would_fit_append_at(last_idx, mvcc.page_size) {
-                        dirty_leaf_node.values[last_idx].page_ids.push(freed_page_id);
+                    if dirty_leaf_node.would_fit_new_page_id(max_node_size) {
+                        dirty_leaf_node.push_new_page_id(last_idx, freed_page_id);
                         if verbose {
                             println!(
                                 "Appended {freed_page_id:?} for existing last {tsn:?} in {dirty_page_id:?}: {:?}",
                                 dirty_leaf_node
                             );
-                        }
-                        if dirty_leaf_page.calc_serialized_size() > mvcc.page_size {
-                            return Err(DCBError::InternalError(
-                                "Leaf grew beyond page size after append".to_string(),
-                            ));
                         }
                     } else {
                         // Doesn't fit. If only one key, cannot split to fix; error out.
@@ -780,7 +748,7 @@ impl Writer {
                     }
                 } else if tsn > last_key {
                     // New last TSN
-                    if dirty_leaf_node.would_fit_new_pair(mvcc.page_size) {
+                    if dirty_leaf_node.would_fit_new_key(mvcc.page_size - crate::page::PAGE_HEADER_SIZE) {
                         dirty_leaf_node.keys.push(tsn);
                         dirty_leaf_node.values.push(FreeListLeafValue { page_ids: vec![freed_page_id], root_id: PageID(0) });
                         if verbose {
@@ -788,11 +756,6 @@ impl Writer {
                                 "Inserted new last pair ({tsn:?} -> {freed_page_id:?}) in {dirty_page_id:?}: {:?}",
                                 dirty_leaf_node
                             );
-                        }
-                        if dirty_leaf_page.calc_serialized_size() > mvcc.page_size {
-                            return Err(DCBError::InternalError(
-                                "Leaf grew beyond page size after insertion".to_string(),
-                            ));
                         }
                     } else {
                         // Create a new leaf containing only this last TSN and promote it
@@ -1969,6 +1932,7 @@ mod tests {
                 }
 
                 // Remember the final TSN
+                writer.tsn = Tsn(tsn.0 + 1);
                 previous_writer_tsn = writer.tsn;
 
                 // Commit the transaction

@@ -3116,7 +3116,6 @@ mod tests {
             assert_eq!(1, writer.freed_page_ids.len());
         }
 
-
         #[test]
         #[serial]
         fn test_remove_freed_page_id_from_tsn_subtree_internal_leaf_pid1() {
@@ -3142,11 +3141,41 @@ mod tests {
 
             assert_eq!(2, writer.freed_page_ids.len());
 
-            writer.remove_free_page_id(&db, tsn1, pid2).unwrap();
+            writer.remove_free_page_id(&db, tsn1, pid3).unwrap();
             writer.find_reusable_page_ids(&db).unwrap();
-            assert_eq!(2, writer.reusable_page_ids.len());
-            assert_eq!((pid3, tsn1), writer.reusable_page_ids[0]);
-            assert_eq!((pid4, tsn1), writer.reusable_page_ids[1]);
+            assert_eq!(1, writer.reusable_page_ids.len());
+            assert_eq!((pid4, tsn1), writer.reusable_page_ids[0]);
+
+            assert_eq!(2, writer.freed_page_ids.len());
+
+            writer.remove_free_page_id(&db, tsn1, pid4).unwrap();
+            writer.find_reusable_page_ids(&db).unwrap();
+            assert_eq!(0, writer.reusable_page_ids.len());
+
+            assert_eq!(3, writer.freed_page_ids.len());
+        }
+        
+        #[test]
+        #[serial]
+        fn test_remove_freed_page_id_from_tsn_subtree_internal_internal_leaf_pid1() {
+            let (_temp_dir, db) = construct_db(128);
+            let mut writer = db.writer().unwrap();
+
+            let (pid1, pid2, pid3, pid4, pid5, pid6, pid7, pid8, tsn) = build_free_list_tree_leaf_tsn_subtree_internal_internal_leaf(&mut writer);
+
+            writer.remove_free_page_id(&db, tsn, pid1).unwrap();
+            writer.find_reusable_page_ids(&db).unwrap();
+            assert_eq!(7, writer.reusable_page_ids.len());
+            assert_eq!((pid2, tsn), writer.reusable_page_ids[0]);
+            assert_eq!((pid3, tsn), writer.reusable_page_ids[1]);
+            assert_eq!((pid4, tsn), writer.reusable_page_ids[2]);
+            assert_eq!((pid5, tsn), writer.reusable_page_ids[3]);
+            assert_eq!((pid6, tsn), writer.reusable_page_ids[4]);
+            assert_eq!((pid7, tsn), writer.reusable_page_ids[5]);
+            assert_eq!((pid8, tsn), writer.reusable_page_ids[6]);
+
+            assert_eq!(0, writer.freed_page_ids.len());
+
 
         }
 

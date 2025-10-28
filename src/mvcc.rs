@@ -1139,61 +1139,44 @@ impl Writer {
                     }
                 }
                 Node::FreeListTsnInternal(_) => {
-                    // Handle a TSN-subtree whose root is an internal node. We support the
-                    // common case where the internal node's children are leaves (two-way split),
-                    // and we need to remove a single PageID from one of those leaves.
-                    // Strategy:
-                    // 1) Find which child leaf contains the used_page_id.
-                    // 2) COW that child leaf if necessary and remove the used_page_id.
-                    // 3) If the child leaf becomes empty, remove that child from the internal; if
-                    //    only one child remains, promote it to be the new TSN-subtree root and
-                    //    schedule the old internal for freeing.
-                    // 4) If the child leaf remains non-empty but was COW-ed, update the parent's
-                    //    child_ids to the new dirty child id.
+                    // General TSN-subtree removal with arbitrary depth. We will:
+                    // 1) Descend using separator keys to locate the target leaf containing used_page_id.
+                    // 2) Make a copy-on-write path from root to that leaf, updating parent->child links
+                    //    if any node gets a new dirty page id.
+                    // 3) Remove the page id from the leaf. If the leaf becomes empty, remove the child
+                    //    from its parent, adjust separator keys, and if the internal ends up with a
+                    //    single child, promote that child. Propagate promotions up as needed.
 
-                    // Clone the internal node to inspect without holding mutable borrows that would
-                    // conflict with later child mutations.
-                    let tsn_internal_owned = { self.get_page_ref(mvcc, tsn_dirty_id)?.node.clone() };
-                    let Node::FreeListTsnInternal(tsn_internal) = tsn_internal_owned else {
-                        return Err(DCBError::DatabaseCorrupted("Expected TSN-subtree internal node".to_string()));
-                    };
-
-                    // Find the child leaf containing used_page_id
-                    let mut found_idx: Option<usize> = None;
-                    for (idx, &child_id) in tsn_internal.child_ids.iter().enumerate() {
-                        let child_node = { self.get_page_ref(mvcc, child_id)?.node.clone() };
-                        match child_node {
-                            Node::FreeListTsnLeaf(ref leaf) => {
-                                if leaf.page_ids.iter().any(|&pid| pid == used_page_id) {
-                                    found_idx = Some(idx);
-                                    break;
+                    // Build the path of (internal_id, child_index_chosen) down to the leaf.
+                    let mut path: Vec<(PageID, usize)> = Vec::new();
+                    let mut current_id = tsn_dirty_id;
+                    loop {
+                        let node_owned = { self.get_page_ref(mvcc, current_id)?.node.clone() };
+                        match node_owned {
+                            Node::FreeListTsnLeaf(_) => {
+                                break; // current_id is the leaf
+                            }
+                            Node::FreeListTsnInternal(internal) => {
+                                // Choose child index by separator keys: count keys <= used_page_id
+                                let mut child_idx = 0usize;
+                                while child_idx < internal.keys.len() && used_page_id >= internal.keys[child_idx] {
+                                    child_idx += 1;
                                 }
+                                let next_id = internal.child_ids[child_idx];
+                                path.push((current_id, child_idx));
+                                current_id = next_id;
                             }
-                            Node::FreeListTsnInternal(_) => {
-                                // Not implemented: deeper-than-one-level TSN-subtrees.
-                                // Keep scanning for a direct leaf match; if none found, we'll error below.
-                            }
-                            _ => {
-                                return Err(DCBError::DatabaseCorrupted(
-                                    "Unexpected node type under TSN-subtree internal".to_string(),
-                                ));
+                            other => {
+                                return Err(DCBError::DatabaseCorrupted(format!(
+                                    "Unexpected node type in TSN-subtree during descent: {}",
+                                    other.type_name()
+                                )));
                             }
                         }
                     }
 
-                    let Some(idx) = found_idx else {
-                        return Err(DCBError::DatabaseCorrupted(format!(
-                            "{used_page_id:?} not found in TSN-subtree for {tsn:?}"
-                        )));
-                    };
-
-                    let child_id = tsn_internal.child_ids[idx];
-
-                    // Make child dirty and remove the used_page_id
-                    let dirty_child_id = { self.get_dirty_page_id(child_id)? };
-                    if dirty_child_id != child_id {
-                        // We'll update the parent after we mutate the child
-                    }
+                    // Now current_id points to the target leaf. Make it dirty and remove the page id.
+                    let mut dirty_child_id = { self.get_dirty_page_id(current_id)? };
                     {
                         let child_page = self.get_mut_dirty(dirty_child_id)?;
                         match &mut child_page.node {
@@ -1211,60 +1194,92 @@ impl Writer {
                                     );
                                 }
                                 if leaf_node.page_ids.is_empty() {
-                                    // Child leaf became empty. We will remove it from the TSN-subtree
-                                    // internal node below; the TSN-subtree itself may still be non-empty.
                                     tsn_child_leaf_became_empty = true;
                                     removed_page_ids.push(dirty_child_id);
                                 }
                             }
-                            Node::FreeListTsnInternal(_) => {
-                                return Err(DCBError::DatabaseCorrupted(
-                                    "Removing from nested TSN-subtree internal node not implemented".to_string(),
-                                ));
-                            }
-                            _ => {
-                                return Err(DCBError::DatabaseCorrupted(
-                                    "Expected TSN-subtree leaf".to_string(),
-                                ));
+                            other => {
+                                return Err(DCBError::DatabaseCorrupted(format!(
+                                    "Expected TSN-subtree leaf, got {}",
+                                    other.type_name()
+                                )));
                             }
                         }
                     }
 
-                    // Now update the internal node as needed
-                    if tsn_child_leaf_became_empty {
-                        // Remove the child and corresponding separator key
-                        // For B-tree style nodes: keys.len() == child_ids.len() - 1
-                        // Removing child at idx => remove key at (idx if idx == 0 else idx-1)
-                        let key_remove_idx = if idx == 0 { 0 } else { idx - 1 };
+                    // Walk back up the path, ensuring parents are dirty and applying updates.
+                    let mut subtree_emptied = false;
+                    let mut new_root_id_opt: Option<PageID> = None;
 
-                        // Mutably borrow the internal page to edit child_ids/keys
-                        let internal_page = self.get_mut_dirty(tsn_dirty_id)?;
-                        let Node::FreeListTsnInternal(ref mut internal_node_mut) = internal_page.node else {
+                    let path_len = path.len();
+                    for (level, (parent_id, child_idx)) in path.into_iter().rev().enumerate() {
+                        // Make parent dirty (COW) if needed
+                        let parent_dirty_id = { self.get_dirty_page_id(parent_id)? };
+
+                        // If parent was COW-ed, its own parent (next iteration) must update pointer to it.
+                        // We achieve this by propagating parent_dirty_id via dirty_child_id variable at end.
+
+                        // Mutate the parent
+                        let parent_page = self.get_mut_dirty(parent_dirty_id)?;
+                        let Node::FreeListTsnInternal(ref mut parent_node) = parent_page.node else {
                             return Err(DCBError::DatabaseCorrupted("Expected TSN-subtree internal node".to_string()));
                         };
-                        internal_node_mut.child_ids.remove(idx);
-                        if !internal_node_mut.keys.is_empty() {
-                            if key_remove_idx < internal_node_mut.keys.len() {
-                                internal_node_mut.keys.remove(key_remove_idx);
+
+                        if tsn_child_leaf_became_empty && level == 0 {
+                            // Remove the empty leaf child from this parent
+                            parent_node.child_ids.remove(child_idx);
+                            if !parent_node.keys.is_empty() {
+                                let key_remove_idx = if child_idx == 0 { 0 } else { child_idx - 1 };
+                                if key_remove_idx < parent_node.keys.len() {
+                                    parent_node.keys.remove(key_remove_idx);
+                                }
+                            }
+
+                            // After removal, decide on collapse/promotion
+                            match parent_node.child_ids.len() {
+                                0 => {
+                                    // Whole TSN-subtree emptied
+                                    subtree_emptied = true;
+                                    removed_page_ids.push(parent_dirty_id);
+                                }
+                                1 => {
+                                    // Promote sole remaining child
+                                    let remaining_child = parent_node.child_ids[0];
+                                    removed_page_ids.push(parent_dirty_id);
+                                    // For upper level (or main leaf if this was the root), this node is replaced by remaining_child
+                                    dirty_child_id = remaining_child;
+                                    new_root_id_opt = Some(remaining_child);
+                                }
+                                _ => {
+                                    // Parent remains; propagate its (possibly COW-ed) id upward
+                                    dirty_child_id = parent_dirty_id;
+                                    if level == path_len - 1 {
+                                        // If this was the root parent (topmost), remember it as new root when applicable
+                                        new_root_id_opt = Some(parent_dirty_id);
+                                    }
+                                }
+                            }
+                        } else {
+                            // Child was not removed; update the pointer if it changed due to COW
+                            if parent_node.child_ids[child_idx] != dirty_child_id {
+                                parent_node.child_ids[child_idx] = dirty_child_id;
+                            }
+                            // Propagate upward: the current parent may itself have been COW-ed
+                            dirty_child_id = parent_dirty_id;
+                            if level == path_len - 1 {
+                                new_root_id_opt = Some(parent_dirty_id);
                             }
                         }
+                    }
 
-                        if internal_node_mut.child_ids.len() == 1 {
-                            // Promote the sole remaining child to become the TSN-subtree root
-                            let remaining_child = internal_node_mut.child_ids[0];
-                            // Schedule current internal for freeing; update root pointer later in main leaf
-                            removed_page_ids.push(tsn_dirty_id);
-                            tsn_root_replaced = Some(remaining_child);
-                        } else {
-                            // Keep the internal as new root (already dirty).
+                    // Determine if the TSN-subtree root changed. Prefer promotion result if set; otherwise, if
+                    // root was COW-ed or updated, use new_root_id_opt.
+                    if subtree_emptied {
+                        tsn_leaf_became_empty = true;
+                    } else if let Some(new_root) = new_root_id_opt {
+                        if new_root != tsn_dirty_id {
+                            tsn_root_replaced = Some(new_root);
                         }
-                    } else if dirty_child_id != child_id {
-                        // Child not empty but was COW-ed: update internal's child pointer
-                        let internal_page = self.get_mut_dirty(tsn_dirty_id)?;
-                        let Node::FreeListTsnInternal(ref mut internal_node_mut) = internal_page.node else {
-                            return Err(DCBError::DatabaseCorrupted("Expected TSN-subtree internal node".to_string()));
-                        };
-                        internal_node_mut.child_ids[idx] = dirty_child_id;
                     }
                 }
                 _ => {
@@ -1463,7 +1478,7 @@ mod tests {
     use serial_test::serial;
     use tempfile::tempdir;
 
-    static VERBOSE: bool = true;
+    static VERBOSE: bool = false;
 
     #[test]
     #[serial]
@@ -3154,7 +3169,7 @@ mod tests {
 
             assert_eq!(3, writer.freed_page_ids.len());
         }
-        
+
         #[test]
         #[serial]
         fn test_remove_freed_page_id_from_tsn_subtree_internal_internal_leaf_pid1() {

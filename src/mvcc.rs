@@ -568,7 +568,16 @@ impl Writer {
             if is_finished {
                 break;
             }
-            let node_owned = { self.get_page_ref(mvcc, page_id)?.node.clone() };
+            let node_owned = {
+                match self.get_page_ref(mvcc, page_id) {
+                    Ok(p) => p.node.clone(),
+                    Err(e) => {
+                        return Err(DCBError::DatabaseCorrupted(format!(
+                            "Free list page {:?} load error: {:?}", page_id, e
+                        )));
+                    }
+                }
+            };
             match node_owned {
                 Node::FreeListInternal(node) => {
                     if verbose {
@@ -603,8 +612,19 @@ impl Writer {
                             // iterative DFS pattern as the main FreeList traversal. This preserves
                             // left-to-right order deterministically.
                             let mut tsn_stack: Vec<(PageID, usize)> = vec![(leaf_value.root_id, 0)];
+                            if self.verbose { println!("TSN-subtree root_id: {:?}", leaf_value.root_id); }
+                            if self.verbose { println!("root_id in dirty? {}", self.dirty.contains_key(&leaf_value.root_id)); }
                             while let Some((sub_id, sidx)) = tsn_stack.pop() {
-                                let sub_node = { self.get_page_ref(mvcc, sub_id)?.node.clone() };
+                                let sub_node = {
+                                    match self.get_page_ref(mvcc, sub_id) {
+                                        Ok(p) => p.node.clone(),
+                                        Err(e) => {
+                                            return Err(DCBError::DatabaseCorrupted(format!(
+                                                "TSN subtree page {:?} load error: {:?}", sub_id, e
+                                            )));
+                                        }
+                                    }
+                                };
                                 match sub_node {
                                     Node::FreeListTsnInternal(tsn_internal) => {
                                         if sidx < tsn_internal.child_ids.len() {
@@ -1090,7 +1110,7 @@ impl Writer {
         } else {
             // TSN-subtree case: mutate the TSN leaf first
             let tsn_root_id = leaf_value_root_id;
-            let mut tsn_dirty_id = { self.get_dirty_page_id(tsn_root_id)? };
+            let tsn_dirty_id = { self.get_dirty_page_id(tsn_root_id)? };
             if tsn_dirty_id != tsn_root_id {
                 // We'll update the root_id pointer in the main leaf if needed, but we do NOT
                 // free the old TSN-root page unless the TSN entry itself is removed.
@@ -1098,6 +1118,7 @@ impl Writer {
             let mut tsn_root_replaced: Option<PageID> = None;
             let tsn_dirty_page = self.get_mut_dirty(tsn_dirty_id)?;
             let mut tsn_leaf_became_empty = false;
+            let mut tsn_child_leaf_became_empty = false;
             match &mut tsn_dirty_page.node {
                 Node::FreeListTsnLeaf(tsn_leaf_node) => {
                     if let Some(pos) = tsn_leaf_node.page_ids.iter().position(|&id| id == used_page_id) {
@@ -1191,8 +1212,8 @@ impl Writer {
                                 }
                                 if leaf_node.page_ids.is_empty() {
                                     // Child leaf became empty. We will remove it from the TSN-subtree
-                                    // internal node, but the TSN-subtree itself may still be non-empty.
-                                    // Do NOT mark the whole TSN entry as empty here.
+                                    // internal node below; the TSN-subtree itself may still be non-empty.
+                                    tsn_child_leaf_became_empty = true;
                                     removed_page_ids.push(dirty_child_id);
                                 }
                             }
@@ -1210,7 +1231,7 @@ impl Writer {
                     }
 
                     // Now update the internal node as needed
-                    if tsn_leaf_became_empty {
+                    if tsn_child_leaf_became_empty {
                         // Remove the child and corresponding separator key
                         // For B-tree style nodes: keys.len() == child_ids.len() - 1
                         // Removing child at idx => remove key at (idx if idx == 0 else idx-1)
@@ -1282,8 +1303,11 @@ impl Writer {
                     } else if verbose {
                         println!("Leaf page not empty {dirty_page_id:?}: {dirty_leaf_node:?}");
                     }
+                } else if let Some(new_root) = tsn_root_replaced {
+                    // TSN-subtree root changed (internal collapsed to single child)
+                    dirty_leaf_node.values[0].root_id = new_root;
                 } else if tsn_dirty_id != tsn_root_id {
-                    // Update the pointer to the new dirty TSN leaf
+                    // Update the pointer to the new dirty TSN leaf (COW of root leaf)
                     dirty_leaf_node.values[0].root_id = tsn_dirty_id;
                 }
             } else {
@@ -1439,7 +1463,7 @@ mod tests {
     use serial_test::serial;
     use tempfile::tempdir;
 
-    static VERBOSE: bool = false;
+    static VERBOSE: bool = true;
 
     #[test]
     #[serial]
@@ -3109,6 +3133,14 @@ mod tests {
             assert_eq!((pid4, tsn1), writer.reusable_page_ids[2]);
 
             assert_eq!(0, writer.freed_page_ids.len());
+
+            writer.remove_free_page_id(&db, tsn1, pid2).unwrap();
+            writer.find_reusable_page_ids(&db).unwrap();
+            assert_eq!(2, writer.reusable_page_ids.len());
+            assert_eq!((pid3, tsn1), writer.reusable_page_ids[0]);
+            assert_eq!((pid4, tsn1), writer.reusable_page_ids[1]);
+
+            assert_eq!(2, writer.freed_page_ids.len());
 
             writer.remove_free_page_id(&db, tsn1, pid2).unwrap();
             writer.find_reusable_page_ids(&db).unwrap();

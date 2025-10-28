@@ -2504,17 +2504,14 @@ mod tests {
             // Start a writer
             let mut writer = db.writer().unwrap();
             let tsn = writer.tsn;
-            println!("Next page IDs: {:?}", writer.next_page_id);
 
             // With page_size=64, max_node_size = 55. A single key/value with 4 page IDs
             // takes 52 bytes, and adding the 5th (+8) would exceed capacity.
             loop {
                 let pid = writer.alloc_page_id();
-                println!("Inserting page ID: {:?}", pid);
 
                 writer.insert_freed_page_id(&mut db, tsn, pid).unwrap();
                 let mut keys = writer.dirty.keys();
-                println!("Dirty page IDs: {:?}", keys);
                 assert_eq!(keys.len(), 1);
                 let dirty_page_id = *keys.next().unwrap();
                 let dirty_page = writer.get_mut_dirty(dirty_page_id).unwrap();
@@ -2554,6 +2551,16 @@ mod tests {
             let (_temp_dir, db) = construct_db(64);
             let mut writer = db.writer().unwrap();
 
+            let (tsn, free_pid1, free_pid2) = build_free_list_tree_leaf(&mut writer);
+
+            // Recompute
+            writer.find_reusable_page_ids(&db).unwrap();
+            assert_eq!(2, writer.reusable_page_ids.len());
+            assert_eq!((free_pid1, tsn), writer.reusable_page_ids[0]);
+            assert_eq!((free_pid2, tsn), writer.reusable_page_ids[1]);
+        }
+
+        fn build_free_list_tree_leaf(writer: &mut Writer) -> (Tsn, PageID, PageID) {
             // Build a leaf node with one TSN and one PageID
             let tsn = Tsn(123);
             let free_pid1 = writer.alloc_page_id();
@@ -2566,12 +2573,7 @@ mod tests {
             let page = Page::new(root_id, Node::FreeListLeaf(leaf));
             writer.insert_dirty(page).unwrap();
             writer.free_lists_tree_root_id = root_id;
-
-            // Recompute
-            writer.find_reusable_page_ids(&db).unwrap();
-            assert_eq!(2, writer.reusable_page_ids.len());
-            assert_eq!((free_pid1, tsn), writer.reusable_page_ids[0]);
-            assert_eq!((free_pid2, tsn), writer.reusable_page_ids[1]);
+            (tsn, free_pid1, free_pid2)
         }
 
         #[test]
@@ -2580,6 +2582,19 @@ mod tests {
             let (_temp_dir, db) = construct_db(128);
             let mut writer = db.writer().unwrap();
 
+            let (tsn1, tsn2, pid1, pid2, pid3, pid4) = build_free_list_tree_internal_leaf(&mut writer);
+
+            // Recompute
+            writer.find_reusable_page_ids(&db).unwrap();
+            // Expect entries from leaf1 then leaf2
+            assert_eq!(4, writer.reusable_page_ids.len());
+            assert_eq!((pid1, tsn1), writer.reusable_page_ids[0]);
+            assert_eq!((pid2, tsn1), writer.reusable_page_ids[1]);
+            assert_eq!((pid3, tsn2), writer.reusable_page_ids[2]);
+            assert_eq!((pid4, tsn2), writer.reusable_page_ids[3]);
+        }
+
+        fn build_free_list_tree_internal_leaf(writer: &mut Writer) -> (Tsn, Tsn, PageID, PageID, PageID, PageID) {
             // Two leaves each with one (TSN -> [PageID])
             let tsn1 = Tsn(10);
             let tsn2 = Tsn(20);
@@ -2600,15 +2615,7 @@ mod tests {
             let root_id = writer.alloc_page_id();
             writer.insert_dirty(Page::new(root_id, Node::FreeListInternal(internal))).unwrap();
             writer.free_lists_tree_root_id = root_id;
-
-            // Recompute
-            writer.find_reusable_page_ids(&db).unwrap();
-            // Expect entries from leaf1 then leaf2
-            assert_eq!(4, writer.reusable_page_ids.len());
-            assert_eq!((pid1, tsn1), writer.reusable_page_ids[0]);
-            assert_eq!((pid2, tsn1), writer.reusable_page_ids[1]);
-            assert_eq!((pid3, tsn2), writer.reusable_page_ids[2]);
-            assert_eq!((pid4, tsn2), writer.reusable_page_ids[3]);
+            (tsn1, tsn2, pid1, pid2, pid3, pid4)
         }
 
         #[test]
@@ -2617,6 +2624,23 @@ mod tests {
             let (_temp_dir, db) = construct_db(128);
             let mut writer = db.writer().unwrap();
 
+            let (tsn1, tsn2, tsn3, tsn4, pid1, pid2, pid3, pid4, pid5, pid6, pid7, pid8) = build_free_list_tree_internal_internal_leaf(&mut writer);
+
+            // Recompute
+            writer.find_reusable_page_ids(&db).unwrap();
+            // Expect entries from leaf1 then leaf2
+            assert_eq!(8, writer.reusable_page_ids.len());
+            assert_eq!((pid1, tsn1), writer.reusable_page_ids[0]);
+            assert_eq!((pid2, tsn1), writer.reusable_page_ids[1]);
+            assert_eq!((pid3, tsn2), writer.reusable_page_ids[2]);
+            assert_eq!((pid4, tsn2), writer.reusable_page_ids[3]);
+            assert_eq!((pid5, tsn3), writer.reusable_page_ids[4]);
+            assert_eq!((pid6, tsn3), writer.reusable_page_ids[5]);
+            assert_eq!((pid7, tsn4), writer.reusable_page_ids[6]);
+            assert_eq!((pid8, tsn4), writer.reusable_page_ids[7]);
+        }
+
+        fn build_free_list_tree_internal_internal_leaf(writer: &mut Writer) -> (Tsn, Tsn, Tsn, Tsn, PageID, PageID, PageID, PageID, PageID, PageID, PageID, PageID) {
             // Two leaves each with one (TSN -> [PageID])
             let tsn1 = Tsn(10);
             let tsn2 = Tsn(20);
@@ -2655,19 +2679,7 @@ mod tests {
             writer.insert_dirty(Page::new(internal2_id, Node::FreeListInternal(internal2))).unwrap();
             writer.insert_dirty(Page::new(internal3_id, Node::FreeListInternal(internal3))).unwrap();
             writer.free_lists_tree_root_id = internal3_id;
-
-            // Recompute
-            writer.find_reusable_page_ids(&db).unwrap();
-            // Expect entries from leaf1 then leaf2
-            assert_eq!(8, writer.reusable_page_ids.len());
-            assert_eq!((pid1, tsn1), writer.reusable_page_ids[0]);
-            assert_eq!((pid2, tsn1), writer.reusable_page_ids[1]);
-            assert_eq!((pid3, tsn2), writer.reusable_page_ids[2]);
-            assert_eq!((pid4, tsn2), writer.reusable_page_ids[3]);
-            assert_eq!((pid5, tsn3), writer.reusable_page_ids[4]);
-            assert_eq!((pid6, tsn3), writer.reusable_page_ids[5]);
-            assert_eq!((pid7, tsn4), writer.reusable_page_ids[6]);
-            assert_eq!((pid8, tsn4), writer.reusable_page_ids[7]);
+            (tsn1, tsn2, tsn3, tsn4, pid1, pid2, pid3, pid4, pid5, pid6, pid7, pid8)
         }
 
         #[test]
@@ -2676,6 +2688,17 @@ mod tests {
             let (_temp_dir, db) = construct_db(64);
             let mut writer = db.writer().unwrap();
 
+            let (pid1, pid2, tsn) = build_free_list_tree_leaf_tsn_subtree_leaf(&mut writer);
+
+            // Recompute
+            writer.find_reusable_page_ids(&db).unwrap();
+            // Expect entries from leaf1 then leaf2
+            assert_eq!(2, writer.reusable_page_ids.len());
+            assert_eq!((pid1, tsn), writer.reusable_page_ids[0]);
+            assert_eq!((pid2, tsn), writer.reusable_page_ids[1]);
+        }
+
+        fn build_free_list_tree_leaf_tsn_subtree_leaf(writer: &mut Writer) -> (PageID, PageID, Tsn) {
             // Create a TSN-subtree leaf and make a leaf value point to it
             let tsn_sub_leaf_id = writer.alloc_page_id();
             let pid1 = writer.alloc_page_id();
@@ -2691,13 +2714,7 @@ mod tests {
             let root_id = writer.alloc_page_id();
             writer.insert_dirty(Page::new(root_id, Node::FreeListLeaf(leaf))).unwrap();
             writer.free_lists_tree_root_id = root_id;
-
-            // Recompute
-            writer.find_reusable_page_ids(&db).unwrap();
-            // Expect entries from leaf1 then leaf2
-            assert_eq!(2, writer.reusable_page_ids.len());
-            assert_eq!((pid1, tsn), writer.reusable_page_ids[0]);
-            assert_eq!((pid2, tsn), writer.reusable_page_ids[1]);
+            (pid1, pid2, tsn)
         }
 
         #[test]
@@ -2706,6 +2723,19 @@ mod tests {
             let (_temp_dir, db) = construct_db(64);
             let mut writer = db.writer().unwrap();
 
+            let (pid1, pid2, pid3, pid4, tsn) = build_free_list_tree_leaf_tsn_subtree_internal_leaf(&mut writer);
+
+            // Recompute
+            writer.find_reusable_page_ids(&db).unwrap();
+            // Expect entries from leaf1 then leaf2
+            assert_eq!(4, writer.reusable_page_ids.len());
+            assert_eq!((pid1, tsn), writer.reusable_page_ids[0]);
+            assert_eq!((pid2, tsn), writer.reusable_page_ids[1]);
+            assert_eq!((pid3, tsn), writer.reusable_page_ids[2]);
+            assert_eq!((pid4, tsn), writer.reusable_page_ids[3]);
+        }
+
+        fn build_free_list_tree_leaf_tsn_subtree_internal_leaf(writer: &mut Writer) -> (PageID, PageID, PageID, PageID, Tsn) {
             // Create a TSN-subtree leaf with a PageID
             let tsn_sub_leaf_id1 = writer.alloc_page_id();
             let pid1 = writer.alloc_page_id();
@@ -2734,15 +2764,7 @@ mod tests {
             let root_id = writer.alloc_page_id();
             writer.insert_dirty(Page::new(root_id, Node::FreeListLeaf(leaf))).unwrap();
             writer.free_lists_tree_root_id = root_id;
-
-            // Recompute
-            writer.find_reusable_page_ids(&db).unwrap();
-            // Expect entries from leaf1 then leaf2
-            assert_eq!(4, writer.reusable_page_ids.len());
-            assert_eq!((pid1, tsn), writer.reusable_page_ids[0]);
-            assert_eq!((pid2, tsn), writer.reusable_page_ids[1]);
-            assert_eq!((pid3, tsn), writer.reusable_page_ids[2]);
-            assert_eq!((pid4, tsn), writer.reusable_page_ids[3]);
+            (pid1, pid2, pid3, pid4, tsn)
         }
 
         #[test]
@@ -2751,6 +2773,23 @@ mod tests {
             let (_temp_dir, db) = construct_db(64);
             let mut writer = db.writer().unwrap();
 
+            let (pid1, pid2, pid3, pid4, pid5, pid6, pid7, pid8, tsn) = build_free_list_tree_leaf_tsn_subtree_internal_internal_leaf(&mut writer);
+
+            // Recompute
+            writer.find_reusable_page_ids(&db).unwrap();
+            // Expect entries from leaf1 then leaf2
+            assert_eq!(8, writer.reusable_page_ids.len());
+            assert_eq!((pid1, tsn), writer.reusable_page_ids[0]);
+            assert_eq!((pid2, tsn), writer.reusable_page_ids[1]);
+            assert_eq!((pid3, tsn), writer.reusable_page_ids[2]);
+            assert_eq!((pid4, tsn), writer.reusable_page_ids[3]);
+            assert_eq!((pid5, tsn), writer.reusable_page_ids[4]);
+            assert_eq!((pid6, tsn), writer.reusable_page_ids[5]);
+            assert_eq!((pid7, tsn), writer.reusable_page_ids[6]);
+            assert_eq!((pid8 , tsn), writer.reusable_page_ids[7]);
+        }
+
+        fn build_free_list_tree_leaf_tsn_subtree_internal_internal_leaf(writer: &mut Writer) -> (PageID, PageID, PageID, PageID, PageID, PageID, PageID, PageID, Tsn) {
             // Create a TSN-subtree leaf with a PageID
             let tsn_sub_leaf_id1 = writer.alloc_page_id();
             let pid1 = writer.alloc_page_id();
@@ -2803,19 +2842,7 @@ mod tests {
             let root_id = writer.alloc_page_id();
             writer.insert_dirty(Page::new(root_id, Node::FreeListLeaf(leaf))).unwrap();
             writer.free_lists_tree_root_id = root_id;
-
-            // Recompute
-            writer.find_reusable_page_ids(&db).unwrap();
-            // Expect entries from leaf1 then leaf2
-            assert_eq!(8, writer.reusable_page_ids.len());
-            assert_eq!((pid1, tsn), writer.reusable_page_ids[0]);
-            assert_eq!((pid2, tsn), writer.reusable_page_ids[1]);
-            assert_eq!((pid3, tsn), writer.reusable_page_ids[2]);
-            assert_eq!((pid4, tsn), writer.reusable_page_ids[3]);
-            assert_eq!((pid5, tsn), writer.reusable_page_ids[4]);
-            assert_eq!((pid6, tsn), writer.reusable_page_ids[5]);
-            assert_eq!((pid7, tsn), writer.reusable_page_ids[6]);
-            assert_eq!((pid8 , tsn), writer.reusable_page_ids[7]);
+            (pid1, pid2, pid3, pid4, pid5, pid6, pid7, pid8, tsn)
         }
     }
 }

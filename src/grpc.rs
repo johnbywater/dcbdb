@@ -356,7 +356,7 @@ impl CommandHandler {
                             // Drain the channel for more pending append requests without awaiting.
                             // Important: do not drop a popped request when hitting the batch limit.
                             // We stop draining BEFORE attempting to recv if we've reached the limit.
-                            const MAX_BATCH_EVENTS: usize = 300;
+                            const MAX_BATCH_EVENTS: usize = 2000;
                             loop {
                                 if total_events >= MAX_BATCH_EVENTS {
                                     break;
@@ -377,7 +377,7 @@ impl CommandHandler {
                                     Err(mpsc::error::TryRecvError::Disconnected) => break,
                                 }
                             }
-
+                            // println!("Total events: {total_events}");
                             // Execute a single batched append
                             let batch_result = db.append_batch(items);
                             match batch_result {

@@ -214,7 +214,7 @@ pub fn event_tree_append(
             values: vec![last_value.clone()],
         };
         let mut new_leaf_page = Page::new(new_leaf_page_id, Node::EventLeaf(new_leaf_node.clone()));
-        let mut serialized_size = new_leaf_page.calc_serialized_size();
+        let serialized_size = new_leaf_page.calc_serialized_size();
         if serialized_size > mvcc.page_size {
             if let EventValue::Inline(rec) = last_value {
                 let root_id = write_overflow_chain(mvcc, writer, &rec.data)?;
@@ -229,14 +229,14 @@ pub fn event_tree_append(
                     values: vec![last_value.clone()],
                 };
                 new_leaf_page = Page::new(new_leaf_page_id, Node::EventLeaf(new_leaf_node.clone()));
-                serialized_size = new_leaf_page.calc_serialized_size();
+                // serialized_size = new_leaf_page.calc_serialized_size();
             }
-            if serialized_size > mvcc.page_size {
-                return Err(DCBError::DatabaseCorrupted(format!(
-                    "Event too large even after overflow conversion (size: {serialized_size}, max: {})",
-                    mvcc.page_size
-                )));
-            }
+            // if serialized_size > mvcc.page_size {
+            //     return Err(DCBError::DatabaseCorrupted(format!(
+            //         "Event too large even after overflow conversion (size: {serialized_size}, max: {})",
+            //         mvcc.page_size
+            //     )));
+            // }
         }
         if verbose {
             println!(

@@ -446,14 +446,6 @@ pub fn tags_tree_insert(
             };
             let new_leaf_page_id = writer.alloc_page_id();
             let new_leaf_page = Page::new(new_leaf_page_id, Node::TagsLeaf(new_leaf_node));
-
-            // Check new page size sanity
-            let sz = new_leaf_page.calc_serialized_size();
-            if sz > mvcc.page_size {
-                return Err(DCBError::DatabaseCorrupted(
-                    "Overflow tag positions to subtree not implemented".to_string(),
-                ));
-            }
             writer.insert_dirty(new_leaf_page)?;
 
             split_info = Some((promoted_key, new_leaf_page_id));

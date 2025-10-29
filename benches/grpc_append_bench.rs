@@ -5,6 +5,7 @@ use umadb::grpc::{AsyncUmaDBClient, start_server};
 use std::net::TcpListener;
 use std::thread;
 use std::sync::Arc;
+use std::time::Duration;
 use tempfile::tempdir;
 use tokio::runtime::Builder as RtBuilder;
 use tokio::sync::oneshot;
@@ -42,11 +43,12 @@ fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
 pub fn grpc_append_benchmark(c: &mut Criterion) {
     // for &threads in &[1usize, 2, 4] {
     let mut group = c.benchmark_group("grpc_append");
-    group.sample_size(20);
+    group.sample_size(40);
+    group.measurement_time(Duration::from_secs(10));
 
     for &threads in &[1usize, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024] {
         // Initialize DB and server with 10_000 events (as requested)
-        let initial_events = 1_000_000usize;
+        let initial_events = 10_000usize;
         let (_tmp_dir, db_path) = init_db_with_events(initial_events);
 
         // Find a free localhost port

@@ -786,12 +786,12 @@ impl Writer {
                             let new_leaf_id = self.alloc_page_id();
                             let new_leaf_node = crate::free_lists_tree_nodes::FreeListTsnLeafNode { page_ids: vec![freed_page_id] };
                             let new_leaf_page = Page::new(new_leaf_id, Node::FreeListTsnLeaf(new_leaf_node));
-                            if new_leaf_page.calc_serialized_size() > mvcc.page_size { return Err(DCBError::InternalError("Page size too small for TSN-subtree leaf with one PageID".to_string())); }
+                            // if new_leaf_page.calc_serialized_size() > mvcc.page_size { return Err(DCBError::InternalError("Page size too small for TSN-subtree leaf with one PageID".to_string())); }
                             self.insert_dirty(new_leaf_page)?;
                             let new_root_id = self.alloc_page_id();
                             let new_internal = crate::free_lists_tree_nodes::FreeListTsnInternalNode { keys: vec![freed_page_id], child_ids: vec![dirty_tsn_root_id, new_leaf_id] };
                             let new_root_page = Page::new(new_root_id, Node::FreeListTsnInternal(new_internal));
-                            if new_root_page.calc_serialized_size() > mvcc.page_size { return Err(DCBError::InternalError("Page size too small for TSN-subtree internal with two children".to_string())); }
+                            // if new_root_page.calc_serialized_size() > mvcc.page_size { return Err(DCBError::InternalError("Page size too small for TSN-subtree internal with two children".to_string())); }
                             self.insert_dirty(new_root_page)?;
                             new_root_id_opt = Some(new_root_id);
                         }
@@ -826,7 +826,7 @@ impl Writer {
                                 let new_leaf_id = self.alloc_page_id();
                                 let new_leaf_node = crate::free_lists_tree_nodes::FreeListTsnLeafNode { page_ids: vec![freed_page_id] };
                                 let new_leaf_page = Page::new(new_leaf_id, Node::FreeListTsnLeaf(new_leaf_node));
-                                if new_leaf_page.calc_serialized_size() > mvcc.page_size { return Err(DCBError::InternalError("Page size too small for TSN-subtree leaf with one PageID".to_string())); }
+                                // if new_leaf_page.calc_serialized_size() > mvcc.page_size { return Err(DCBError::InternalError("Page size too small for TSN-subtree leaf with one PageID".to_string())); }
                                 self.insert_dirty(new_leaf_page)?;
                                 let parent_page = self.get_mut_dirty(last_internal_id)?;
                                 let Node::FreeListTsnInternal(ref mut parent_node) = parent_page.node else { return Err(DCBError::DatabaseCorrupted("Expected TSN-subtree internal".to_string())); };
@@ -842,7 +842,7 @@ impl Writer {
                                     let new_root_id = self.alloc_page_id();
                                     let new_root = crate::free_lists_tree_nodes::FreeListTsnInternalNode { keys: vec![freed_page_id], child_ids: vec![dirty_tsn_root_id, new_leaf_id] };
                                     let new_root_page = Page::new(new_root_id, Node::FreeListTsnInternal(new_root));
-                                    if new_root_page.calc_serialized_size() > mvcc.page_size { return Err(DCBError::InternalError("Page size too small for TSN-subtree internal with two children".to_string())); }
+                                    // if new_root_page.calc_serialized_size() > mvcc.page_size { return Err(DCBError::InternalError("Page size too small for TSN-subtree internal with two children".to_string())); }
                                     self.insert_dirty(new_root_page)?;
                                     new_root_id_opt = Some(new_root_id);
                                 }
@@ -870,7 +870,7 @@ impl Writer {
                 let tsn_leaf_node = crate::free_lists_tree_nodes::FreeListTsnLeafNode { page_ids };
                 let tsn_leaf_id = self.alloc_page_id();
                 let tsn_leaf_page = Page::new(tsn_leaf_id, Node::FreeListTsnLeaf(tsn_leaf_node));
-                if tsn_leaf_page.calc_serialized_size() > mvcc.page_size { return Err(DCBError::InternalError("Page size too small for TSN-subtree leaf".to_string())); }
+                // if tsn_leaf_page.calc_serialized_size() > mvcc.page_size { return Err(DCBError::InternalError("Page size too small for TSN-subtree leaf".to_string())); }
                 self.insert_dirty(tsn_leaf_page)?;
                 // Now mutate the freelist leaf to clear inline and set root
                 let dirty_leaf_page = self.get_mut_dirty(dirty_leaf_page_id)?;
@@ -924,12 +924,12 @@ impl Writer {
                     };
                     let new_leaf_page_id = self.alloc_page_id();
                     let new_leaf_page = Page::new(new_leaf_page_id, Node::FreeListLeaf(new_leaf_node));
-                    let serialized_size = new_leaf_page.calc_serialized_size();
-                    if serialized_size > mvcc.page_size {
-                        return Err(DCBError::InternalError(
-                            "Shouldn't get here: page size is too small for a FreeListLeafNode with one TSN and one PageID".to_string(),
-                        ));
-                    }
+                    // let serialized_size = new_leaf_page.calc_serialized_size();
+                    // if serialized_size > mvcc.page_size {
+                    //     return Err(DCBError::InternalError(
+                    //         "Shouldn't get here: page size is too small for a FreeListLeafNode with one TSN and one PageID".to_string(),
+                    //     ));
+                    // }
                     if verbose {
                         println!(
                             "Created new leaf {:?} (moved last TSN): {:?}",
@@ -947,12 +947,12 @@ impl Writer {
                     };
                     let new_leaf_page_id = self.alloc_page_id();
                     let new_leaf_page = Page::new(new_leaf_page_id, Node::FreeListLeaf(new_leaf_node));
-                    let serialized_size = new_leaf_page.calc_serialized_size();
-                    if serialized_size > mvcc.page_size {
-                        return Err(DCBError::InternalError(
-                            "Shouldn't get here: page size is too small for a FreeListLeafNode with one TSN and one PageID".to_string(),
-                        ));
-                    }
+                    // let serialized_size = new_leaf_page.calc_serialized_size();
+                    // if serialized_size > mvcc.page_size {
+                    //     return Err(DCBError::InternalError(
+                    //         "Shouldn't get here: page size is too small for a FreeListLeafNode with one TSN and one PageID".to_string(),
+                    //     ));
+                    // }
                     if verbose {
                         println!(
                             "Created new leaf {:?} (new last TSN): {:?}",

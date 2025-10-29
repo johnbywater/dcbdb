@@ -29,6 +29,10 @@ use umadb::{
     uma_db_service_server::{UmaDbService, UmaDbServiceServer},
 };
 
+const APPEND_BATCH_MAX_EVENTS: usize = 2000;
+const READ_RESPONSE_BATCH_SIZE_DEFAULT: u32 = 100;
+const READ_RESPONSE_BATCH_SIZE_MAX: u32 = 5000;
+
 // Function to start the gRPC server with a shutdown signal
 pub async fn start_server<P: AsRef<Path> + Send + 'static>(
     path: P,
@@ -119,17 +123,16 @@ impl UmaDbService for UmaDBServer {
             } else { None };
             // Server-side batch cap to ensure streaming in multiple messages
             // Keep this modest so tests expecting multiple batches (e.g., 300 items) will split.
-            const GRPC_BATCH_SIZE_DEFAULT: u32 = 100;
-            const GRPC_BATCH_SIZE_MAX: u32 = 5000;
             loop {
                 // If this is a subscription, exit if client has gone away or server is shutting down
                 if subscribe {
                     if tx.is_closed() { break; }
                     if *shutdown_rx.borrow() { break; }
                 }
-                // Determine per-iteration limit: take requested batch size (if any), cap to GRPC_BATCH_SIZE, ensure >= 1, then don't exceed remaining (if any)
-                let requested_bs = req.batch_size.unwrap_or(GRPC_BATCH_SIZE_DEFAULT);
-                let capped_bs = requested_bs.min(GRPC_BATCH_SIZE_MAX);
+                // Determine per-iteration limit: take requested batch size (if any), cap to
+                // READ_RESPONSE_SIZE_MAX, ensure >= 1, then don't exceed remaining (if any)
+                let requested_bs = req.batch_size.unwrap_or(READ_RESPONSE_BATCH_SIZE_DEFAULT);
+                let capped_bs = requested_bs.min(READ_RESPONSE_BATCH_SIZE_MAX);
                 let per_iter_limit = Some(remaining.unwrap_or(usize::MAX).min(capped_bs as usize));
                 // println!("Per iter limit: {per_iter_limit:?}");
                 // If subscription and remaining exhausted (limit reached), terminate
@@ -356,9 +359,8 @@ impl CommandHandler {
                             // Drain the channel for more pending append requests without awaiting.
                             // Important: do not drop a popped request when hitting the batch limit.
                             // We stop draining BEFORE attempting to recv if we've reached the limit.
-                            const MAX_BATCH_EVENTS: usize = 2000;
                             loop {
-                                if total_events >= MAX_BATCH_EVENTS {
+                                if total_events >= APPEND_BATCH_MAX_EVENTS {
                                     break;
                                 }
                                 match request_rx.try_recv() {

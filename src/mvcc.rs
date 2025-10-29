@@ -754,11 +754,136 @@ impl Writer {
                 None
             }
         };
-        // Get a mutable leaf node....
-        let dirty_leaf_page = self.get_mut_dirty(dirty_leaf_page_id)?;
-
         // Proactive insert logic with capacity checks and optional split
         let mut split_info: Option<(Tsn, PageID)> = None;
+
+        // First handle TSN-subtree plans without holding a mutable borrow to the freelist leaf
+        match plan {
+            FreePageIDInsertStrategy::PushPageIdOntoExistingTsnSubtree => {
+                // Read leaf immutably to find last_idx and current root_id
+                let leaf_snapshot = { self.get_page_ref(mvcc, dirty_leaf_page_id)? };
+                let Node::FreeListLeaf(leaf_ro) = &leaf_snapshot.node else { return Err(DCBError::DatabaseCorrupted("Expected FreeListLeaf node".to_string())); };
+                let last_idx = leaf_ro.keys.len() - 1;
+                let tsn_root_id = leaf_ro.values[last_idx].root_id;
+                if tsn_root_id == PageID(0) {
+                    return Err(DCBError::DatabaseCorrupted("Expected TSN-subtree root_id to be set".to_string()));
+                }
+                // COW the TSN-subtree root
+                let dirty_tsn_root_id = { self.get_dirty_page_id(tsn_root_id)? };
+                let tsn_root_page = self.get_mut_dirty(dirty_tsn_root_id)?;
+                let mut new_root_id_opt: Option<PageID> = None;
+                match &mut tsn_root_page.node {
+                    Node::FreeListTsnLeaf(tsn_leaf) => {
+                        // Try append
+                        let mut tmp = tsn_leaf.clone();
+                        tmp.page_ids.push(freed_page_id);
+                        let candidate = Page::new(dirty_tsn_root_id, Node::FreeListTsnLeaf(tmp));
+                        if candidate.calc_serialized_size() <= mvcc.page_size {
+                            tsn_leaf.page_ids.push(freed_page_id);
+                            if verbose { println!("Appended {freed_page_id:?} to TSN-subtree leaf {:?}", dirty_tsn_root_id); }
+                        } else {
+                            // Create new leaf and a new internal root above
+                            let new_leaf_id = self.alloc_page_id();
+                            let new_leaf_node = crate::free_lists_tree_nodes::FreeListTsnLeafNode { page_ids: vec![freed_page_id] };
+                            let new_leaf_page = Page::new(new_leaf_id, Node::FreeListTsnLeaf(new_leaf_node));
+                            if new_leaf_page.calc_serialized_size() > mvcc.page_size { return Err(DCBError::InternalError("Page size too small for TSN-subtree leaf with one PageID".to_string())); }
+                            self.insert_dirty(new_leaf_page)?;
+                            let new_root_id = self.alloc_page_id();
+                            let new_internal = crate::free_lists_tree_nodes::FreeListTsnInternalNode { keys: vec![freed_page_id], child_ids: vec![dirty_tsn_root_id, new_leaf_id] };
+                            let new_root_page = Page::new(new_root_id, Node::FreeListTsnInternal(new_internal));
+                            if new_root_page.calc_serialized_size() > mvcc.page_size { return Err(DCBError::InternalError("Page size too small for TSN-subtree internal with two children".to_string())); }
+                            self.insert_dirty(new_root_page)?;
+                            new_root_id_opt = Some(new_root_id);
+                        }
+                    }
+                    Node::FreeListTsnInternal(internal) => {
+                        // Descend rightmost to a leaf
+                        let mut last_internal_id = dirty_tsn_root_id;
+                        let mut current_id = *internal.child_ids.last().expect("TSN-subtree has child");
+                        loop {
+                            let node_owned = { self.get_page_ref(mvcc, current_id)?.node.clone() };
+                            match node_owned {
+                                Node::FreeListTsnLeaf(_) => break,
+                                Node::FreeListTsnInternal(in2) => {
+                                    last_internal_id = current_id;
+                                    current_id = *in2.child_ids.last().unwrap();
+                                }
+                                other => return Err(DCBError::DatabaseCorrupted(format!("Invalid node in TSN-subtree: {}", other.type_name()))),
+                            }
+                        }
+                        // Make the leaf dirty and try to append
+                        let dirty_leaf_id = { self.get_dirty_page_id(current_id)? };
+                        let leaf_page = self.get_mut_dirty(dirty_leaf_id)?;
+                        if let Node::FreeListTsnLeaf(leaf) = &mut leaf_page.node {
+                            let mut tmp = leaf.clone();
+                            tmp.page_ids.push(freed_page_id);
+                            let candidate = Page::new(dirty_leaf_id, Node::FreeListTsnLeaf(tmp));
+                            if candidate.calc_serialized_size() <= mvcc.page_size {
+                                leaf.page_ids.push(freed_page_id);
+                                if verbose { println!("Appended {freed_page_id:?} to TSN-subtree leaf {:?}", dirty_leaf_id); }
+                            } else {
+                                // Create new rightmost leaf and attach to last internal
+                                let new_leaf_id = self.alloc_page_id();
+                                let new_leaf_node = crate::free_lists_tree_nodes::FreeListTsnLeafNode { page_ids: vec![freed_page_id] };
+                                let new_leaf_page = Page::new(new_leaf_id, Node::FreeListTsnLeaf(new_leaf_node));
+                                if new_leaf_page.calc_serialized_size() > mvcc.page_size { return Err(DCBError::InternalError("Page size too small for TSN-subtree leaf with one PageID".to_string())); }
+                                self.insert_dirty(new_leaf_page)?;
+                                let parent_page = self.get_mut_dirty(last_internal_id)?;
+                                let Node::FreeListTsnInternal(ref mut parent_node) = parent_page.node else { return Err(DCBError::DatabaseCorrupted("Expected TSN-subtree internal".to_string())); };
+                                let mut parent_clone = parent_node.clone();
+                                parent_clone.keys.push(freed_page_id);
+                                parent_clone.child_ids.push(new_leaf_id);
+                                let candidate = Page::new(last_internal_id, Node::FreeListTsnInternal(parent_clone));
+                                if candidate.calc_serialized_size() <= mvcc.page_size {
+                                    parent_node.keys.push(freed_page_id);
+                                    parent_node.child_ids.push(new_leaf_id);
+                                } else {
+                                    // Create a new internal root above
+                                    let new_root_id = self.alloc_page_id();
+                                    let new_root = crate::free_lists_tree_nodes::FreeListTsnInternalNode { keys: vec![freed_page_id], child_ids: vec![dirty_tsn_root_id, new_leaf_id] };
+                                    let new_root_page = Page::new(new_root_id, Node::FreeListTsnInternal(new_root));
+                                    if new_root_page.calc_serialized_size() > mvcc.page_size { return Err(DCBError::InternalError("Page size too small for TSN-subtree internal with two children".to_string())); }
+                                    self.insert_dirty(new_root_page)?;
+                                    new_root_id_opt = Some(new_root_id);
+                                }
+                            }
+                        } else {
+                            return Err(DCBError::DatabaseCorrupted("Expected TSN-subtree leaf".to_string()));
+                        }
+                    }
+                    other => return Err(DCBError::DatabaseCorrupted(format!("Expected TSN-subtree node, got {}", other.type_name()))),
+                }
+                if let Some(new_root_id) = new_root_id_opt {
+                    // Now mutate the freelist leaf to update root_id
+                    let dirty_leaf_page = self.get_mut_dirty(dirty_leaf_page_id)?;
+                    let Node::FreeListLeaf(dirty_leaf_node2) = &mut dirty_leaf_page.node else { return Err(DCBError::DatabaseCorrupted("Expected FreeListLeaf node".to_string())); };
+                    dirty_leaf_node2.values[last_idx].root_id = new_root_id;
+                }
+            }
+            FreePageIDInsertStrategy::MoveTsnToNewTsnSubtree => {
+                // Read leaf immutably to capture inline page_ids
+                let leaf_snapshot = { self.get_page_ref(mvcc, dirty_leaf_page_id)? };
+                let Node::FreeListLeaf(leaf_ro) = &leaf_snapshot.node else { return Err(DCBError::DatabaseCorrupted("Expected FreeListLeaf node".to_string())); };
+                let last_idx = leaf_ro.keys.len() - 1;
+                let mut page_ids = leaf_ro.values[last_idx].page_ids.clone();
+                page_ids.push(freed_page_id);
+                let tsn_leaf_node = crate::free_lists_tree_nodes::FreeListTsnLeafNode { page_ids };
+                let tsn_leaf_id = self.alloc_page_id();
+                let tsn_leaf_page = Page::new(tsn_leaf_id, Node::FreeListTsnLeaf(tsn_leaf_node));
+                if tsn_leaf_page.calc_serialized_size() > mvcc.page_size { return Err(DCBError::InternalError("Page size too small for TSN-subtree leaf".to_string())); }
+                self.insert_dirty(tsn_leaf_page)?;
+                // Now mutate the freelist leaf to clear inline and set root
+                let dirty_leaf_page = self.get_mut_dirty(dirty_leaf_page_id)?;
+                let Node::FreeListLeaf(dirty_leaf_node2) = &mut dirty_leaf_page.node else { return Err(DCBError::DatabaseCorrupted("Expected FreeListLeaf node".to_string())); };
+                dirty_leaf_node2.values[last_idx].page_ids.clear();
+                dirty_leaf_node2.values[last_idx].root_id = tsn_leaf_id;
+                if verbose { println!("Moved inline page IDs to TSN-subtree {:?}", tsn_leaf_id); }
+            }
+            _ => { /* handled below with a mutable freelist leaf borrow */ }
+        }
+
+        // Now handle the remaining plans that only mutate the freelist leaf
+        let dirty_leaf_page = self.get_mut_dirty(dirty_leaf_page_id)?;
         if let Node::FreeListLeaf(dirty_leaf_node) = &mut dirty_leaf_page.node {
             match plan {
                 FreePageIDInsertStrategy::PushTsnOntoFreeListLeaf => {
@@ -779,18 +904,8 @@ impl Writer {
                         );
                     }
                 }
-                FreePageIDInsertStrategy::PushPageIdOntoExistingTsnSubtree => {
-                    return Err(DCBError::DatabaseCorrupted(
-                        "Free list subtree not implemented".to_string(),
-                    ));
-
-                }
-                FreePageIDInsertStrategy::MoveTsnToNewTsnSubtree => {
-                    return Err(DCBError::InternalError(
-                        "Overflow freed page IDs for TSN to subtree not implemented".to_string(),
-                    ));
-
-                }
+                FreePageIDInsertStrategy::PushPageIdOntoExistingTsnSubtree => { /* handled earlier */ }
+                FreePageIDInsertStrategy::MoveTsnToNewTsnSubtree => { /* handled earlier */ }
                 FreePageIDInsertStrategy::SplitFreeListLeaf => {
                     let (popped_key, mut popped_value) = dirty_leaf_node.pop_last_key_and_value()?;
                     debug_assert_eq!(popped_key, tsn);
@@ -3040,7 +3155,7 @@ mod tests {
 
         #[test]
         #[serial]
-        fn test_insert_freed_page_ids_overflow_single_key_returns_internal_error() {
+        fn test_insert_freed_page_ids_overflow_single_key_moves_to_tsn_subtree() {
             // Use tiny pages to force the inline list to overflow quickly
             let page_size = 64;
             let max_node_size = page_size - PAGE_HEADER_SIZE;
@@ -3056,9 +3171,11 @@ mod tests {
                 let pid = writer.alloc_page_id();
 
                 writer.insert_freed_page_id(&mut db, tsn, pid).unwrap();
-                let mut keys = writer.dirty.keys();
-                assert_eq!(keys.len(), 1);
-                let dirty_page_id = *keys.next().unwrap();
+                let dirty_page_id = {
+                    let mut keys = writer.dirty.keys();
+                    assert_eq!(keys.len(), 1);
+                    *keys.next().unwrap()
+                };
                 let dirty_page = writer.get_mut_dirty(dirty_page_id).unwrap();
                 if let Node::FreeListLeaf(leaf_node) = &dirty_page.node {
                     if !leaf_node.would_fit_new_page_id(max_node_size) {
@@ -3070,14 +3187,94 @@ mod tests {
 
             }
 
-            // The next insert for the same TSN should hit the InternalError at line ~711
+            // The next insert for the same TSN should succeed by creating a TSN-subtree
             let pid5 = writer.alloc_page_id();
-            let err = writer.insert_freed_page_id(&mut db, tsn, pid5).unwrap_err();
-            match err {
-                DCBError::InternalError(msg) => {
-                    assert_eq!(msg, "Overflow freed page IDs for TSN to subtree not implemented");
+            writer.insert_freed_page_id(&mut db, tsn, pid5).unwrap();
+            // Insert two more page IDs for the same TSN into the TSN-subtree
+            let pid6 = writer.alloc_page_id();
+            writer.insert_freed_page_id(&mut db, tsn, pid6).unwrap();
+            let pid7 = writer.alloc_page_id();
+            writer.insert_freed_page_id(&mut db, tsn, pid7).unwrap();
+
+            // Verify that the leaf now points to a TSN-subtree for this TSN, and that the TSN-subtree root is an internal node (leaf split)
+            let dirty_ids: Vec<PageID> = {
+                writer.dirty.keys().cloned().collect()
+            };
+            let mut tsn_root_id = PageID(0);
+            for dirty_page_id in dirty_ids {
+                let dirty_page = writer.get_mut_dirty(dirty_page_id).unwrap();
+                if let Node::FreeListLeaf(leaf_node) = &dirty_page.node {
+                    assert_eq!(1, leaf_node.keys.len());
+                    assert_eq!(tsn, leaf_node.keys[0]);
+                    let val = &leaf_node.values[0];
+                    assert_eq!(0, val.page_ids.len());
+                    assert_ne!(PageID(0), val.root_id);
+                    tsn_root_id = val.root_id;
+                    break
                 }
-                other => panic!("Expected InternalError, got: {:?}", other),
+            }
+            assert_ne!(PageID(0), tsn_root_id);
+            // The TSN-subtree leaf should have split, so the root must now be internal
+            // With page_size=64, max_node_size = 55. Seven page IDs exceeds capacity (2 + 8 * 7).
+            let tsn_root_page = writer.get_page_ref(&db, tsn_root_id).unwrap();
+            match &tsn_root_page.node {
+                Node::FreeListTsnInternal(internal) => {
+                    assert_eq!(2, internal.child_ids.len());
+                    assert_eq!(1, internal.keys.len());
+                }
+                other => panic!("Expected TSN-subtree internal node, got {:?}", other.type_name()),
+            }
+
+            // Continue inserting page IDs for the same TSN until the TSN-subtree internal node splits
+            let mut extra_inserts = 0usize;
+            let mut guard = 0usize;
+            loop {
+                guard += 1;
+                assert!(guard < 200, "guard hit while waiting for TSN-subtree internal split");
+                let pid = writer.alloc_page_id();
+                writer.insert_freed_page_id(&mut db, tsn, pid).unwrap();
+                extra_inserts += 1;
+
+                // Refresh tsn_root_id from the FreeList leaf since the root may change when it splits
+                let dirty_ids: Vec<PageID> = writer.dirty.keys().cloned().collect();
+                tsn_root_id = PageID(0);
+                for dirty_page_id in dirty_ids {
+                    let dirty_page = writer.get_mut_dirty(dirty_page_id).unwrap();
+                    if let Node::FreeListLeaf(leaf_node) = &dirty_page.node {
+                        assert_eq!(1, leaf_node.keys.len());
+                        assert_eq!(tsn, leaf_node.keys[0]);
+                        let val = &leaf_node.values[0];
+                        assert_eq!(0, val.page_ids.len());
+                        assert_ne!(PageID(0), val.root_id);
+                        tsn_root_id = val.root_id;
+                        break;
+                    }
+                }
+                assert_ne!(PageID(0), tsn_root_id);
+
+                let root_node_owned = { writer.get_page_ref(&db, tsn_root_id).unwrap().node.clone() };
+                match root_node_owned {
+                    Node::FreeListTsnInternal(internal_root) => {
+                        // If the first child is also an internal node, then the previous internal split promoted a new root
+                        let first_child_id = internal_root.child_ids[0];
+                        let first_child_node = { writer.get_page_ref(&db, first_child_id).unwrap().node.clone() };
+                        if matches!(first_child_node, Node::FreeListTsnInternal(_)) {
+                            // We have achieved an internal split in the TSN-subtree
+                            // The new root should have exactly 1 key and 2 children after promotion
+                            assert_eq!(1, internal_root.keys.len());
+                            assert_eq!(2, internal_root.child_ids.len());
+                            break;
+                        }
+                    }
+                    other => panic!("Expected TSN-subtree internal node, got {:?}", other.type_name()),
+                }
+            }
+
+            // Verify all page IDs are discoverable via find_reusable_page_ids
+            writer.find_reusable_page_ids(&db).unwrap();
+            assert_eq!(7 + extra_inserts, writer.reusable_page_ids.len());
+            for &(_pid, _tsn) in writer.reusable_page_ids.iter() {
+                assert_eq!(tsn, _tsn);
             }
         }
 

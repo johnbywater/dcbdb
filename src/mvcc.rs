@@ -1093,11 +1093,8 @@ impl Writer {
                     return Ok(root_id);
                 }
                 Err(ins) => {
-                    // Try to insert in place
-                    let mut tmp = leaf.clone();
-                    tmp.page_ids.insert(ins, key);
-                    let candidate = Page::new(dirty_child_id, Node::FreeListTsnLeaf(tmp));
-                    if candidate.calc_serialized_size() <= mvcc.page_size {
+                    // Try to insert in place: proactive capacity check using would_fit_new_page_id
+                    if leaf.would_fit_new_page_id(mvcc.max_node_size) {
                         leaf.page_ids.insert(ins, key);
                         // No splits; if leaf COW-ed, parents must update pointer but no promotions
                         // Walk parents only to patch COW pointers

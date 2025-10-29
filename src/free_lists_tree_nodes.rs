@@ -411,7 +411,11 @@ impl FreeListTsnLeafNode {
         Ok(FreeListTsnLeafNode { page_ids })
     }
 
-    pub fn pop_last(&mut self) -> Option<PageID> { self.page_ids.pop() }
+    /// Returns true if calculated size with new page_id doesn't exceed the given size
+    pub fn would_fit_new_page_id(&self, max_node_size: usize) -> bool {
+        // Only grows by 8 bytes for the extra PageID
+        self.calc_serialized_size() + 8 <= max_node_size
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -469,23 +473,10 @@ impl FreeListTsnInternalNode {
         Ok(FreeListTsnInternalNode { keys, child_ids })
     }
 
-    pub fn replace_last_child_id(&mut self, old_id: PageID, new_id: PageID) -> DCBResult<()> {
-        let last = self.child_ids.len() - 1;
-        if self.child_ids[last] == old_id { self.child_ids[last] = new_id; Ok(()) } else { Err(DCBError::DatabaseCorrupted("Child ID mismatch".to_string())) }
-    }
-
-    pub fn append_promoted_key_and_page_id(&mut self, promoted_key: PageID, promoted_page_id: PageID) -> DCBResult<()> {
-        self.keys.push(promoted_key);
-        self.child_ids.push(promoted_page_id);
-        Ok(())
-    }
-
-    pub fn split_off(&mut self) -> DCBResult<(PageID, Vec<PageID>, Vec<PageID>)> {
-        let middle_idx = self.keys.len() - 2;
-        let promoted_key = self.keys.remove(middle_idx);
-        let new_keys = self.keys.split_off(middle_idx);
-        let new_child_ids = self.child_ids.split_off(middle_idx + 1);
-        Ok((promoted_key, new_keys, new_child_ids))
+    /// Returns true if calculated size with new page_ids doesn't exceed the given size
+    pub fn would_fit_new_key_and_child(&self, max_node_size: usize) -> bool {
+        // Grows by 16 bytes for the extra two PageIDs
+        self.calc_serialized_size() + 16 <= max_node_size
     }
 }
 

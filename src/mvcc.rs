@@ -2,7 +2,7 @@ use crate::common::Position;
 use crate::common::{PageID, Tsn};
 use crate::dcb::{DCBError, DCBResult};
 use crate::events_tree_nodes::EventLeafNode;
-use crate::free_lists_tree_nodes::{FreeListInternalNode, FreeListLeafNode, FreeListLeafValue};
+use crate::free_lists_tree_nodes::{FreeListInternalNode, FreeListLeafNode, FreeListLeafValue, FreeListTsnLeafNode};
 use crate::header_node::HeaderNode;
 use crate::node::Node;
 use crate::page::Page;
@@ -1093,42 +1093,23 @@ impl Writer {
                     return Ok(root_id);
                 }
                 Err(ins) => {
-                    // Try to insert in place: proactive capacity check using would_fit_new_page_id
-                    if leaf.would_fit_new_page_id(mvcc.max_node_size) {
-                        leaf.page_ids.insert(ins, key);
-                        // No splits; if leaf COW-ed, parents must update pointer but no promotions
-                        // Walk parents only to patch COW pointers
-                        let mut new_root_id_opt: Option<PageID> = None;
-                        // Update ancestors if any COW happened on the path
-                        for (parent_id, child_idx) in stack.into_iter().rev() {
-                            let parent_dirty_id = { self.get_dirty_page_id(parent_id)? };
-                            if parent_dirty_id != parent_id {
-                                // Patch pointer in its parent in next iteration via dirty_child_id
-                            }
-                            // Replace the child pointer to current dirty id
-                            let parent_page = self.get_mut_dirty(parent_dirty_id)?;
-                            let Node::FreeListTsnInternal(ref mut parent_node) = parent_page.node else {
-                                return Err(DCBError::DatabaseCorrupted("Expected TSN-subtree internal".to_string()));
-                            };
-                            parent_node.child_ids[child_idx] = dirty_child_id;
-                            dirty_child_id = parent_dirty_id;
-                            new_root_id_opt = Some(parent_dirty_id); // track topmost dirty id
-                        }
-                        if let Some(new_root) = new_root_id_opt { return Ok(new_root); }
+                    leaf.page_ids.insert(ins, key);
+                    if leaf.calc_serialized_size() <= mvcc.max_node_size {
+                        // All pages will be already dirty, because all freed PageIDs for a TSN are
+                        // inserted in the same transaction, so don't need to replace child PageIDs.
                         return Ok(root_id);
                     }
-                    // Overflow: simple split strategy — insert key, then split the leaf in half without cloning the entire vector
-                    leaf.page_ids.insert(ins, key);
+                    // Split the leaf in half without cloning the entire vector.
                     let mid = leaf.page_ids.len() / 2; // left gets floor(n/2), right gets ceil(n/2)
                     let right_ids: Vec<PageID> = leaf.page_ids.split_off(mid);
-                    if right_ids.is_empty() {
-                        return Err(DCBError::InternalError("Split failed to create right leaf".to_string()));
-                    }
                     let promoted_key = right_ids[0];
                     // Create right leaf page
                     let right_leaf_id = self.alloc_page_id();
-                    let right_leaf_node = crate::free_lists_tree_nodes::FreeListTsnLeafNode { page_ids: right_ids };
-                    let right_leaf_page = Page::new(right_leaf_id, Node::FreeListTsnLeaf(right_leaf_node));
+                    let right_leaf_node = FreeListTsnLeafNode { page_ids: right_ids };
+                    let right_leaf_page = Page::new(
+                        right_leaf_id,
+                        Node::FreeListTsnLeaf(right_leaf_node),
+                    );
                     self.insert_dirty(right_leaf_page)?;
                     // Propagate to parents
                     let mut promoted: Option<(PageID, PageID)> = Some((promoted_key, right_leaf_id));

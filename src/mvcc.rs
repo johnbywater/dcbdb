@@ -11,7 +11,12 @@ use crate::tags_tree_nodes::TagsLeafNode;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::Path;
+use std::thread::sleep;
 use std::sync::Mutex;
+use std::time::Duration;
+
+const GET_LATEST_HEADER_RETRIES: usize = 5;
+const GET_LATEST_HEADER_DELAY: Duration = Duration::from_millis(10);
 
 // Main MVCC structure
 pub struct Mvcc {
@@ -135,9 +140,6 @@ impl Mvcc {
     fn write_header_using_buf(&self, page_id: PageID, header: &HeaderNode) -> DCBResult<()> {
         // Ensure buffer exists and has correct size
         let mut buf = self.header_page_buf.lock().unwrap();
-        if buf.len() != self.page_size {
-            buf.resize(self.page_size, 0);
-        }
         // Serialize header body into bytes after header; capture length
         let body_len = header.serialize_into(&mut buf[9..]);
         // Compute CRC over body
@@ -152,13 +154,7 @@ impl Mvcc {
     }
 
     pub fn get_latest_header(&self) -> DCBResult<(PageID, HeaderNode)> {
-        use std::thread::sleep;
-        use std::time::Duration;
-
-        let retries: usize = 5;
-        let delay = Duration::from_millis(10);
-
-        for attempt in 0..retries {
+        for attempt in 0..GET_LATEST_HEADER_RETRIES {
             let h0 = self.read_header(self.header_page_id0);
             let h1 = self.read_header(self.header_page_id1);
 
@@ -177,7 +173,7 @@ impl Mvcc {
                     return Ok((self.header_page_id1, header1));
                 }
                 (Err(e0), Err(e1)) => {
-                    if attempt + 1 < retries {
+                    if attempt + 1 < GET_LATEST_HEADER_RETRIES {
                         if self.verbose {
                             println!(
                                 "Both headers invalid on attempt {}: {:?} | {:?}. Retrying...",
@@ -186,13 +182,13 @@ impl Mvcc {
                                 e1
                             );
                         }
-                        sleep(delay);
+                        sleep(GET_LATEST_HEADER_DELAY);
                         continue;
                     } else {
                         return Err(DCBError::DatabaseCorrupted(
                             format!(
                                 "Both header pages appear corrupted after {} attempts: ({:?}) and ({:?})",
-                                retries, e0, e1
+                                GET_LATEST_HEADER_RETRIES, e0, e1
                             ),
                         ));
                     }
@@ -300,9 +296,6 @@ impl Mvcc {
         I: IntoIterator<Item = &'a Page>,
     {
         let mut buf = self.page_buf.lock().unwrap();
-        if buf.len() != self.page_size {
-            buf.resize(self.page_size, 0);
-        }
         let mut count = 0usize;
         for page in pages {
             page.serialize_into(&mut buf)?;
@@ -1227,6 +1220,7 @@ impl Writer {
             let tsn_root_id = leaf_value_root_id;
             let dirty_tsn_root_id = { self.get_dirty_page_id(tsn_root_id)? };
             if dirty_tsn_root_id != tsn_root_id {
+                // TODO: Check tsn_root_id is added to freed list...
                 // We'll update the root_id pointer in the main leaf if needed, but we do NOT
                 // free the old TSN-root page unless the TSN entry itself is removed.
             }
@@ -3269,6 +3263,11 @@ mod tests {
                     other => panic!("Expected TSN-subtree internal node, got {:?}", other.type_name()),
                 }
             }
+
+            // Now add another PageID to the internal->internal->leaf.
+            let pid = writer.alloc_page_id();
+            writer.insert_freed_page_id(&mut db, tsn, pid).unwrap();
+            extra_inserts += 1;
 
             // Verify all page IDs are discoverable via find_reusable_page_ids
             writer.find_reusable_page_ids(&db).unwrap();

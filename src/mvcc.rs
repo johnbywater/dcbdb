@@ -565,7 +565,7 @@ impl Writer {
                                 left_keys.push(new_keys[0]);
                                 left_child_ids = vec![new_child_ids[0], new_child_ids[1]];
                             }
-                            let mut right_keys_full: Vec<PageID> = new_keys[left_keys.len()..].to_vec();
+                            let right_keys_full: Vec<PageID> = new_keys[left_keys.len()..].to_vec();
                             if right_keys_full.is_empty() {
                                 return Err(DCBError::InternalError("Internal split produced empty right".to_string()));
                             }

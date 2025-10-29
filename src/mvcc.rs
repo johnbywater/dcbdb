@@ -1090,7 +1090,6 @@ impl Writer {
                 Ok(_) => {
                     // Duplicate; nothing to do
                     if verbose { println!("Duplicate PageID {:?} ignored in TSN-subtree", key); }
-                    return Ok(root_id);
                 }
                 Err(ins) => {
                     leaf.page_ids.insert(ins, key);
@@ -1114,24 +1113,19 @@ impl Writer {
                     // Propagate to parents
                     let mut promoted: Option<(PageID, PageID)> = Some((promoted_key, right_leaf_id));
                     // Walk up the path
-                    let mut new_root_id_opt: Option<PageID> = None;
                     for (_level, (parent_id, child_idx)) in stack.into_iter().rev().enumerate() {
-                        // Make parent dirty
-                        let parent_dirty_id = { self.get_dirty_page_id(parent_id)? };
-                        // No need to update pointer to left child: all relevant pages are already dirty within this transaction
-                        let parent_page = self.get_mut_dirty(parent_dirty_id)?;
-                        let Node::FreeListTsnInternal(ref mut parent_node) = parent_page.node else {
-                            return Err(DCBError::DatabaseCorrupted("Expected TSN-subtree internal".to_string()));
-                        };
                         if let Some((prom_key, prom_right_id)) = promoted.take() {
+                            let parent_page = self.get_mut_dirty(parent_id)?;
+                            let Node::FreeListTsnInternal(ref mut parent_node) = parent_page.node else {
+                                return Err(DCBError::DatabaseCorrupted("Expected TSN-subtree internal".to_string()));
+                            };
+
                             // Insert promoted key and right child at child_idx
                             parent_node.keys.insert(child_idx, prom_key);
                             parent_node.child_ids.insert(child_idx + 1, prom_right_id);
-                            // Check size directly on the node (no temp Page), using max_node_size
                             if parent_node.calc_serialized_size() <= mvcc.max_node_size {
                                 // Fits; continue upward, no further promotion from this parent
-                                dirty_child_id = parent_dirty_id;
-                                new_root_id_opt = Some(parent_dirty_id);
+                                dirty_child_id = parent_id;
                                 continue;
                             }
                             // Overflow: split parent by midpoint and promote the right-min key
@@ -1164,12 +1158,12 @@ impl Writer {
                             self.insert_dirty(right_internal_page)?;
                             // Set promoted to propagate upward
                             promoted = Some((promote_up_key, right_internal_id));
-                            dirty_child_id = parent_dirty_id;
-                            new_root_id_opt = Some(parent_dirty_id);
+                            dirty_child_id = parent_id;
+                            // new_root_id_opt = Some(parent_id);
                         } else {
                             // No promotion pending, just pointer patch
-                            dirty_child_id = parent_dirty_id;
-                            new_root_id_opt = Some(parent_dirty_id);
+                            dirty_child_id = parent_id;
+                            // new_root_id_opt = Some(parent_id);
                         }
                     }
                     // If a promotion remains after processing all parents, create new root
@@ -1185,11 +1179,9 @@ impl Writer {
                         if verbose { println!("Promoted new TSN-subtree root {:?}", new_root_id); }
                         return Ok(new_root_id);
                     }
-                    // Otherwise return the (possibly COWed) root id
-                    if let Some(new_root) = new_root_id_opt { return Ok(new_root); }
-                    return Ok(root_id);
                 }
-            }
+            };
+            Ok(root_id)
         }
     }
 

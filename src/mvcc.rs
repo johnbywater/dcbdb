@@ -1051,7 +1051,7 @@ impl Writer {
     }
 
     /// Insert a PageID into the TSN-subtree rooted at `root_id`, maintaining sorted order.
-    /// Returns the root id (may be the same or a new root if promoted).
+    /// Returns the root id (maybe the same or a new root if promoted).
     fn tsn_subtree_insert(&mut self, mvcc: &Mvcc, root_id: PageID, key: PageID) -> DCBResult<PageID> {
         let verbose = self.verbose;
         let mut stack: Vec<(PageID, usize)> = Vec::new();
@@ -1078,10 +1078,10 @@ impl Writer {
             }
         }
 
-        // Make the target leaf dirty and insert in sorted order if not duplicate
-        let mut dirty_child_id = { self.get_dirty_page_id(current_id)? };
+        // Please note, all pages will be already dirty, because all freed PageIDs for a TSN
+        // are inserted in the same transaction, so we don't need to replace any CoW PageIDs.
         {
-            let leaf_page = self.get_mut_dirty(dirty_child_id)?;
+            let leaf_page = self.get_mut_dirty(current_id)?;
             let Node::FreeListTsnLeaf(ref mut leaf) = leaf_page.node else {
                 return Err(DCBError::DatabaseCorrupted("Expected TSN-subtree leaf".to_string()));
             };
@@ -1094,8 +1094,6 @@ impl Writer {
                 Err(ins) => {
                     leaf.page_ids.insert(ins, key);
                     if leaf.calc_serialized_size() <= mvcc.max_node_size {
-                        // All pages will be already dirty, because all freed PageIDs for a TSN are
-                        // inserted in the same transaction, so don't need to replace child PageIDs.
                         return Ok(root_id);
                     }
                     // Split the leaf in half without cloning the entire vector.
@@ -1113,19 +1111,19 @@ impl Writer {
                     // Propagate to parents
                     let mut promoted: Option<(PageID, PageID)> = Some((promoted_key, right_leaf_id));
                     // Walk up the path
-                    for (_level, (parent_id, child_idx)) in stack.into_iter().rev().enumerate() {
+                    for (parent_id, child_idx) in stack.into_iter().rev() {
                         if let Some((prom_key, prom_right_id)) = promoted.take() {
                             let parent_page = self.get_mut_dirty(parent_id)?;
                             let Node::FreeListTsnInternal(ref mut parent_node) = parent_page.node else {
                                 return Err(DCBError::DatabaseCorrupted("Expected TSN-subtree internal".to_string()));
                             };
 
-                            // Insert promoted key and right child at child_idx
+                            // Insert promoted key and child at child_idx
                             parent_node.keys.insert(child_idx, prom_key);
                             parent_node.child_ids.insert(child_idx + 1, prom_right_id);
                             if parent_node.calc_serialized_size() <= mvcc.max_node_size {
                                 // Fits; continue upward, no further promotion from this parent
-                                dirty_child_id = parent_id;
+                                current_id = parent_id;
                                 continue;
                             }
                             // Overflow: split parent by midpoint and promote the right-min key
@@ -1158,18 +1156,14 @@ impl Writer {
                             self.insert_dirty(right_internal_page)?;
                             // Set promoted to propagate upward
                             promoted = Some((promote_up_key, right_internal_id));
-                            dirty_child_id = parent_id;
-                            // new_root_id_opt = Some(parent_id);
-                        } else {
-                            // No promotion pending, just pointer patch
-                            dirty_child_id = parent_id;
-                            // new_root_id_opt = Some(parent_id);
                         }
+                        current_id = parent_id;
+
                     }
                     // If a promotion remains after processing all parents, create new root
                     if let Some((prom_key, prom_right_id)) = promoted.take() {
                         let new_root_id = self.alloc_page_id();
-                        let left_id = dirty_child_id; // current root dirty id
+                        let left_id = current_id;
                         let new_root = crate::free_lists_tree_nodes::FreeListTsnInternalNode {
                             keys: vec![prom_key],
                             child_ids: vec![left_id, prom_right_id],

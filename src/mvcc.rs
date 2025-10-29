@@ -1061,14 +1061,14 @@ impl Writer {
             match &current_page_ref.node {
                 Node::FreeListTsnLeaf(_) => break,
                 Node::FreeListTsnInternal(internal) => {
-                    let mut child_idx = 0usize;
-                    while child_idx < internal.keys.len() && key >= internal.keys[child_idx] {
-                        child_idx += 1;
-                    }
+                    let child_idx = match internal.keys.binary_search_by(|k| k.0.cmp(&key.0))
+                    {
+                        Ok(idx) => idx + 1, // on equal, go right (matches existing >= loop)
+                        Err(idx) => idx,     // first separator greater than key
+                    };
                     let next_id = internal.child_ids[child_idx];
                     stack.push((current_id, child_idx));
-                    current_id = next_id;
-                }
+                    current_id = next_id;                }
                 other => {
                     return Err(DCBError::DatabaseCorrupted(format!(
                         "Unexpected node type in TSN-subtree during insert: {}",

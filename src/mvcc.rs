@@ -1117,25 +1117,21 @@ impl Writer {
                         if let Some(new_root) = new_root_id_opt { return Ok(new_root); }
                         return Ok(root_id);
                     }
-                    // Overflow: simple split strategy — insert key, then split the leaf in half
-                    let mut all_ids = leaf.page_ids.clone();
-                    all_ids.insert(ins, key);
-                    let mid = all_ids.len() / 2; // left gets floor(n/2), right gets ceil(n/2)
-                    let left_ids: Vec<PageID> = all_ids[..mid].to_vec();
-                    let right_ids: Vec<PageID> = all_ids[mid..].to_vec();
+                    // Overflow: simple split strategy — insert key, then split the leaf in half without cloning the entire vector
+                    leaf.page_ids.insert(ins, key);
+                    let mid = leaf.page_ids.len() / 2; // left gets floor(n/2), right gets ceil(n/2)
+                    let right_ids: Vec<PageID> = leaf.page_ids.split_off(mid);
                     if right_ids.is_empty() {
                         return Err(DCBError::InternalError("Split failed to create right leaf".to_string()));
                     }
-                    let sep_key = right_ids[0];
-                    // Update left leaf in-place
-                    leaf.page_ids = left_ids;
+                    let promoted_key = right_ids[0];
                     // Create right leaf page
                     let right_leaf_id = self.alloc_page_id();
                     let right_leaf_node = crate::free_lists_tree_nodes::FreeListTsnLeafNode { page_ids: right_ids };
                     let right_leaf_page = Page::new(right_leaf_id, Node::FreeListTsnLeaf(right_leaf_node));
                     self.insert_dirty(right_leaf_page)?;
                     // Propagate to parents
-                    let mut promoted: Option<(PageID, PageID)> = Some((sep_key, right_leaf_id));
+                    let mut promoted: Option<(PageID, PageID)> = Some((promoted_key, right_leaf_id));
                     // Walk up the path
                     let mut new_root_id_opt: Option<PageID> = None;
                     for (_level, (parent_id, child_idx)) in stack.into_iter().rev().enumerate() {

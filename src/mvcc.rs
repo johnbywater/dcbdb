@@ -1118,63 +1118,39 @@ impl Writer {
                     for (_level, (parent_id, child_idx)) in stack.into_iter().rev().enumerate() {
                         // Make parent dirty
                         let parent_dirty_id = { self.get_dirty_page_id(parent_id)? };
-                        // Update pointer to left child (which may have COW-ed)
+                        // No need to update pointer to left child: all relevant pages are already dirty within this transaction
                         let parent_page = self.get_mut_dirty(parent_dirty_id)?;
                         let Node::FreeListTsnInternal(ref mut parent_node) = parent_page.node else {
                             return Err(DCBError::DatabaseCorrupted("Expected TSN-subtree internal".to_string()));
                         };
-                        parent_node.child_ids[child_idx] = dirty_child_id;
                         if let Some((prom_key, prom_right_id)) = promoted.take() {
                             // Insert promoted key and right child at child_idx
                             parent_node.keys.insert(child_idx, prom_key);
                             parent_node.child_ids.insert(child_idx + 1, prom_right_id);
-                            // Check size
-                            let candidate = parent_node.clone();
-                            let candidate_page = Page::new(parent_dirty_id, Node::FreeListTsnInternal(candidate.clone()));
-                            if candidate_page.calc_serialized_size() <= mvcc.page_size {
-                                // Fits; continue only to patch higher COW pointers
+                            // Check size directly on the node (no temp Page), using max_node_size
+                            if parent_node.calc_serialized_size() <= mvcc.max_node_size {
+                                // Fits; continue upward, no further promotion from this parent
                                 dirty_child_id = parent_dirty_id;
                                 new_root_id_opt = Some(parent_dirty_id);
                                 continue;
                             }
-                            // Overflow: need to split parent by size
-                            // Build arrays after insertion
-                            let new_keys = candidate.keys.clone();
-                            let new_child_ids = candidate.child_ids.clone();
-                            // Determine split point by size
-                            let mut left_keys: Vec<PageID> = Vec::new();
-                            let mut left_child_ids: Vec<PageID> = Vec::new();
-                            for (i, k) in new_keys.iter().enumerate() {
-                                // Add corresponding child first
-                                if left_keys.is_empty() {
-                                    left_child_ids.push(new_child_ids[0]);
-                                }
-                                let mut test_node = crate::free_lists_tree_nodes::FreeListTsnInternalNode {
-                                    keys: left_keys.clone(),
-                                    child_ids: left_child_ids.clone(),
-                                };
-                                test_node.keys.push(*k);
-                                test_node.child_ids.push(new_child_ids[i + 1]);
-                                let test_page = Page::new(parent_dirty_id, Node::FreeListTsnInternal(test_node));
-                                if test_page.calc_serialized_size() <= mvcc.page_size {
-                                    left_keys.push(*k);
-                                    left_child_ids.push(new_child_ids[i + 1]);
-                                } else {
-                                    break;
-                                }
+                            // Overflow: split parent by midpoint and promote the right-min key
+                            let total_keys = parent_node.keys.len();
+                            debug_assert!(total_keys >= 2, "splitting parent with <2 keys after insert");
+                            let mid = total_keys / 2; // left = 0..mid, promote = mid, right = mid+1..
+                            let promote_up_key = parent_node.keys[mid];
+                            // Build left side in place
+                            let left_keys: Vec<PageID> = parent_node.keys[..mid].to_vec();
+                            let left_child_ids: Vec<PageID> = parent_node.child_ids[..=mid].to_vec();
+                            // Build right side
+                            let right_keys: Vec<PageID> = parent_node.keys[mid + 1..].to_vec();
+                            let right_child_ids: Vec<PageID> = parent_node.child_ids[mid + 1..].to_vec();
+                            if right_child_ids.len() != right_keys.len() + 1 {
+                                return Err(DCBError::DatabaseCorrupted("TSN-subtree internal split produced invalid right arity".to_string()));
                             }
-                            if left_keys.is_empty() {
-                                // Ensure at least one key on left
-                                left_keys.push(new_keys[0]);
-                                left_child_ids = vec![new_child_ids[0], new_child_ids[1]];
+                            if left_child_ids.len() != left_keys.len() + 1 {
+                                return Err(DCBError::DatabaseCorrupted("TSN-subtree internal split produced invalid left arity".to_string()));
                             }
-                            let right_keys_full: Vec<PageID> = new_keys[left_keys.len()..].to_vec();
-                            if right_keys_full.is_empty() {
-                                return Err(DCBError::InternalError("Internal split produced empty right".to_string()));
-                            }
-                            let promote_up_key = right_keys_full[0];
-                            let right_keys: Vec<PageID> = right_keys_full[1..].to_vec();
-                            let right_child_ids: Vec<PageID> = new_child_ids[left_child_ids.len()..].to_vec();
                             // Rewrite left into parent
                             parent_node.keys = left_keys;
                             parent_node.child_ids = left_child_ids;
@@ -1186,7 +1162,7 @@ impl Writer {
                             };
                             let right_internal_page = Page::new(right_internal_id, Node::FreeListTsnInternal(right_internal));
                             self.insert_dirty(right_internal_page)?;
-                            // Set promoted to propagate
+                            // Set promoted to propagate upward
                             promoted = Some((promote_up_key, right_internal_id));
                             dirty_child_id = parent_dirty_id;
                             new_root_id_opt = Some(parent_dirty_id);

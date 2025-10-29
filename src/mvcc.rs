@@ -1117,29 +1117,12 @@ impl Writer {
                         if let Some(new_root) = new_root_id_opt { return Ok(new_root); }
                         return Ok(root_id);
                     }
-                    // Overflow: perform size-aware split of the leaf
+                    // Overflow: simple split strategy — insert key, then split the leaf in half
                     let mut all_ids = leaf.page_ids.clone();
                     all_ids.insert(ins, key);
-                    // Build left part until next would overflow
-                    let mut left_ids: Vec<PageID> = Vec::new();
-                    let mut left_node = crate::free_lists_tree_nodes::FreeListTsnLeafNode { page_ids: Vec::new() };
-                    for pid in &all_ids {
-                        let mut candidate_node = left_node.clone();
-                        candidate_node.page_ids.push(*pid);
-                        let candidate_page = Page::new(dirty_child_id, Node::FreeListTsnLeaf(candidate_node));
-                        if candidate_page.calc_serialized_size() <= mvcc.page_size {
-                            left_node.page_ids.push(*pid);
-                            left_ids.push(*pid);
-                        } else {
-                            break;
-                        }
-                    }
-                    if left_ids.is_empty() || left_ids.len() == all_ids.len() {
-                        // Safety: ensure both sides non-empty
-                        let mid = all_ids.len() / 2;
-                        left_ids = all_ids[..mid].to_vec();
-                    }
-                    let right_ids: Vec<PageID> = all_ids[left_ids.len()..].to_vec();
+                    let mid = all_ids.len() / 2; // left gets floor(n/2), right gets ceil(n/2)
+                    let left_ids: Vec<PageID> = all_ids[..mid].to_vec();
+                    let right_ids: Vec<PageID> = all_ids[mid..].to_vec();
                     if right_ids.is_empty() {
                         return Err(DCBError::InternalError("Split failed to create right leaf".to_string()));
                     }

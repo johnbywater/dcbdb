@@ -122,10 +122,7 @@ impl UmaDbService for UmaDBServer {
             let mut head_rx = command_handler.watch_head();
             // If overall read is unlimited, compute global head once to preserve semantics
             let global_head = if remaining.is_none() && !subscribe {
-                match command_handler.head().await {
-                    Ok(h) => h,
-                    Err(_) => None,
-                }
+                command_handler.head().await.unwrap_or(None)
             } else {
                 None
             };
@@ -148,12 +145,11 @@ impl UmaDbService for UmaDBServer {
                 let per_iter_limit = Some(remaining.unwrap_or(usize::MAX).min(capped_bs as usize));
                 // println!("Per iter limit: {per_iter_limit:?}");
                 // If subscription and remaining exhausted (limit reached), terminate
-                if subscribe {
-                    if let Some(rem) = remaining {
-                        if rem == 0 {
-                            break;
-                        }
-                    }
+                if subscribe
+                    && let Some(rem) = remaining
+                    && rem == 0
+                {
+                    break;
                 }
                 match command_handler
                     .read(query_clone.clone(), next_after, per_iter_limit)
@@ -738,10 +734,7 @@ impl AsyncUmaDBClient {
         };
 
         let mut client = self.client.clone();
-        let response = client
-            .read(request)
-            .await
-            .map_err(|status| dcb_error_from_status(status))?;
+        let response = client.read(request).await.map_err(dcb_error_from_status)?;
         let stream = response.into_inner();
 
         Ok(AsyncReadResponse {
@@ -960,24 +953,24 @@ fn status_from_dcb_error(e: &DCBError) -> Status {
 fn dcb_error_from_status(status: Status) -> DCBError {
     let details = status.details();
     // Try to decode ErrorResponseProto directly from details
-    if !details.is_empty() {
-        if let Ok(err) = ErrorResponseProto::decode(details) {
-            return match err.error_type {
-                x if x == umadb::error_response_proto::ErrorType::Integrity as i32 => {
-                    DCBError::IntegrityError(err.message)
-                }
-                x if x == umadb::error_response_proto::ErrorType::Corruption as i32 => {
-                    DCBError::Corruption(err.message)
-                }
-                x if x == umadb::error_response_proto::ErrorType::Serialization as i32 => {
-                    DCBError::SerializationError(err.message)
-                }
-                x if x == umadb::error_response_proto::ErrorType::Internal as i32 => {
-                    DCBError::InternalError(err.message)
-                }
-                _ => DCBError::Io(std::io::Error::other(err.message)),
-            };
-        }
+    if !details.is_empty()
+        && let Ok(err) = ErrorResponseProto::decode(details)
+    {
+        return match err.error_type {
+            x if x == umadb::error_response_proto::ErrorType::Integrity as i32 => {
+                DCBError::IntegrityError(err.message)
+            }
+            x if x == umadb::error_response_proto::ErrorType::Corruption as i32 => {
+                DCBError::Corruption(err.message)
+            }
+            x if x == umadb::error_response_proto::ErrorType::Serialization as i32 => {
+                DCBError::SerializationError(err.message)
+            }
+            x if x == umadb::error_response_proto::ErrorType::Internal as i32 => {
+                DCBError::InternalError(err.message)
+            }
+            _ => DCBError::Io(std::io::Error::other(err.message)),
+        };
     }
     // Fallback: infer from gRPC code
     match status.code() {

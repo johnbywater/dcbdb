@@ -84,13 +84,13 @@ impl Pager {
         // Minimum window size in bytes: 10 MiB
         let min_window_bytes: usize = 10 * 1024 * 1024;
         // Minimum number of DB pages to reach at least the min window size
-        let min_pages = (min_window_bytes + page_size - 1) / page_size; // ceil
+        let min_pages = min_window_bytes.div_ceil(page_size);
         // Choose smallest multiple of align_pages that is >= min_pages
         let k = if min_pages == 0 {
             1
         } else {
-            (min_pages + align_pages - 1) / align_pages
-        }; // ceil
+            min_pages.div_ceil(align_pages)
+        };
         let mmap_pages_per_map = align_pages * usize::max(1, k);
 
         Ok(Self {

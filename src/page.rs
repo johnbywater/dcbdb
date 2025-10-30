@@ -25,7 +25,7 @@ impl Page {
     }
 
     /// Serialized page (header + body + zero padding) into `buf`.
-    pub fn serialize_into(&self, buf: &mut Vec<u8>) -> DCBResult<()> {
+    pub fn serialize_into(&self, buf: &mut [u8]) -> DCBResult<()> {
         // Serialize body into the front of the body region using the space after header
         let body_len = {
             let body_slice = &mut buf[PAGE_HEADER_SIZE..];

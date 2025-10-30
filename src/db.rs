@@ -47,6 +47,7 @@ impl UmaDB {
     /// - If condition is Some and matches any events (considering uncommitted writes), returns Err(IntegrityError) for that item and continues.
     /// - If events is empty, returns Ok(0) for that item and continues.
     /// - Otherwise performs unconditional append and records Ok(last_position) for that item.
+    ///
     /// At the end, commits the writer once. If commit fails, returns the commit error and discards per-item results.
     pub fn append_batch(
         &self,
@@ -287,10 +288,10 @@ pub fn read_conditional(
                         tags: rec.tags,
                     },
                 });
-                if let Some(lim) = limit {
-                    if out.len() >= lim {
-                        break 'outer_all;
-                    }
+                if let Some(lim) = limit
+                    && out.len() >= lim
+                {
+                    break 'outer_all;
                 }
             }
         }
@@ -332,10 +333,10 @@ pub fn read_conditional(
                             tags: rec.tags,
                         },
                     });
-                    if let Some(lim) = limit {
-                        if out.len() >= lim {
-                            break 'outer_fallback;
-                        }
+                    if let Some(lim) = limit
+                        && out.len() >= lim
+                    {
+                        break 'outer_fallback;
                     }
                 }
             }
@@ -503,10 +504,10 @@ pub fn read_conditional(
                 tags: rec.tags,
             },
         });
-        if let Some(lim) = limit {
-            if out.len() >= lim {
-                break;
-            }
+        if let Some(lim) = limit
+            && out.len() >= lim
+        {
+            break;
         }
     }
 

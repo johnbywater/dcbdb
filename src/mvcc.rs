@@ -590,11 +590,11 @@ impl Writer {
                     }
                     for i in 0..node.keys.len() {
                         let tsn = node.keys[i];
-                        if let Some(smallest) = smallest_reader_tsn {
-                            if tsn > smallest {
-                                is_finished = true;
-                                break;
-                            }
+                        if let Some(smallest) = smallest_reader_tsn
+                            && tsn > smallest
+                        {
+                            is_finished = true;
+                            break;
                         }
 
                         let leaf_value = &node.values[i];
@@ -703,12 +703,10 @@ impl Writer {
                             plan = FreePageIDInsertStrategy::PushPageIdOntoExistingTsnSubtree;
                         } else if leaf_node.would_fit_new_page_id(mvcc.max_node_size) {
                             plan = FreePageIDInsertStrategy::PushPageIdOntoFreeListLeaf(last_idx);
+                        } else if leaf_node.keys.len() == 1 {
+                            plan = FreePageIDInsertStrategy::MoveTsnToNewTsnSubtree;
                         } else {
-                            if leaf_node.keys.len() == 1 {
-                                plan = FreePageIDInsertStrategy::MoveTsnToNewTsnSubtree;
-                            } else {
-                                plan = FreePageIDInsertStrategy::SplitFreeListLeaf;
-                            }
+                            plan = FreePageIDInsertStrategy::SplitFreeListLeaf;
                         }
                     } else if tsn > last_key {
                         // New last TSN
@@ -1532,10 +1530,10 @@ impl Writer {
                     // root was COW-ed or updated, use new_root_id_opt.
                     if subtree_emptied {
                         tsn_leaf_became_empty = true;
-                    } else if let Some(new_root) = new_root_id_opt {
-                        if new_root != dirty_tsn_root_id {
-                            tsn_root_replaced = Some(new_root);
-                        }
+                    } else if let Some(new_root) = new_root_id_opt
+                        && new_root != dirty_tsn_root_id
+                    {
+                        tsn_root_replaced = Some(new_root);
                     }
                 }
                 _ => {
@@ -1721,10 +1719,10 @@ impl Drop for Reader {
         // Safety: The Mutex is valid as long as the Db instance is valid,
         // and the Reader doesn't outlive the Db instance.
         unsafe {
-            if !self.reader_tsns.is_null() {
-                if let Ok(mut map) = (*self.reader_tsns).lock() {
-                    map.remove(&self.reader_id);
-                }
+            if !self.reader_tsns.is_null()
+                && let Ok(mut map) = (*self.reader_tsns).lock()
+            {
+                map.remove(&self.reader_id);
             }
         }
     }

@@ -527,10 +527,10 @@ impl Writer {
                 println!("Appended {page_id:?} to freed_page_ids");
             }
             if self.dirty.contains_key(&page_id) {
+                self.dirty.remove(&page_id);
                 if verbose {
                     println!("Page ID {page_id:?} was in dirty and was removed");
                 }
-                self.dirty.remove(&page_id);
             }
             if verbose && self.dirty.contains_key(&page_id) {
                 println!("Page ID {page_id:?} is still in dirty!!!!!");
@@ -1289,16 +1289,11 @@ impl Writer {
             // TSN-subtree case: mutate the TSN leaf first
             let tsn_root_id = leaf_value_root_id;
             let dirty_tsn_root_id = { self.get_dirty_page_id(tsn_root_id)? };
-            if dirty_tsn_root_id != tsn_root_id {
-                // TODO: Check tsn_root_id is added to freed list...
-                // We'll update the root_id pointer in the main leaf if needed, but we do NOT
-                // free the old TSN-root page unless the TSN entry itself is removed.
-            }
             let mut tsn_root_replaced: Option<PageID> = None;
-            let tsn_dirty_page = self.get_mut_dirty(dirty_tsn_root_id)?;
+            let dirty_tsn_root_page = self.get_mut_dirty(dirty_tsn_root_id)?;
             let mut tsn_leaf_became_empty = false;
             let mut tsn_child_leaf_became_empty = false;
-            match &mut tsn_dirty_page.node {
+            match &mut dirty_tsn_root_page.node {
                 Node::FreeListTsnLeaf(tsn_leaf_node) => {
                     if let Some(pos) = tsn_leaf_node.page_ids.iter().position(|&id| id == used_page_id) {
                         tsn_leaf_node.page_ids.remove(pos);
@@ -1599,9 +1594,11 @@ impl Writer {
             self.append_freed_page_id(removed_page_id);
         }
 
-        // Update the root if needed
+        // Update the free_lists_tree_root_id if needed (it might already have been
+        // updated with the page ID of a dirty page.
         if let Some((old_id, new_id)) = current_replacement_info {
             if self.free_lists_tree_root_id == old_id {
+                self.append_freed_page_id(old_id);
                 self.free_lists_tree_root_id = new_id;
                 if verbose {
                     println!("Replaced root {old_id:?} with {new_id:?}");
@@ -2068,6 +2065,7 @@ mod tests {
             let root_id = writer.alloc_page_id();
             let page = Page::new(root_id, Node::FreeListLeaf(leaf));
             writer.insert_dirty(page).unwrap();
+            writer.append_freed_page_id(writer.free_lists_tree_root_id);
             writer.free_lists_tree_root_id = root_id;
             (tsn, free_pid1, free_pid2)
         }
@@ -2092,6 +2090,7 @@ mod tests {
             let internal = FreeListInternalNode { keys: vec![tsn1], child_ids: vec![leaf1_id, leaf2_id] };
             let root_id = writer.alloc_page_id();
             writer.insert_dirty(Page::new(root_id, Node::FreeListInternal(internal))).unwrap();
+            writer.append_freed_page_id(writer.free_lists_tree_root_id);
             writer.free_lists_tree_root_id = root_id;
             (tsn1, tsn2, pid1, pid2, pid3, pid4)
         }
@@ -2134,6 +2133,7 @@ mod tests {
             writer.insert_dirty(Page::new(internal1_id, Node::FreeListInternal(internal1))).unwrap();
             writer.insert_dirty(Page::new(internal2_id, Node::FreeListInternal(internal2))).unwrap();
             writer.insert_dirty(Page::new(internal3_id, Node::FreeListInternal(internal3))).unwrap();
+            writer.append_freed_page_id(writer.free_lists_tree_root_id);
             writer.free_lists_tree_root_id = internal3_id;
             (tsn1, tsn2, tsn3, tsn4, pid1, pid2, pid3, pid4, pid5, pid6, pid7, pid8)
         }
@@ -2153,6 +2153,7 @@ mod tests {
             };
             let root_id = writer.alloc_page_id();
             writer.insert_dirty(Page::new(root_id, Node::FreeListLeaf(leaf))).unwrap();
+            writer.append_freed_page_id(writer.free_lists_tree_root_id);
             writer.free_lists_tree_root_id = root_id;
             (pid1, pid2, tsn)
         }
@@ -2185,6 +2186,7 @@ mod tests {
             };
             let root_id = writer.alloc_page_id();
             writer.insert_dirty(Page::new(root_id, Node::FreeListLeaf(leaf))).unwrap();
+            writer.append_freed_page_id(writer.free_lists_tree_root_id);
             writer.free_lists_tree_root_id = root_id;
             (pid1, pid2, pid3, pid4, tsn)
         }
@@ -2234,13 +2236,14 @@ mod tests {
             writer.insert_dirty(Page::new(tsn_sub_internal_id3, Node::FreeListTsnInternal(tsn_sub_internal3))).unwrap();
 
             // Make a leaf value point to the internal node
-            let tsn = Tsn(33);
+            let tsn = writer.tsn;
             let leaf = FreeListLeafNode {
                 keys: vec![tsn],
                 values: vec![FreeListLeafValue { page_ids: vec![], root_id: tsn_sub_internal_id3 }],
             };
             let root_id = writer.alloc_page_id();
             writer.insert_dirty(Page::new(root_id, Node::FreeListLeaf(leaf))).unwrap();
+            writer.append_freed_page_id(writer.free_lists_tree_root_id);
             writer.free_lists_tree_root_id = root_id;
             (pid1, pid2, pid3, pid4, pid5, pid6, pid7, pid8, tsn)
         }
@@ -3513,7 +3516,7 @@ mod tests {
             writer.find_reusable_page_ids(&db).unwrap();
             assert_eq!(0, writer.reusable_page_ids.len());
 
-            assert_eq!(1, writer.freed_page_ids.len());
+            assert_eq!(2, writer.freed_page_ids.len());
         }
 
         #[test]
@@ -3531,7 +3534,7 @@ mod tests {
             assert_eq!((pid3, tsn1), writer.reusable_page_ids[1]);
             assert_eq!((pid4, tsn1), writer.reusable_page_ids[2]);
 
-            assert_eq!(0, writer.freed_page_ids.len());
+            assert_eq!(1, writer.freed_page_ids.len());
 
             writer.remove_free_page_id(&db, tsn1, pid2).unwrap();
             writer.find_reusable_page_ids(&db).unwrap();
@@ -3539,20 +3542,20 @@ mod tests {
             assert_eq!((pid3, tsn1), writer.reusable_page_ids[0]);
             assert_eq!((pid4, tsn1), writer.reusable_page_ids[1]);
 
-            assert_eq!(2, writer.freed_page_ids.len());
+            assert_eq!(3, writer.freed_page_ids.len());
 
             writer.remove_free_page_id(&db, tsn1, pid3).unwrap();
             writer.find_reusable_page_ids(&db).unwrap();
             assert_eq!(1, writer.reusable_page_ids.len());
             assert_eq!((pid4, tsn1), writer.reusable_page_ids[0]);
 
-            assert_eq!(2, writer.freed_page_ids.len());
+            assert_eq!(3, writer.freed_page_ids.len());
 
             writer.remove_free_page_id(&db, tsn1, pid4).unwrap();
             writer.find_reusable_page_ids(&db).unwrap();
             assert_eq!(0, writer.reusable_page_ids.len());
 
-            assert_eq!(3, writer.freed_page_ids.len());
+            assert_eq!(4, writer.freed_page_ids.len());
         }
 
         #[test]
@@ -3574,10 +3577,116 @@ mod tests {
             assert_eq!((pid7, tsn), writer.reusable_page_ids[5]);
             assert_eq!((pid8, tsn), writer.reusable_page_ids[6]);
 
-            assert_eq!(0, writer.freed_page_ids.len());
-
-
+            assert_eq!(1, writer.freed_page_ids.len());
         }
 
+        #[test]
+        #[serial]
+        fn test_remove_freed_page_id_cow_does_not_leak_ids_in_tsn_subtree() {
+            // Build a TSN-subtree with depth (internal->internal->leaf), commit it, then
+            // perform a removal in a new writer to force copy-on-write on the subtree path.
+            let (_temp_dir, db) = construct_mvcc(128);
+
+            // First writer builds the TSN-subtree and commits
+            let w1_tsn =
+            {
+                let mut w1 = db.writer().unwrap();
+                let (_pid1, _pid2, _pid3, _pid4, _pid5, _pid6, _pid7, _pid8, tsn) =
+                    build_free_list_tree_leaf_tsn_subtree_internal_internal_leaf(&mut w1);
+                // Commit so that subsequent modifications must use COW
+                db.commit(&mut w1).unwrap();
+                // Keep tsn for next phase via storing in header
+                tsn
+            };
+
+            // Second writer removes a page id to trigger COW on nodes along the path
+            let mut w2 = db.writer().unwrap();
+            // Find one reusable pid to remove via API, ensure tree populated
+            w2.find_reusable_page_ids(&db).unwrap();
+            assert!(w2.reusable_page_ids.len() >= 1);
+            let (remove_pid, remove_tsn) = w2.reusable_page_ids[0];
+            assert_eq!(remove_tsn, w1_tsn); // All built under this tsn in the helper
+            w2.remove_free_page_id(&db, remove_tsn, remove_pid).unwrap();
+
+            // Now audit: every page id from 0..next_page_id must be either active or freed.
+            // Collect active page ids by traversing the current free list tree, including TSN-subtrees.
+            let mut active: Vec<PageID> = Vec::new();
+            let mut freed_tree: Vec<PageID> = Vec::new();
+            // Always-active headers and roots
+            active.push(db.header_page_id0);
+            active.push(db.header_page_id1);
+            active.push(w2.free_lists_tree_root_id);
+            active.push(w2.events_tree_root_id);
+            active.push(w2.tags_tree_root_id);
+
+            // Traverse free list tree from current root, reading nodes from disk or cache
+            let mut stack: Vec<PageID> = vec![w2.free_lists_tree_root_id];
+            while let Some(pid) = stack.pop() {
+                if active.contains(&pid) == false { active.push(pid); }
+                let node_owned = { w2.get_page_ref(&db, pid).unwrap().node.clone() };
+                match node_owned {
+                    Node::FreeListInternal(internal) => {
+                        for child in internal.child_ids { stack.push(child); }
+                    }
+                    Node::FreeListLeaf(leaf) => {
+                        // Any inline free page IDs are considered freed
+                        for val in &leaf.values {
+                            for &p in &val.page_ids { freed_tree.push(p); }
+                        }
+                        // If TSN-subtree root exists, traverse it too
+                        for val in leaf.values {
+                            if val.root_id != PageID(0) {
+                                let mut tsn_stack: Vec<PageID> = vec![val.root_id];
+                                while let Some(tid) = tsn_stack.pop() {
+                                    if active.contains(&tid) == false { active.push(tid); }
+                                    let tnode = { w2.get_page_ref(&db, tid).unwrap().node.clone() };
+                                    match tnode {
+                                        Node::FreeListTsnInternal(tint) => {
+                                            for c in tint.child_ids { tsn_stack.push(c); }
+                                        }
+                                        Node::FreeListTsnLeaf(tleaf) => {
+                                            for &p in &tleaf.page_ids { freed_tree.push(p); }
+                                        }
+                                        _ => panic!("Unexpected node type in TSN-subtree"),
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => panic!("Unexpected node type in free list tree"),
+                }
+            }
+
+            // Also include any currently-dirty pages (new COW copies) as active
+            for (&pid, _page) in w2.dirty.iter() { if !active.contains(&pid) { active.push(pid); } }
+            // And include any pages we've read/deserialized during traversal
+            for (&pid, _page) in w2.deserialized.iter() { if !active.contains(&pid) { active.push(pid); } }
+
+            // Collect freed ids recorded by writer due to COW or structural removals
+            let mut freed: Vec<PageID> = w2.freed_page_ids.iter().cloned().collect();
+            // Include the reusable ids present in the tree itself
+            freed.extend(freed_tree);
+            // Include the reusable ids tracked by the writer snapshot
+            for (pid, _tsn) in w2.reusable_page_ids.iter() { freed.push(*pid); }
+
+            // Validate coverage
+            active.sort_by_key(|p| p.0);
+            active.dedup();
+            freed.sort_by_key(|p| p.0);
+            freed.dedup();
+            let mut union = active.clone();
+            for id in &freed { if !union.contains(id) { union.push(*id); } }
+            union.sort_by_key(|p| p.0);
+
+            let expected: Vec<PageID> = (0..w2.next_page_id.0).map(PageID).collect();
+            if expected != union {
+                let mut missing: Vec<PageID> = expected.iter().cloned().filter(|p| !union.contains(p)).collect();
+                let mut unexpected: Vec<PageID> = union.iter().cloned().filter(|p| !expected.contains(p)).collect();
+                missing.sort_by_key(|p| p.0);
+                unexpected.sort_by_key(|p| p.0);
+                panic!("Missing: {:?} Unexpected: {:?}\nactive: {:?}\nfreed: {:?}", missing, unexpected, active, freed);
+            }
+            assert_eq!(expected, union, "All page IDs must be accounted for (active or freed)");
+        }
     }
 }

@@ -1,10 +1,17 @@
 ![UmaDB Logo](UmaDB-logo.png)
 
-# UmaDB
+# What is UmaDB
 
-UmaDB is an event store database designed for dynamic consistency boundaries. It
-provides a robust foundation for event-driven architectures where consistency boundaries may
-shift based on business requirements.
+UmaDB is an event store database designed for **dynamic consistency boundaries**. It
+provides a foundation for event-driven architectures where consistency boundaries may
+shift based on business requirements rather than being fixed at the database level.
+
+UmaDB stores events as an append-only sequence, indexed by monotonically increasing positions. Each event can have tags for efficient filtering. The system supports:
+
+* **Optimistic concurrency control** via compare-and-swap on the global event sequence
+* **Business-rule validation** via query-based append conditions
+* **Real-time subscriptions** with catch-up and continue semantics
+* **Concurrent reads and writes** without blocking, using MVCC
 
 ## Database Design
 

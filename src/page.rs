@@ -76,7 +76,9 @@ impl Page {
         let calculated_crc = calc_crc(data);
 
         if calculated_crc != crc {
-            return Err(DCBError::DatabaseCorrupted(format!("CRC mismatch (page ID: {page_id:?})")));
+            return Err(DCBError::DatabaseCorrupted(format!(
+                "CRC mismatch (page ID: {page_id:?})"
+            )));
         }
 
         // Deserialize the node
@@ -120,19 +122,16 @@ mod tests {
 
         // Serialize the page into a fixed-size buffer using serialize_into_vec
         let mut page_buf = vec![0u8; crate::db::DEFAULT_PAGE_SIZE];
-        page
-            .serialize_into(&mut page_buf)
+        page.serialize_into(&mut page_buf)
             .expect("Failed to serialize page into buffer");
 
         // Check that the effective serialized data size (header + body_len from header) matches the calculated size
         let body_len = u32::from_le_bytes(page_buf[5..9].try_into().unwrap()) as usize;
         let effective_len = PAGE_HEADER_SIZE + body_len;
         assert_eq!(
-            calculated_size,
-            effective_len,
+            calculated_size, effective_len,
             "Calculated size {} should match effective serialized size {}",
-            calculated_size,
-            effective_len
+            calculated_size, effective_len
         );
 
         // Deserialize the serialized data from the full page buffer

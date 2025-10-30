@@ -4,13 +4,12 @@ use std::pin::Pin;
 use std::thread;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_stream::wrappers::ReceiverStream;
-use tonic::{Request, Response, Status, Code, transport::Server};
+use tonic::{Code, Request, Response, Status, transport::Server};
 
+use crate::db::{DEFAULT_PAGE_SIZE, UmaDB, read_conditional};
 use crate::dcb::{
-    DCBAppendCondition, DCBError, DCBEvent, DCBQuery, DCBQueryItem, DCBResult,
-    DCBSequencedEvent,
+    DCBAppendCondition, DCBError, DCBEvent, DCBQuery, DCBQueryItem, DCBResult, DCBSequencedEvent,
 };
-use crate::db::{UmaDB, read_conditional, DEFAULT_PAGE_SIZE};
 use crate::mvcc::Mvcc;
 
 // Include the generated proto code
@@ -22,10 +21,9 @@ use prost::Message;
 use prost::bytes::Bytes;
 
 use umadb::{
-    ErrorResponseProto,
-    AppendConditionProto, AppendRequestProto, AppendResponseProto, EventProto, HeadRequestProto,
-    HeadResponseProto, QueryItemProto, QueryProto, ReadRequestProto, ReadResponseProto,
-    SequencedEventProto,
+    AppendConditionProto, AppendRequestProto, AppendResponseProto, ErrorResponseProto, EventProto,
+    HeadRequestProto, HeadResponseProto, QueryItemProto, QueryProto, ReadRequestProto,
+    ReadResponseProto, SequencedEventProto,
     uma_db_service_server::{UmaDbService, UmaDbServiceServer},
 };
 
@@ -68,7 +66,6 @@ pub async fn start_server<P: AsRef<Path> + Send + 'static>(
     Ok(())
 }
 
-
 // gRPC server implementation
 pub struct UmaDBServer {
     command_handler: CommandHandler,
@@ -76,9 +73,15 @@ pub struct UmaDBServer {
 }
 
 impl UmaDBServer {
-    pub fn new<P: AsRef<Path> + Send + 'static>(path: P, shutdown_rx: watch::Receiver<bool>) -> std::io::Result<Self> {
+    pub fn new<P: AsRef<Path> + Send + 'static>(
+        path: P,
+        shutdown_rx: watch::Receiver<bool>,
+    ) -> std::io::Result<Self> {
         let command_handler = CommandHandler::new(path)?;
-        Ok(Self { command_handler, shutdown_rx })
+        Ok(Self {
+            command_handler,
+            shutdown_rx,
+        })
     }
 
     pub fn into_service(self) -> UmaDbServiceServer<Self> {
@@ -89,7 +92,7 @@ impl UmaDBServer {
 #[tonic::async_trait]
 impl UmaDbService for UmaDBServer {
     type ReadStream =
-    Pin<Box<dyn Stream<Item = Result<ReadResponseProto, Status>> + Send + 'static>>;
+        Pin<Box<dyn Stream<Item = Result<ReadResponseProto, Status>> + Send + 'static>>;
 
     async fn read(
         &self,
@@ -119,15 +122,24 @@ impl UmaDbService for UmaDBServer {
             let mut head_rx = command_handler.watch_head();
             // If overall read is unlimited, compute global head once to preserve semantics
             let global_head = if remaining.is_none() && !subscribe {
-                match command_handler.head().await { Ok(h) => h, Err(_) => None }
-            } else { None };
+                match command_handler.head().await {
+                    Ok(h) => h,
+                    Err(_) => None,
+                }
+            } else {
+                None
+            };
             // Server-side batch cap to ensure streaming in multiple messages
             // Keep this modest so tests expecting multiple batches (e.g., 300 items) will split.
             loop {
                 // If this is a subscription, exit if client has gone away or server is shutting down
                 if subscribe {
-                    if tx.is_closed() { break; }
-                    if *shutdown_rx.borrow() { break; }
+                    if tx.is_closed() {
+                        break;
+                    }
+                    if *shutdown_rx.borrow() {
+                        break;
+                    }
                 }
                 // Determine per-iteration limit: take requested batch size (if any), cap to
                 // READ_RESPONSE_SIZE_MAX, ensure >= 1, then don't exceed remaining (if any)
@@ -137,16 +149,30 @@ impl UmaDbService for UmaDBServer {
                 // println!("Per iter limit: {per_iter_limit:?}");
                 // If subscription and remaining exhausted (limit reached), terminate
                 if subscribe {
-                    if let Some(rem) = remaining { if rem == 0 { break; } }
+                    if let Some(rem) = remaining {
+                        if rem == 0 {
+                            break;
+                        }
+                    }
                 }
-                match command_handler.read(query_clone.clone(), next_after, per_iter_limit).await {
+                match command_handler
+                    .read(query_clone.clone(), next_after, per_iter_limit)
+                    .await
+                {
                     Ok((events, head)) => {
                         if events.is_empty() {
                             // Only send an empty response to communicate head if this is the first
                             if !sent_any {
                                 // For unlimited overall reads, use precomputed global head (non-subscribe)
-                                let head_to_send = if remaining.is_none() && !subscribe { global_head } else { head };
-                                let response = ReadResponseProto { events: vec![], head: head_to_send };
+                                let head_to_send = if remaining.is_none() && !subscribe {
+                                    global_head
+                                } else {
+                                    head
+                                };
+                                let response = ReadResponseProto {
+                                    events: vec![],
+                                    head: head_to_send,
+                                };
                                 let _ = tx.send(Ok(response)).await;
                             }
                             // For subscriptions, wait for new events instead of terminating
@@ -154,7 +180,9 @@ impl UmaDbService for UmaDBServer {
                                 // Wait while head <= next_after (or None)
                                 loop {
                                     // If channel closed, stop
-                                    if tx.is_closed() { break; }
+                                    if tx.is_closed() {
+                                        break;
+                                    }
                                     let current_head = *head_rx.borrow();
                                     let na = next_after.unwrap_or(0);
                                     if current_head.map(|h| h > na).unwrap_or(false) {
@@ -184,7 +212,10 @@ impl UmaDbService for UmaDBServer {
                         let (slice_start, slice_len, reached_end) = if remaining.is_none() {
                             if let Some(h) = global_head {
                                 // find first index > h
-                                let idx = events.iter().position(|e| e.position > h).unwrap_or(events.len());
+                                let idx = events
+                                    .iter()
+                                    .position(|e| e.position > h)
+                                    .unwrap_or(events.len());
                                 (0, idx, idx < events.len())
                             } else {
                                 (0, events.len(), false)
@@ -196,20 +227,34 @@ impl UmaDbService for UmaDBServer {
                         if slice_len == 0 {
                             // If we haven't sent anything yet, still send an empty batch with head to convey metadata
                             if !sent_any {
-                                let head_to_send = if remaining.is_none() { global_head } else { head };
-                                let response = ReadResponseProto { events: vec![], head: head_to_send };
+                                let head_to_send = if remaining.is_none() {
+                                    global_head
+                                } else {
+                                    head
+                                };
+                                let response = ReadResponseProto {
+                                    events: vec![],
+                                    head: head_to_send,
+                                };
                                 let _ = tx.send(Ok(response)).await;
                             }
                             break;
                         }
 
                         // Prepare and send this non-empty (possibly trimmed) batch
-                        let batch_head = if remaining.is_none() { global_head } else { head };
+                        let batch_head = if remaining.is_none() {
+                            global_head
+                        } else {
+                            head
+                        };
                         let mut ev_out = Vec::with_capacity(slice_len);
                         for e in events[slice_start..slice_start + slice_len].iter() {
                             ev_out.push(SequencedEventProto::from(e.clone()));
                         }
-                        let response = ReadResponseProto { events: ev_out, head: batch_head };
+                        let response = ReadResponseProto {
+                            events: ev_out,
+                            head: batch_head,
+                        };
 
                         if tx.send(Ok(response)).await.is_err() {
                             break;
@@ -240,9 +285,7 @@ impl UmaDbService for UmaDBServer {
                         tokio::task::yield_now().await;
                     }
                     Err(e) => {
-                        let _ = tx
-                            .send(Err(status_from_dcb_error(&e)))
-                            .await;
+                        let _ = tx.send(Err(status_from_dcb_error(&e))).await;
                         break;
                     }
                 }
@@ -287,8 +330,6 @@ impl UmaDbService for UmaDBServer {
     }
 }
 
-
-
 // Message types for communication between the gRPC server and the command handler thread
 enum Command {
     Append {
@@ -313,7 +354,11 @@ impl CommandHandler {
 
         // Build a shared Mvcc instance (Arc) upfront so reads can proceed concurrently on this thread
         let p = path.as_ref();
-        let file_path = if p.is_dir() { p.join("dcb.db") } else { p.to_path_buf() };
+        let file_path = if p.is_dir() {
+            p.join("dcb.db")
+        } else {
+            p.to_path_buf()
+        };
         let mvcc = std::sync::Arc::new(
             Mvcc::new(&file_path, DEFAULT_PAGE_SIZE, false)
                 .map_err(|e| std::io::Error::other(format!("Failed to init LMDB: {e:?}")))?,
@@ -348,7 +393,8 @@ impl CommandHandler {
                             response_tx,
                         } => {
                             // Batch processing: drain any immediately available append requests
-                            let mut items: Vec<(Vec<DCBEvent>, Option<DCBAppendCondition>)> = Vec::new();
+                            let mut items: Vec<(Vec<DCBEvent>, Option<DCBAppendCondition>)> =
+                                Vec::new();
                             let mut responders: Vec<oneshot::Sender<DCBResult<u64>>> = Vec::new();
 
                             let mut total_events = 0;
@@ -364,7 +410,11 @@ impl CommandHandler {
                                     break;
                                 }
                                 match request_rx.try_recv() {
-                                    Ok(Command::Append { events, condition, response_tx }) => {
+                                    Ok(Command::Append {
+                                        events,
+                                        condition,
+                                        response_tx,
+                                    }) => {
                                         let ev_len = events.len();
                                         items.push((events, condition));
                                         responders.push(response_tx);
@@ -387,7 +437,8 @@ impl CommandHandler {
                                     // Send individual results back to requesters
                                     // Also compute the new head as the maximum successful last position in this batch
                                     let mut max_ok: Option<u64> = None;
-                                    for (res, tx) in results.into_iter().zip(responders.into_iter()) {
+                                    for (res, tx) in results.into_iter().zip(responders.into_iter())
+                                    {
                                         if let Ok(v) = &res {
                                             max_ok = Some(max_ok.map_or(*v, |m| m.max(*v)));
                                         }
@@ -404,18 +455,42 @@ impl CommandHandler {
                                     // for Io and cloning data for other variants.
                                     fn clone_dcb_error(src: &DCBError) -> DCBError {
                                         match src {
-                                            DCBError::Io(err) => DCBError::Io(std::io::Error::other(err.to_string())),
-                                            DCBError::IntegrityError(s) => DCBError::IntegrityError(s.clone()),
-                                            DCBError::Corruption(s) => DCBError::Corruption(s.clone()),
-                                            DCBError::PageNotFound(id) => DCBError::PageNotFound(*id),
-                                            DCBError::DirtyPageNotFound(id) => DCBError::DirtyPageNotFound(*id),
-                                            DCBError::RootIDMismatch(old_id, new_id) => DCBError::RootIDMismatch(*old_id, *new_id),
-                                            DCBError::DatabaseCorrupted(s) => DCBError::DatabaseCorrupted(s.clone()),
-                                            DCBError::InternalError(s) => DCBError::InternalError(s.clone()),
-                                            DCBError::SerializationError(s) => DCBError::SerializationError(s.clone()),
-                                            DCBError::DeserializationError(s) => DCBError::DeserializationError(s.clone()),
-                                            DCBError::PageAlreadyFreed(id) => DCBError::PageAlreadyFreed(*id),
-                                            DCBError::PageAlreadyDirty(id) => DCBError::PageAlreadyDirty(*id),
+                                            DCBError::Io(err) => {
+                                                DCBError::Io(std::io::Error::other(err.to_string()))
+                                            }
+                                            DCBError::IntegrityError(s) => {
+                                                DCBError::IntegrityError(s.clone())
+                                            }
+                                            DCBError::Corruption(s) => {
+                                                DCBError::Corruption(s.clone())
+                                            }
+                                            DCBError::PageNotFound(id) => {
+                                                DCBError::PageNotFound(*id)
+                                            }
+                                            DCBError::DirtyPageNotFound(id) => {
+                                                DCBError::DirtyPageNotFound(*id)
+                                            }
+                                            DCBError::RootIDMismatch(old_id, new_id) => {
+                                                DCBError::RootIDMismatch(*old_id, *new_id)
+                                            }
+                                            DCBError::DatabaseCorrupted(s) => {
+                                                DCBError::DatabaseCorrupted(s.clone())
+                                            }
+                                            DCBError::InternalError(s) => {
+                                                DCBError::InternalError(s.clone())
+                                            }
+                                            DCBError::SerializationError(s) => {
+                                                DCBError::SerializationError(s.clone())
+                                            }
+                                            DCBError::DeserializationError(s) => {
+                                                DCBError::DeserializationError(s.clone())
+                                            }
+                                            DCBError::PageAlreadyFreed(id) => {
+                                                DCBError::PageAlreadyFreed(*id)
+                                            }
+                                            DCBError::PageAlreadyDirty(id) => {
+                                                DCBError::PageAlreadyDirty(*id)
+                                            }
                                         }
                                     }
                                     let total = responders.len();
@@ -436,7 +511,11 @@ impl CommandHandler {
             });
         });
 
-        Ok(Self { mvcc, head_tx, request_tx })
+        Ok(Self {
+            mvcc,
+            head_tx,
+            request_tx,
+        })
     }
 
     async fn read(
@@ -447,27 +526,37 @@ impl CommandHandler {
     ) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
         // Offload blocking read to a dedicated threadpool
         let db = self.mvcc.clone();
-        tokio::task::spawn_blocking(move || -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
-            let reader = db.reader()?;
-            let last_committed_position = reader.next_position.0.saturating_sub(1);
+        tokio::task::spawn_blocking(
+            move || -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
+                let reader = db.reader()?;
+                let last_committed_position = reader.next_position.0.saturating_sub(1);
 
-            let q = query.unwrap_or(DCBQuery { items: vec![] });
-            let after_pos = crate::common::Position(after.unwrap_or(0));
-            let events = read_conditional(&db, &std::collections::HashMap::new(), reader.events_tree_root_id, reader.tags_tree_root_id, q, after_pos, limit)
+                let q = query.unwrap_or(DCBQuery { items: vec![] });
+                let after_pos = crate::common::Position(after.unwrap_or(0));
+                let events = read_conditional(
+                    &db,
+                    &std::collections::HashMap::new(),
+                    reader.events_tree_root_id,
+                    reader.tags_tree_root_id,
+                    q,
+                    after_pos,
+                    limit,
+                )
                 .map_err(|e| DCBError::Corruption(format!("{e}")))?;
 
-            let head = if limit.is_none() {
-                if last_committed_position == 0 {
-                    None
+                let head = if limit.is_none() {
+                    if last_committed_position == 0 {
+                        None
+                    } else {
+                        Some(last_committed_position)
+                    }
                 } else {
-                    Some(last_committed_position)
-                }
-            } else {
-                events.last().map(|e| e.position)
-            };
+                    events.last().map(|e| e.position)
+                };
 
-            Ok((events, head))
-        })
+                Ok((events, head))
+            },
+        )
         .await
         .map_err(|e| DCBError::Io(std::io::Error::other(format!("Join error: {e}"))))?
     }
@@ -498,7 +587,8 @@ impl CommandHandler {
                     cond.fail_if_events_match.clone(),
                     after_pos,
                     Some(1),
-                ).map_err(|e| DCBError::Corruption(format!("{e}")))?;
+                )
+                .map_err(|e| DCBError::Corruption(format!("{e}")))?;
 
                 if let Some(matched) = found.first() {
                     let msg = format!(
@@ -515,7 +605,9 @@ impl CommandHandler {
             })
             .await
             .map_err(|e| DCBError::Io(std::io::Error::other(format!("Join error: {e}"))))??
-        } else { None };
+        } else {
+            None
+        };
 
         let (response_tx, response_rx) = oneshot::channel();
 
@@ -574,7 +666,6 @@ impl Clone for CommandHandler {
     }
 }
 
-
 // Async client implementation
 pub struct AsyncUmaDBClient {
     client: umadb::uma_db_service_client::UmaDbServiceClient<tonic::transport::Channel>,
@@ -594,8 +685,7 @@ impl AsyncUmaDBClient {
         D: std::convert::TryInto<tonic::transport::Endpoint>,
         D::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
-        let client =
-            umadb::uma_db_service_client::UmaDbServiceClient::connect(dst).await?;
+        let client = umadb::uma_db_service_client::UmaDbServiceClient::connect(dst).await?;
         Ok(Self { client })
     }
 
@@ -632,17 +722,34 @@ impl AsyncUmaDBClient {
             items: q
                 .items
                 .into_iter()
-                .map(|item| QueryItemProto { types: item.types, tags: item.tags })
+                .map(|item| QueryItemProto {
+                    types: item.types,
+                    tags: item.tags,
+                })
                 .collect(),
         });
         let limit_proto = limit.map(|l| l as u32);
-        let request = ReadRequestProto { query: query_proto, after, limit: limit_proto, subscribe: Some(subscribe), batch_size: batch_size.map(|b| b as u32) };
+        let request = ReadRequestProto {
+            query: query_proto,
+            after,
+            limit: limit_proto,
+            subscribe: Some(subscribe),
+            batch_size: batch_size.map(|b| b as u32),
+        };
 
         let mut client = self.client.clone();
-        let response = client.read(request).await.map_err(|status| dcb_error_from_status(status))?;
+        let response = client
+            .read(request)
+            .await
+            .map_err(|status| dcb_error_from_status(status))?;
         let stream = response.into_inner();
 
-        Ok(AsyncReadResponse { stream, buffered: Vec::new(), last_head: None, ended: false })
+        Ok(AsyncReadResponse {
+            stream,
+            buffered: Vec::new(),
+            last_head: None,
+            ended: false,
+        })
     }
 
     pub async fn append(
@@ -652,7 +759,11 @@ impl AsyncUmaDBClient {
     ) -> crate::dcb::DCBResult<u64> {
         let events_proto: Vec<EventProto> = events
             .into_iter()
-            .map(|e| EventProto { event_type: e.event_type, tags: e.tags, data: e.data })
+            .map(|e| EventProto {
+                event_type: e.event_type,
+                tags: e.tags,
+                data: e.data,
+            })
             .collect();
 
         let condition_proto = condition.map(|c| AppendConditionProto {
@@ -661,13 +772,19 @@ impl AsyncUmaDBClient {
                     .fail_if_events_match
                     .items
                     .into_iter()
-                    .map(|item| QueryItemProto { types: item.types, tags: item.tags })
+                    .map(|item| QueryItemProto {
+                        types: item.types,
+                        tags: item.tags,
+                    })
                     .collect(),
             }),
             after: c.after,
         });
 
-        let request = AppendRequestProto { events: events_proto, condition: condition_proto };
+        let request = AppendRequestProto {
+            events: events_proto,
+            condition: condition_proto,
+        };
         let mut client = self.client.clone();
         match client.append(request).await {
             Ok(response) => Ok(response.into_inner().position),
@@ -686,7 +803,9 @@ impl AsyncUmaDBClient {
 
 impl AsyncReadResponse {
     async fn fetch_next_if_needed(&mut self) -> crate::dcb::DCBResult<()> {
-        if !self.buffered.is_empty() || self.ended { return Ok(()); }
+        if !self.buffered.is_empty() || self.ended {
+            return Ok(());
+        }
         match self.stream.message().await {
             Ok(Some(resp)) => {
                 self.last_head = Some(resp.head);
@@ -695,26 +814,37 @@ impl AsyncReadResponse {
                     if let Some(ev) = e.event {
                         self.buffered.push(crate::dcb::DCBSequencedEvent {
                             position: e.position,
-                            event: crate::dcb::DCBEvent { event_type: ev.event_type, tags: ev.tags, data: ev.data },
+                            event: crate::dcb::DCBEvent {
+                                event_type: ev.event_type,
+                                tags: ev.tags,
+                                data: ev.data,
+                            },
                         });
                     }
                 }
                 Ok(())
             }
-            Ok(None) => { self.ended = true; Ok(()) }
+            Ok(None) => {
+                self.ended = true;
+                Ok(())
+            }
             Err(status) => Err(dcb_error_from_status(status)),
         }
     }
 
     pub async fn head(&mut self) -> crate::dcb::DCBResult<Option<u64>> {
-        if let Some(h) = self.last_head { return Ok(h); }
+        if let Some(h) = self.last_head {
+            return Ok(h);
+        }
         // Need to read at least one message to learn head
         self.fetch_next_if_needed().await?;
         Ok(self.last_head.unwrap_or(None))
     }
 
     // Returns the next batch of events; empty vec indicates end of stream
-    pub async fn next_batch(&mut self) -> crate::dcb::DCBResult<Vec<crate::dcb::DCBSequencedEvent>> {
+    pub async fn next_batch(
+        &mut self,
+    ) -> crate::dcb::DCBResult<Vec<crate::dcb::DCBSequencedEvent>> {
         // If we have buffered events from a previous fetch, return them first
         if !self.buffered.is_empty() {
             let mut out = Vec::new();
@@ -732,7 +862,6 @@ impl AsyncReadResponse {
         Ok(Vec::new())
     }
 }
-
 
 // Conversion functions between proto and API types
 impl From<EventProto> for DCBEvent {
@@ -795,14 +924,34 @@ impl From<DCBSequencedEvent> for SequencedEventProto {
 // Helper: map DCBError -> tonic::Status with structured details
 fn status_from_dcb_error(e: &DCBError) -> Status {
     let (code, error_type) = match e {
-        DCBError::IntegrityError(_) => (Code::FailedPrecondition, umadb::error_response_proto::ErrorType::Integrity as i32),
-        DCBError::Corruption(_) | DCBError::DatabaseCorrupted(_) | DCBError::DeserializationError(_) => (Code::DataLoss, umadb::error_response_proto::ErrorType::Corruption as i32),
-        DCBError::SerializationError(_) => (Code::InvalidArgument, umadb::error_response_proto::ErrorType::Serialization as i32),
-        DCBError::InternalError(_) => (Code::Internal, umadb::error_response_proto::ErrorType::Internal as i32),
-        _ => (Code::Internal, umadb::error_response_proto::ErrorType::Io as i32),
+        DCBError::IntegrityError(_) => (
+            Code::FailedPrecondition,
+            umadb::error_response_proto::ErrorType::Integrity as i32,
+        ),
+        DCBError::Corruption(_)
+        | DCBError::DatabaseCorrupted(_)
+        | DCBError::DeserializationError(_) => (
+            Code::DataLoss,
+            umadb::error_response_proto::ErrorType::Corruption as i32,
+        ),
+        DCBError::SerializationError(_) => (
+            Code::InvalidArgument,
+            umadb::error_response_proto::ErrorType::Serialization as i32,
+        ),
+        DCBError::InternalError(_) => (
+            Code::Internal,
+            umadb::error_response_proto::ErrorType::Internal as i32,
+        ),
+        _ => (
+            Code::Internal,
+            umadb::error_response_proto::ErrorType::Io as i32,
+        ),
     };
     let msg = e.to_string();
-    let detail = ErrorResponseProto { message: msg.clone(), error_type };
+    let detail = ErrorResponseProto {
+        message: msg.clone(),
+        error_type,
+    };
     let bytes = detail.encode_to_vec();
     Status::with_details(code, msg, Bytes::from(bytes))
 }
@@ -814,10 +963,18 @@ fn dcb_error_from_status(status: Status) -> DCBError {
     if !details.is_empty() {
         if let Ok(err) = ErrorResponseProto::decode(details) {
             return match err.error_type {
-                x if x == umadb::error_response_proto::ErrorType::Integrity as i32 => DCBError::IntegrityError(err.message),
-                x if x == umadb::error_response_proto::ErrorType::Corruption as i32 => DCBError::Corruption(err.message),
-                x if x == umadb::error_response_proto::ErrorType::Serialization as i32 => DCBError::SerializationError(err.message),
-                x if x == umadb::error_response_proto::ErrorType::Internal as i32 => DCBError::InternalError(err.message),
+                x if x == umadb::error_response_proto::ErrorType::Integrity as i32 => {
+                    DCBError::IntegrityError(err.message)
+                }
+                x if x == umadb::error_response_proto::ErrorType::Corruption as i32 => {
+                    DCBError::Corruption(err.message)
+                }
+                x if x == umadb::error_response_proto::ErrorType::Serialization as i32 => {
+                    DCBError::SerializationError(err.message)
+                }
+                x if x == umadb::error_response_proto::ErrorType::Internal as i32 => {
+                    DCBError::InternalError(err.message)
+                }
                 _ => DCBError::Io(std::io::Error::other(err.message)),
             };
         }

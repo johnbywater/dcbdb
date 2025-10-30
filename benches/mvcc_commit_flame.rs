@@ -1,5 +1,5 @@
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use pprof::criterion::{PProfProfiler, Output};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use pprof::criterion::{Output, PProfProfiler};
 use tempfile::tempdir;
 use umadb::bench_api::BenchDb;
 
@@ -34,9 +34,9 @@ pub fn mvcc_commit_benchmarks(c: &mut Criterion) {
     generate_flamegraphs(&db, page_size).expect("failed to generate flamegraphs");
 }
 
-use std::time::{Duration, Instant};
 use pprof::ProfilerGuard;
 use std::fs::File;
+use std::time::{Duration, Instant};
 
 fn profile_to_svg<F>(name: &str, mut work: F) -> std::io::Result<()>
 where
@@ -75,15 +75,15 @@ fn generate_flamegraphs(db: &BenchDb, page_size: usize) -> std::io::Result<()> {
     for &n in &[1usize, 10, 100] {
         profile_to_svg(&format!("mvcc_commit_with_dirty_{}", n), || {
             db.commit_with_dirty(n).expect("commit_with_dirty");
-    })?;
+        })?;
     }
 
     Ok(())
 }
 
 // Configure Criterion to use pprof to emit Flamegraph SVGs at a predictable location.
-use std::path::PathBuf;
 use pprof::flamegraph::Options as FlameOptions;
+use std::path::PathBuf;
 
 fn flame_config() -> Criterion {
     // Ensure the output directory exists and ask pprof to place flamegraphs there, if supported.
@@ -92,8 +92,10 @@ fn flame_config() -> Criterion {
 
     // Configure default flamegraph options; if the pprof backend honors output paths,
     // it will emit into Criterion’s dir unless otherwise specified here.
-    Criterion::default()
-        .with_profiler(PProfProfiler::new(100, Output::Flamegraph(Some(FlameOptions::default()))))
+    Criterion::default().with_profiler(PProfProfiler::new(
+        100,
+        Output::Flamegraph(Some(FlameOptions::default())),
+    ))
 }
 
 criterion_group! {

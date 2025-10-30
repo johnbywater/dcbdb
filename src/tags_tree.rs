@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use crate::common::{PageID, Position};
 use crate::dcb::{DCBError, DCBResult};
 use crate::mvcc::{Mvcc, Writer};
@@ -7,6 +6,7 @@ use crate::page::Page;
 use crate::tags_tree_nodes::{
     TagHash, TagInternalNode, TagLeafNode, TagsInternalNode, TagsLeafNode, TagsLeafValue,
 };
+use std::collections::HashMap;
 
 /// Insert a Position into the tags tree at the given TagHash key.
 ///
@@ -599,7 +599,13 @@ enum IterState {
 }
 
 impl<'a> TagsTreeIterator<'a> {
-    pub fn new(db: &'a Mvcc, dirty: &'a HashMap<PageID, Page>, tags_root_id: PageID, tag: TagHash, after: Position) -> Self {
+    pub fn new(
+        db: &'a Mvcc,
+        dirty: &'a HashMap<PageID, Page>,
+        tags_root_id: PageID,
+        tag: TagHash,
+        after: Position,
+    ) -> Self {
         Self {
             db,
             dirty,
@@ -742,13 +748,10 @@ impl<'a> TagsTreeIterator<'a> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::mvcc::Mvcc;
-    // use std::hint;
-    // use std::time::Instant;
     use tempfile::{TempDir, tempdir};
 
     static VERBOSE: bool = false;
@@ -765,7 +768,11 @@ mod tests {
         n.to_le_bytes()
     }
 
-    fn tags_tree_lookup(mvcc: &Mvcc, tags_root_id: PageID, tag: TagHash) -> DCBResult<Vec<Position>> {
+    fn tags_tree_lookup(
+        mvcc: &Mvcc,
+        tags_root_id: PageID,
+        tag: TagHash,
+    ) -> DCBResult<Vec<Position>> {
         // Reuse the iterator to traverse and collect all positions for the tag
         let dirty = HashMap::new();
         let iter = TagsTreeIterator::new(mvcc, &dirty, tags_root_id, tag, Position(0));
@@ -1465,30 +1472,33 @@ mod tests {
         let dirty = HashMap::new();
 
         // after = 0 -> all positions
-        let collected_all: Vec<Position> = TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, tag, Position(0))
-            .collect();
+        let collected_all: Vec<Position> =
+            TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, tag, Position(0))
+                .collect();
         assert_eq!(collected_all, inserted);
 
         // after = first -> drop first
         let after_first = inserted[0];
-        let collected_after_first: Vec<Position> = TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, tag, after_first)
-            .collect();
+        let collected_after_first: Vec<Position> =
+            TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, tag, after_first)
+                .collect();
         assert_eq!(collected_after_first, inserted[1..].to_vec());
 
         // after = middle -> drop up to and including that element
         let after_mid = inserted[2];
-        let collected_after_mid: Vec<Position> = TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, tag, after_mid)
-            .collect();
+        let collected_after_mid: Vec<Position> =
+            TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, tag, after_mid).collect();
         assert_eq!(collected_after_mid, inserted[3..].to_vec());
 
         // after = last -> empty
         let after_last = *inserted.last().unwrap();
-        let collected_empty: Vec<Position> = TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, tag, after_last)
-            .collect();
+        let collected_empty: Vec<Position> =
+            TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, tag, after_last).collect();
         assert!(collected_empty.is_empty());
 
         // non-existent tag yields empty iterator regardless of after
-        let empty_iter = TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, th(9999), Position(0));
+        let empty_iter =
+            TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, th(9999), Position(0));
         assert_eq!(empty_iter.collect::<Vec<Position>>(), Vec::new());
     }
 

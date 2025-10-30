@@ -36,7 +36,6 @@ impl TagsLeafNode {
         total
     }
 
-
     /// No-allocation serialization into the provided buffer. Returns bytes written.
     pub fn serialize_into(&self, buf: &mut [u8]) -> usize {
         let mut i = 0usize;
@@ -177,7 +176,6 @@ impl TagsInternalNode {
         2 + (self.keys.len() * TAG_HASH_LEN) + (self.child_ids.len() * 8)
     }
 
-
     /// No-allocation serialization into the provided buffer. Returns bytes written.
     pub fn serialize_into(&self, buf: &mut [u8]) -> usize {
         let mut i = 0usize;
@@ -305,7 +303,6 @@ impl TagLeafNode {
         2 + (self.positions.len() * 8)
     }
 
-
     /// No-allocation serialization into the provided buffer. Returns bytes written.
     pub fn serialize_into(&self, buf: &mut [u8]) -> usize {
         let mut i = 0usize;
@@ -372,7 +369,6 @@ impl TagInternalNode {
         // 2 bytes for keys_len + 8 bytes per key + 8 bytes per child id (len implied)
         2 + (self.keys.len() * 8) + (self.child_ids.len() * 8)
     }
-
 
     /// No-allocation serialization into the provided buffer. Returns bytes written.
     pub fn serialize_into(&self, buf: &mut [u8]) -> usize {

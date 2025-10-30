@@ -12,7 +12,7 @@ use crate::events_tree::{EventIterator, event_tree_append, event_tree_lookup};
 use crate::events_tree_nodes::EventRecord;
 use crate::mvcc::{Mvcc, Writer};
 use crate::page::Page;
-use crate::tags_tree::{tags_tree_insert, TagsTreeIterator};
+use crate::tags_tree::{TagsTreeIterator, tags_tree_insert};
 use crate::tags_tree_nodes::TagHash;
 
 pub static DEFAULT_PAGE_SIZE: usize = 4096;
@@ -33,7 +33,9 @@ impl UmaDB {
             p.to_path_buf()
         };
         let mvcc = Mvcc::new(&file_path, DEFAULT_PAGE_SIZE, false)?;
-        Ok(Self { mvcc: std::sync::Arc::new(mvcc) })
+        Ok(Self {
+            mvcc: std::sync::Arc::new(mvcc),
+        })
     }
 
     pub fn from_arc(mvcc: std::sync::Arc<Mvcc>) -> Self {
@@ -72,7 +74,11 @@ impl UmaDB {
                 match found {
                     Ok(found_vec) => {
                         if let Some(matched) = found_vec.first() {
-                            let msg = format!("matching event: {:?}, condition: {:?}", matched, cond.fail_if_events_match.clone());
+                            let msg = format!(
+                                "matching event: {:?}, condition: {:?}",
+                                matched,
+                                cond.fail_if_events_match.clone()
+                            );
                             results.push(Err(DCBError::IntegrityError(msg)));
                             continue;
                         }
@@ -106,7 +112,6 @@ impl UmaDB {
     }
 }
 
-
 impl DCBEventStore for UmaDB {
     fn read(
         &self,
@@ -126,7 +131,15 @@ impl DCBEventStore for UmaDB {
         let after_pos = Position(after.unwrap_or(0));
 
         // Delegate to read_conditional
-        let events = read_conditional(mvcc, &HashMap::new(), reader.events_tree_root_id, reader.tags_tree_root_id, q, after_pos, limit)?;
+        let events = read_conditional(
+            mvcc,
+            &HashMap::new(),
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            q,
+            after_pos,
+            limit,
+        )?;
 
         // Compute head according to semantics
         let head = if limit.is_none() {
@@ -212,7 +225,11 @@ impl DCBReadResponse for ReadResponse {
 /// - insert the position for each tag into the tags tree
 ///
 /// Caller is responsible for committing the writer.
-pub fn unconditional_append(mvcc: &Mvcc, writer: &mut Writer, events: Vec<DCBEvent>) -> DCBResult<u64> {
+pub fn unconditional_append(
+    mvcc: &Mvcc,
+    writer: &mut Writer,
+    events: Vec<DCBEvent>,
+) -> DCBResult<u64> {
     let mut last_pos_u64: u64 = 0;
 
     for ev in events.into_iter() {
@@ -464,7 +481,9 @@ pub fn read_conditional(
             let item = &query.items[qii];
             // Type must match (or be unspecified)
             let type_ok = item.types.is_empty() || item.types.iter().any(|t| t == &rec.event_type);
-            if !type_ok { continue; }
+            if !type_ok {
+                continue;
+            }
             // Verify actual event tags contain all item tags (guards against tag-hash collisions)
             let tags_ok = item.tags.iter().all(|t| rec.tags.iter().any(|et| et == t));
             if tags_ok {
@@ -516,14 +535,15 @@ pub fn tag_to_hash(tag: &str) -> TagHash {
     value.to_le_bytes()
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dcb::{DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem};
+    use crate::dcb::{
+        DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem,
+    };
     use crate::page::Page;
-    use std::collections::HashMap;
     use serial_test::serial;
+    use std::collections::HashMap;
     use tempfile::tempdir;
 
     // Backward-compatible wrapper for tests: call new read_conditional with an empty dirty map
@@ -594,31 +614,74 @@ mod tests {
         // after = 0 -> all
         let reader = mvcc.reader().unwrap();
 
-        let all = read_conditional(&mut mvcc, reader.events_tree_root_id, reader.tags_tree_root_id, DCBQuery { items: vec![] }, Position(0), None).unwrap();
+        let all = read_conditional(
+            &mut mvcc,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            DCBQuery { items: vec![] },
+            Position(0),
+            None,
+        )
+        .unwrap();
         assert_eq!(all.len(), input.len());
         assert!(all.windows(2).all(|w| w[0].position < w[1].position));
 
         // after = first -> tail
         let first = all[0].position;
-        let tail =
-            read_conditional(&mut mvcc, reader.events_tree_root_id, reader.tags_tree_root_id, DCBQuery { items: vec![] }, Position(first), None).unwrap();
+        let tail = read_conditional(
+            &mut mvcc,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            DCBQuery { items: vec![] },
+            Position(first),
+            None,
+        )
+        .unwrap();
         assert_eq!(tail.len(), input.len() - 1);
 
         // after = last -> empty
         let last = all.last().unwrap().position;
-        let none =
-            read_conditional(&mut mvcc, reader.events_tree_root_id, reader.tags_tree_root_id, DCBQuery { items: vec![] }, Position(last), None).unwrap();
+        let none = read_conditional(
+            &mut mvcc,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            DCBQuery { items: vec![] },
+            Position(last),
+            None,
+        )
+        .unwrap();
         assert!(none.is_empty());
 
         // limits
-        let lim0 =
-            read_conditional(&mut mvcc, reader.events_tree_root_id, reader.tags_tree_root_id, DCBQuery { items: vec![] }, Position(0), Some(0)).unwrap();
+        let lim0 = read_conditional(
+            &mut mvcc,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            DCBQuery { items: vec![] },
+            Position(0),
+            Some(0),
+        )
+        .unwrap();
         assert!(lim0.is_empty());
-        let lim3 =
-            read_conditional(&mut mvcc, reader.events_tree_root_id, reader.tags_tree_root_id, DCBQuery { items: vec![] }, Position(0), Some(3)).unwrap();
+        let lim3 = read_conditional(
+            &mut mvcc,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            DCBQuery { items: vec![] },
+            Position(0),
+            Some(3),
+        )
+        .unwrap();
         assert_eq!(lim3.len(), 3);
-        let lim20 =
-            read_conditional(&mut mvcc, reader.events_tree_root_id, reader.tags_tree_root_id, DCBQuery { items: vec![] }, Position(0), Some(20)).unwrap();
+        let lim20 = read_conditional(
+            &mut mvcc,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            DCBQuery { items: vec![] },
+            Position(0),
+            Some(20),
+        )
+        .unwrap();
         assert_eq!(lim20.len(), input.len());
     }
 
@@ -633,7 +696,15 @@ mod tests {
             }],
         };
         let reader = db.reader().unwrap();
-        let res = read_conditional(&mut db, reader.events_tree_root_id, reader.tags_tree_root_id, qi.clone(), Position(0), None).unwrap();
+        let res = read_conditional(
+            &mut db,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            qi.clone(),
+            Position(0),
+            None,
+        )
+        .unwrap();
         assert_eq!(res.len(), 4);
         assert!(
             res.iter()
@@ -643,12 +714,20 @@ mod tests {
 
         // after combinations
         let positions: Vec<u64> = res.iter().map(|e| e.position).collect();
-        let after_first =
-            read_conditional(&mut db, reader.events_tree_root_id, reader.tags_tree_root_id, qi.clone(), Position(positions[0]), None).unwrap();
+        let after_first = read_conditional(
+            &mut db,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            qi.clone(),
+            Position(positions[0]),
+            None,
+        )
+        .unwrap();
         assert_eq!(after_first.len(), positions.len() - 1);
         let after_last = read_conditional(
             &mut db,
-            reader.events_tree_root_id, reader.tags_tree_root_id,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
             qi.clone(),
             Position(*positions.last().unwrap()),
             None,
@@ -657,11 +736,35 @@ mod tests {
         assert!(after_last.is_empty());
 
         // limits
-        let lim0 = read_conditional(&mut db, reader.events_tree_root_id, reader.tags_tree_root_id, qi.clone(), Position(0), Some(0)).unwrap();
+        let lim0 = read_conditional(
+            &mut db,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            qi.clone(),
+            Position(0),
+            Some(0),
+        )
+        .unwrap();
         assert!(lim0.is_empty());
-        let lim1 = read_conditional(&mut db, reader.events_tree_root_id, reader.tags_tree_root_id, qi.clone(), Position(0), Some(1)).unwrap();
+        let lim1 = read_conditional(
+            &mut db,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            qi.clone(),
+            Position(0),
+            Some(1),
+        )
+        .unwrap();
         assert_eq!(lim1.len(), 1);
-        let lim10 = read_conditional(&mut db, reader.events_tree_root_id, reader.tags_tree_root_id, qi, Position(0), Some(10)).unwrap();
+        let lim10 = read_conditional(
+            &mut db,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            qi,
+            Position(0),
+            Some(10),
+        )
+        .unwrap();
         assert_eq!(lim10.len(), 4);
     }
 
@@ -676,7 +779,15 @@ mod tests {
             }],
         };
         let reader = db.reader().unwrap();
-        let res = read_conditional(&mut db, reader.events_tree_root_id, reader.tags_tree_root_id, qi, Position(0), None).unwrap();
+        let res = read_conditional(
+            &mut db,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            qi,
+            Position(0),
+            None,
+        )
+        .unwrap();
         assert_eq!(res.len(), 2);
         assert!(
             res.iter()
@@ -699,7 +810,15 @@ mod tests {
             }],
         };
         let reader = db.reader().unwrap();
-        let res = read_conditional(&mut db, reader.events_tree_root_id, reader.tags_tree_root_id, qi, Position(0), None).unwrap();
+        let res = read_conditional(
+            &mut db,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            qi,
+            Position(0),
+            None,
+        )
+        .unwrap();
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].event.event_type, "Type0");
         assert!(res[0].event.tags.iter().any(|t| t == "alpha"));
@@ -716,12 +835,18 @@ mod tests {
             }],
         };
         let reader = db.reader().unwrap();
-        let alpha_positions: Vec<u64> =
-            read_conditional(&mut db, reader.events_tree_root_id, reader.tags_tree_root_id, alpha_only.clone(), Position(0), None)
-                .unwrap()
-                .into_iter()
-                .map(|e| e.position)
-                .collect();
+        let alpha_positions: Vec<u64> = read_conditional(
+            &mut db,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            alpha_only.clone(),
+            Position(0),
+            None,
+        )
+        .unwrap()
+        .into_iter()
+        .map(|e| e.position)
+        .collect();
 
         // Overlapping items: alpha OR (alpha AND gamma) should deduplicate
         let query = DCBQuery {
@@ -736,7 +861,15 @@ mod tests {
                 },
             ],
         };
-        let res = read_conditional(&mut db, reader.events_tree_root_id, reader.tags_tree_root_id, query, Position(0), None).unwrap();
+        let res = read_conditional(
+            &mut db,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            query,
+            Position(0),
+            None,
+        )
+        .unwrap();
         let res_positions: Vec<u64> = res.into_iter().map(|e| e.position).collect();
         assert_eq!(res_positions, alpha_positions);
     }
@@ -781,17 +914,41 @@ mod tests {
             }],
         };
         let reader = db.reader().unwrap();
-        let res = read_conditional(&mut db, reader.events_tree_root_id, reader.tags_tree_root_id, qi.clone(), Position(0), None).unwrap();
+        let res = read_conditional(
+            &mut db,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            qi.clone(),
+            Position(0),
+            None,
+        )
+        .unwrap();
         assert_eq!(res.len(), 2);
         assert!(res.iter().all(|e| e.event.event_type == "TypeA"));
 
         // After skip first matching
         let first_pos = res[0].position;
-        let res_after = read_conditional(&mut db, reader.events_tree_root_id, reader.tags_tree_root_id, qi.clone(), Position(first_pos), None).unwrap();
+        let res_after = read_conditional(
+            &mut db,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            qi.clone(),
+            Position(first_pos),
+            None,
+        )
+        .unwrap();
         assert_eq!(res_after.len(), 1);
 
         // Limit 1
-        let res_lim1 = read_conditional(&mut db, reader.events_tree_root_id, reader.tags_tree_root_id, qi, Position(0), Some(1)).unwrap();
+        let res_lim1 = read_conditional(
+            &mut db,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            qi,
+            Position(0),
+            Some(1),
+        )
+        .unwrap();
         assert_eq!(res_lim1.len(), 1);
     }
 
@@ -808,14 +965,38 @@ mod tests {
         };
 
         let reader = db.reader().unwrap();
-        let all = read_conditional(&mut db, reader.events_tree_root_id, reader.tags_tree_root_id, qi.clone(), Position(0), None).unwrap();
+        let all = read_conditional(
+            &mut db,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            qi.clone(),
+            Position(0),
+            None,
+        )
+        .unwrap();
         assert_eq!(all.len(), input.len());
 
         // After and limit still apply
         let first = all[0].position;
-        let tail = read_conditional(&mut db, reader.events_tree_root_id, reader.tags_tree_root_id, qi.clone(), Position(first), None).unwrap();
+        let tail = read_conditional(
+            &mut db,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            qi.clone(),
+            Position(first),
+            None,
+        )
+        .unwrap();
         assert_eq!(tail.len(), input.len() - 1);
-        let lim5 = read_conditional(&mut db, reader.events_tree_root_id, reader.tags_tree_root_id, qi, Position(0), Some(5)).unwrap();
+        let lim5 = read_conditional(
+            &mut db,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            qi,
+            Position(0),
+            Some(5),
+        )
+        .unwrap();
         assert_eq!(lim5.len(), 5);
     }
 
@@ -934,20 +1115,38 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let store = UmaDB::new(temp_dir.path()).unwrap();
 
-        let e1 = DCBEvent { event_type: "A".into(), data: b"1".to_vec(), tags: vec!["t1".into()] };
-        let e2 = DCBEvent { event_type: "B".into(), data: b"2".to_vec(), tags: vec!["t2".into()] };
-        let e3 = DCBEvent { event_type: "C".into(), data: b"3".to_vec(), tags: vec!["t3".into()] };
+        let e1 = DCBEvent {
+            event_type: "A".into(),
+            data: b"1".to_vec(),
+            tags: vec!["t1".into()],
+        };
+        let e2 = DCBEvent {
+            event_type: "B".into(),
+            data: b"2".to_vec(),
+            tags: vec!["t2".into()],
+        };
+        let e3 = DCBEvent {
+            event_type: "C".into(),
+            data: b"3".to_vec(),
+            tags: vec!["t3".into()],
+        };
 
         // Batch: first succeeds, second fails due to condition matching any event, third succeeds (after high position)
         let items = vec![
             (vec![e1.clone()], None),
             (
                 vec![e2.clone()],
-                Some(DCBAppendCondition { fail_if_events_match: DCBQuery::default(), after: None }),
+                Some(DCBAppendCondition {
+                    fail_if_events_match: DCBQuery::default(),
+                    after: None,
+                }),
             ),
             (
                 vec![e3.clone()],
-                Some(DCBAppendCondition { fail_if_events_match: DCBQuery::default(), after: Some(10) }),
+                Some(DCBAppendCondition {
+                    fail_if_events_match: DCBQuery::default(),
+                    after: Some(10),
+                }),
             ),
         ];
 
@@ -984,27 +1183,65 @@ mod tests {
         let store = UmaDB::new(temp_dir.path()).unwrap();
 
         // Item1 introduces tag "x"; Item2 condition queries tag "x" and must see it via dirty tags tree; Item3 uses after to ignore it
-        let e1 = DCBEvent { event_type: "T".into(), data: b"one".to_vec(), tags: vec!["x".into()] };
-        let e2 = DCBEvent { event_type: "T".into(), data: b"two".to_vec(), tags: vec!["y".into()] };
-        let e3 = DCBEvent { event_type: "T".into(), data: b"three".to_vec(), tags: vec!["z".into()] };
+        let e1 = DCBEvent {
+            event_type: "T".into(),
+            data: b"one".to_vec(),
+            tags: vec!["x".into()],
+        };
+        let e2 = DCBEvent {
+            event_type: "T".into(),
+            data: b"two".to_vec(),
+            tags: vec!["y".into()],
+        };
+        let e3 = DCBEvent {
+            event_type: "T".into(),
+            data: b"three".to_vec(),
+            tags: vec!["z".into()],
+        };
 
-        let query_tag_x = DCBQuery { items: vec![DCBQueryItem { types: vec![], tags: vec!["x".into()] }] };
+        let query_tag_x = DCBQuery {
+            items: vec![DCBQueryItem {
+                types: vec![],
+                tags: vec!["x".into()],
+            }],
+        };
 
         let items = vec![
             // 1) Append e1 (tag x)
             (vec![e1.clone()], None),
             // 2) Attempt append e2, but fail if any events with tag x exist after None (i.e., from the start); should fail due to e1 in dirty pages
-            (vec![e2.clone()], Some(DCBAppendCondition { fail_if_events_match: query_tag_x.clone(), after: None })),
+            (
+                vec![e2.clone()],
+                Some(DCBAppendCondition {
+                    fail_if_events_match: query_tag_x.clone(),
+                    after: None,
+                }),
+            ),
             // 3) Append e3 with condition that ignores position 1 by using after=Some(1); should pass
-            (vec![e3.clone()], Some(DCBAppendCondition { fail_if_events_match: query_tag_x.clone(), after: Some(1) })),
+            (
+                vec![e3.clone()],
+                Some(DCBAppendCondition {
+                    fail_if_events_match: query_tag_x.clone(),
+                    after: Some(1),
+                }),
+            ),
         ];
 
         let results = store.append_batch(items).unwrap();
 
         assert_eq!(results.len(), 3);
-        match &results[0] { Ok(pos) => assert_eq!(*pos, 1), Err(e) => panic!("unexpected error for first item: {:?}", e) }
-        match &results[1] { Ok(pos) => panic!("expected integrity error, got Ok({})", pos), Err(e) => assert!(matches!(e, DCBError::IntegrityError(_))) }
-        match &results[2] { Ok(pos) => assert_eq!(*pos, 2), Err(e) => panic!("unexpected error for third item: {:?}", e) }
+        match &results[0] {
+            Ok(pos) => assert_eq!(*pos, 1),
+            Err(e) => panic!("unexpected error for first item: {:?}", e),
+        }
+        match &results[1] {
+            Ok(pos) => panic!("expected integrity error, got Ok({})", pos),
+            Err(e) => assert!(matches!(e, DCBError::IntegrityError(_))),
+        }
+        match &results[2] {
+            Ok(pos) => assert_eq!(*pos, 2),
+            Err(e) => panic!("unexpected error for third item: {:?}", e),
+        }
 
         // Verify committed state and tag index behavior
         let (events, head) = store.read_with_head(None, None, None).unwrap();
@@ -1014,7 +1251,9 @@ mod tests {
         assert_eq!(head, Some(2));
 
         // Query by tag x returns only the first event
-        let (tagx_events, _) = store.read_with_head(Some(query_tag_x.clone()), None, None).unwrap();
+        let (tagx_events, _) = store
+            .read_with_head(Some(query_tag_x.clone()), None, None)
+            .unwrap();
         assert_eq!(tagx_events.len(), 1);
         assert_eq!(tagx_events[0].event.data, e1.data);
     }
@@ -1025,38 +1264,101 @@ mod tests {
         let store = UmaDB::new(temp_dir.path()).unwrap();
 
         // Prepare events
-        let small = DCBEvent { event_type: "S".into(), data: b"sm".to_vec(), tags: vec!["tS".into()] };
+        let small = DCBEvent {
+            event_type: "S".into(),
+            data: b"sm".to_vec(),
+            tags: vec!["tS".into()],
+        };
         // Large data to ensure it spills into event overflow pages
         let big_data_len = super::DEFAULT_PAGE_SIZE * 3; // 3 pages worth to be safe
-        let big = DCBEvent { event_type: "B".into(), data: vec![0xAB; big_data_len], tags: vec!["tB".into()] };
-        let filler1 = DCBEvent { event_type: "X".into(), data: b"x".to_vec(), tags: vec![] };
-        let filler2 = DCBEvent { event_type: "Y".into(), data: b"y".to_vec(), tags: vec![] };
-        let final_ok = DCBEvent { event_type: "C".into(), data: b"c".to_vec(), tags: vec![] };
+        let big = DCBEvent {
+            event_type: "B".into(),
+            data: vec![0xAB; big_data_len],
+            tags: vec!["tB".into()],
+        };
+        let filler1 = DCBEvent {
+            event_type: "X".into(),
+            data: b"x".to_vec(),
+            tags: vec![],
+        };
+        let filler2 = DCBEvent {
+            event_type: "Y".into(),
+            data: b"y".to_vec(),
+            tags: vec![],
+        };
+        let final_ok = DCBEvent {
+            event_type: "C".into(),
+            data: b"c".to_vec(),
+            tags: vec![],
+        };
 
         // Queries by type only (no tags) to force fallback path over events tree (which reads from dirty pages)
-        let q_type_s = DCBQuery { items: vec![DCBQueryItem { types: vec!["S".into()], tags: vec![] }] };
-        let q_type_b = DCBQuery { items: vec![DCBQueryItem { types: vec!["B".into()], tags: vec![] }] };
+        let q_type_s = DCBQuery {
+            items: vec![DCBQueryItem {
+                types: vec!["S".into()],
+                tags: vec![],
+            }],
+        };
+        let q_type_b = DCBQuery {
+            items: vec![DCBQueryItem {
+                types: vec!["B".into()],
+                tags: vec![],
+            }],
+        };
 
         let items = vec![
             // 1) Append small S
             (vec![small.clone()], None),
             // 2) Should fail because type S exists in dirty pages (after None)
-            (vec![filler1.clone()], Some(DCBAppendCondition { fail_if_events_match: q_type_s.clone(), after: None })),
+            (
+                vec![filler1.clone()],
+                Some(DCBAppendCondition {
+                    fail_if_events_match: q_type_s.clone(),
+                    after: None,
+                }),
+            ),
             // 3) Append big B (overflow)
             (vec![big.clone()], None),
             // 4) Should fail because type B exists in dirty pages (after None)
-            (vec![filler2.clone()], Some(DCBAppendCondition { fail_if_events_match: q_type_b.clone(), after: None })),
+            (
+                vec![filler2.clone()],
+                Some(DCBAppendCondition {
+                    fail_if_events_match: q_type_b.clone(),
+                    after: None,
+                }),
+            ),
             // 5) Should succeed because after=Some(2) ignores positions <= 2 (small at 1, big at 2)
-            (vec![final_ok.clone()], Some(DCBAppendCondition { fail_if_events_match: q_type_b.clone(), after: Some(2) })),
+            (
+                vec![final_ok.clone()],
+                Some(DCBAppendCondition {
+                    fail_if_events_match: q_type_b.clone(),
+                    after: Some(2),
+                }),
+            ),
         ];
 
         let results = store.append_batch(items).unwrap();
         assert_eq!(results.len(), 5);
-        match &results[0] { Ok(pos) => assert_eq!(*pos, 1), other => panic!("unexpected for item0: {:?}", other) }
-        match &results[1] { Err(DCBError::IntegrityError(_)) => {}, other => panic!("expected IntegrityError for item1, got {:?}", other) }
-        match &results[2] { Ok(pos) => assert_eq!(*pos, 2), other => panic!("unexpected for item2: {:?}", other) }
-        match &results[3] { Err(DCBError::IntegrityError(_)) => {}, other => panic!("expected IntegrityError for item3, got {:?}", other) }
-        match &results[4] { Ok(pos) => assert_eq!(*pos, 3), other => panic!("unexpected for item4: {:?}", other) }
+        match &results[0] {
+            Ok(pos) => assert_eq!(*pos, 1),
+            other => panic!("unexpected for item0: {:?}", other),
+        }
+        match &results[1] {
+            Err(DCBError::IntegrityError(_)) => {}
+            other => panic!("expected IntegrityError for item1, got {:?}", other),
+        }
+        match &results[2] {
+            Ok(pos) => assert_eq!(*pos, 2),
+            other => panic!("unexpected for item2: {:?}", other),
+        }
+        match &results[3] {
+            Err(DCBError::IntegrityError(_)) => {}
+            other => panic!("expected IntegrityError for item3, got {:?}", other),
+        }
+        match &results[4] {
+            Ok(pos) => assert_eq!(*pos, 3),
+            other => panic!("unexpected for item4: {:?}", other),
+        }
 
         // Verify committed state: we should have small (pos1), big (pos2), final_ok (pos3)
         let (events, head) = store.read_with_head(None, None, None).unwrap();
@@ -1067,11 +1369,15 @@ mod tests {
         assert_eq!(head, Some(3));
 
         // Check type queries and large data integrity
-        let (small_by_type, _) = store.read_with_head(Some(q_type_s.clone()), None, None).unwrap();
+        let (small_by_type, _) = store
+            .read_with_head(Some(q_type_s.clone()), None, None)
+            .unwrap();
         assert_eq!(small_by_type.len(), 1);
         assert_eq!(small_by_type[0].event.event_type, "S");
 
-        let (big_by_type, _) = store.read_with_head(Some(q_type_b.clone()), None, None).unwrap();
+        let (big_by_type, _) = store
+            .read_with_head(Some(q_type_b.clone()), None, None)
+            .unwrap();
         assert_eq!(big_by_type.len(), 1);
         assert_eq!(big_by_type[0].event.event_type, "B");
         assert_eq!(big_by_type[0].event.data.len(), big_data_len);
@@ -1084,39 +1390,102 @@ mod tests {
         let store = UmaDB::new(temp_dir.path()).unwrap();
 
         // Small inline event: type "S" with tag "x"
-        let small = DCBEvent { event_type: "S".into(), data: b"sm".to_vec(), tags: vec!["x".into()] };
+        let small = DCBEvent {
+            event_type: "S".into(),
+            data: b"sm".to_vec(),
+            tags: vec!["x".into()],
+        };
         // Big overflow event: type "B" with tag "y" and large payload to exercise overflow pages
         let big_data_len = super::DEFAULT_PAGE_SIZE * 3; // ensure multiple overflow pages
-        let big = DCBEvent { event_type: "B".into(), data: vec![0xCD; big_data_len], tags: vec!["y".into()] };
+        let big = DCBEvent {
+            event_type: "B".into(),
+            data: vec![0xCD; big_data_len],
+            tags: vec!["y".into()],
+        };
         // Fillers that will be conditioned out
-        let filler1 = DCBEvent { event_type: "X".into(), data: b"x".to_vec(), tags: vec![] };
-        let filler2 = DCBEvent { event_type: "Y".into(), data: b"y".to_vec(), tags: vec![] };
-        let final_ok = DCBEvent { event_type: "C".into(), data: b"c".to_vec(), tags: vec![] };
+        let filler1 = DCBEvent {
+            event_type: "X".into(),
+            data: b"x".to_vec(),
+            tags: vec![],
+        };
+        let filler2 = DCBEvent {
+            event_type: "Y".into(),
+            data: b"y".to_vec(),
+            tags: vec![],
+        };
+        let final_ok = DCBEvent {
+            event_type: "C".into(),
+            data: b"c".to_vec(),
+            tags: vec![],
+        };
 
         // Conditions combining tags and types so the tags index is used and the type filter applies after lookup
-        let q_s_and_x = DCBQuery { items: vec![DCBQueryItem { types: vec!["S".into()], tags: vec!["x".into()] }] };
-        let q_b_and_y = DCBQuery { items: vec![DCBQueryItem { types: vec!["B".into()], tags: vec!["y".into()] }] };
+        let q_s_and_x = DCBQuery {
+            items: vec![DCBQueryItem {
+                types: vec!["S".into()],
+                tags: vec!["x".into()],
+            }],
+        };
+        let q_b_and_y = DCBQuery {
+            items: vec![DCBQueryItem {
+                types: vec!["B".into()],
+                tags: vec!["y".into()],
+            }],
+        };
 
         let items = vec![
             // 1) Append small S@x
             (vec![small.clone()], None),
             // 2) Should fail because S@x exists in dirty pages (tags path + type filter)
-            (vec![filler1.clone()], Some(DCBAppendCondition { fail_if_events_match: q_s_and_x.clone(), after: None })),
+            (
+                vec![filler1.clone()],
+                Some(DCBAppendCondition {
+                    fail_if_events_match: q_s_and_x.clone(),
+                    after: None,
+                }),
+            ),
             // 3) Append big B@y (overflow)
             (vec![big.clone()], None),
             // 4) Should fail because B@y exists in dirty pages (tags path + type filter and overflow read)
-            (vec![filler2.clone()], Some(DCBAppendCondition { fail_if_events_match: q_b_and_y.clone(), after: None })),
+            (
+                vec![filler2.clone()],
+                Some(DCBAppendCondition {
+                    fail_if_events_match: q_b_and_y.clone(),
+                    after: None,
+                }),
+            ),
             // 5) Should succeed because after=Some(2) ignores positions <= 2 (small at 1, big at 2)
-            (vec![final_ok.clone()], Some(DCBAppendCondition { fail_if_events_match: q_b_and_y.clone(), after: Some(2) })),
+            (
+                vec![final_ok.clone()],
+                Some(DCBAppendCondition {
+                    fail_if_events_match: q_b_and_y.clone(),
+                    after: Some(2),
+                }),
+            ),
         ];
 
         let results = store.append_batch(items).unwrap();
         assert_eq!(results.len(), 5);
-        match &results[0] { Ok(pos) => assert_eq!(*pos, 1), other => panic!("unexpected for item0: {:?}", other) }
-        match &results[1] { Err(DCBError::IntegrityError(_)) => {}, other => panic!("expected IntegrityError for item1, got {:?}", other) }
-        match &results[2] { Ok(pos) => assert_eq!(*pos, 2), other => panic!("unexpected for item2: {:?}", other) }
-        match &results[3] { Err(DCBError::IntegrityError(_)) => {}, other => panic!("expected IntegrityError for item3, got {:?}", other) }
-        match &results[4] { Ok(pos) => assert_eq!(*pos, 3), other => panic!("unexpected for item4: {:?}", other) }
+        match &results[0] {
+            Ok(pos) => assert_eq!(*pos, 1),
+            other => panic!("unexpected for item0: {:?}", other),
+        }
+        match &results[1] {
+            Err(DCBError::IntegrityError(_)) => {}
+            other => panic!("expected IntegrityError for item1, got {:?}", other),
+        }
+        match &results[2] {
+            Ok(pos) => assert_eq!(*pos, 2),
+            other => panic!("unexpected for item2: {:?}", other),
+        }
+        match &results[3] {
+            Err(DCBError::IntegrityError(_)) => {}
+            other => panic!("expected IntegrityError for item3, got {:?}", other),
+        }
+        match &results[4] {
+            Ok(pos) => assert_eq!(*pos, 3),
+            other => panic!("unexpected for item4: {:?}", other),
+        }
 
         // Verify committed state and order
         let (events, head) = store.read_with_head(None, None, None).unwrap();
@@ -1127,12 +1496,16 @@ mod tests {
         assert_eq!(head, Some(3));
 
         // Query by combined type+tag should return exactly one for each
-        let (small_combined, _) = store.read_with_head(Some(q_s_and_x.clone()), None, None).unwrap();
+        let (small_combined, _) = store
+            .read_with_head(Some(q_s_and_x.clone()), None, None)
+            .unwrap();
         assert_eq!(small_combined.len(), 1);
         assert_eq!(small_combined[0].event.event_type, "S");
         assert!(small_combined[0].event.tags.iter().any(|t| t == "x"));
 
-        let (big_combined, _) = store.read_with_head(Some(q_b_and_y.clone()), None, None).unwrap();
+        let (big_combined, _) = store
+            .read_with_head(Some(q_b_and_y.clone()), None, None)
+            .unwrap();
         assert_eq!(big_combined.len(), 1);
         assert_eq!(big_combined[0].event.event_type, "B");
         assert!(big_combined[0].event.tags.iter().any(|t| t == "y"));

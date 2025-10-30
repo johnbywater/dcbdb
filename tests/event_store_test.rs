@@ -1,13 +1,14 @@
 use umadb::dcb::{
-    DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem, DCBSequencedEvent,
+    DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem,
+    DCBSequencedEvent,
 };
 // gRPC client sync trait support has been removed; tests use the local EventStore
-use umadb::db::UmaDB;
-use tempfile::tempdir;
-use uuid::Uuid;
-use umadb::grpc::{AsyncUmaDBClient, start_server};
-use tokio::runtime::Builder as RtBuilder;
 use std::net::TcpListener;
+use tempfile::tempdir;
+use tokio::runtime::Builder as RtBuilder;
+use umadb::db::UmaDB;
+use umadb::grpc::{AsyncUmaDBClient, start_server};
+use uuid::Uuid;
 // Import the EventStore and related types from the main crate
 
 // Helper function to run the test with implementations of the DCBEventStore trait
@@ -831,14 +832,12 @@ pub fn dcb_event_store_test<T: DCBEventStore>(event_store: &T) {
     assert_eq!(Some(13), head_position);
 }
 
-
 #[test]
 fn test_direct_event_store() {
     let temp_dir = tempdir().unwrap();
     let event_store = UmaDB::new(temp_dir.path()).unwrap();
     dcb_event_store_test(&event_store);
 }
-
 
 #[test]
 fn test_tag_hash_collision() {
@@ -878,7 +877,11 @@ fn test_tag_hash_collision() {
             None,
         )
         .unwrap();
-    assert_eq!(1, result.len(), "Query by student tag should return exactly 1 event");
+    assert_eq!(
+        1,
+        result.len(),
+        "Query by student tag should return exactly 1 event"
+    );
     assert_eq!(ev_student.event_type, result[0].event.event_type);
     assert_eq!(ev_student.tags, result[0].event.tags);
 
@@ -895,7 +898,11 @@ fn test_tag_hash_collision() {
             None,
         )
         .unwrap();
-    assert_eq!(1, result.len(), "Query by course tag should return exactly 1 event");
+    assert_eq!(
+        1,
+        result.len(),
+        "Query by course tag should return exactly 1 event"
+    );
     assert_eq!(ev_course.event_type, result[0].event.event_type);
     assert_eq!(ev_course.tags, result[0].event.tags);
 
@@ -904,15 +911,25 @@ fn test_tag_hash_collision() {
         .read_with_head(
             Some(DCBQuery {
                 items: vec![
-                    DCBQueryItem { types: vec![], tags: vec![student_tag.clone()] },
-                    DCBQueryItem { types: vec![], tags: vec![course_tag.clone()] },
+                    DCBQueryItem {
+                        types: vec![],
+                        tags: vec![student_tag.clone()],
+                    },
+                    DCBQueryItem {
+                        types: vec![],
+                        tags: vec![course_tag.clone()],
+                    },
                 ],
             }),
             None,
             None,
         )
         .unwrap();
-    assert_eq!(2, result.len(), "OR query across both tags should return 2 events");
+    assert_eq!(
+        2,
+        result.len(),
+        "OR query across both tags should return 2 events"
+    );
     let types: Vec<String> = result.into_iter().map(|e| e.event.event_type).collect();
     assert!(types.contains(&"StudentEvent".to_string()));
     assert!(types.contains(&"CourseEvent".to_string()));
@@ -995,7 +1012,9 @@ impl<'a> Iterator for SyncReadResponse<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         // If current buffer exhausted, fetch the next batch from the async stream
         if self.buf_idx >= self.buffer.len() {
-            if self.finished { return None; }
+            if self.finished {
+                return None;
+            }
             let batch = self
                 .rt
                 .block_on(self.resp.next_batch())
@@ -1014,10 +1033,14 @@ impl<'a> Iterator for SyncReadResponse<'a> {
 }
 
 impl<'a> umadb::dcb::DCBReadResponse for SyncReadResponse<'a> {
-    fn head(&self) -> Option<u64> { self.head }
+    fn head(&self) -> Option<u64> {
+        self.head
+    }
     fn collect_with_head(&mut self) -> (Vec<DCBSequencedEvent>, Option<u64>) {
         let mut out = Vec::new();
-        while let Some(e) = self.next() { out.push(e); }
+        while let Some(e) = self.next() {
+            out.push(e);
+        }
         (out, self.head)
     }
     fn next_batch(&mut self) -> Result<Vec<DCBSequencedEvent>, DCBError> {
@@ -1027,11 +1050,13 @@ impl<'a> umadb::dcb::DCBReadResponse for SyncReadResponse<'a> {
             self.buf_idx = self.buffer.len();
             return Ok(out);
         }
-        if self.finished { return Ok(Vec::new()); }
-        let batch = self
-            .rt
-            .block_on(self.resp.next_batch())?;
-        if batch.is_empty() { self.finished = true; }
+        if self.finished {
+            return Ok(Vec::new());
+        }
+        let batch = self.rt.block_on(self.resp.next_batch())?;
+        if batch.is_empty() {
+            self.finished = true;
+        }
         Ok(batch)
     }
 }
@@ -1045,8 +1070,13 @@ impl DCBEventStore for SyncUmaDBClient {
         subscribe: bool,
     ) -> Result<Box<dyn umadb::dcb::DCBReadResponse + '_>, DCBError> {
         // We only support subscribe=false in this sync wrapper for tests
-        assert!(!subscribe, "SyncGrpcEventStore::read only supports subscribe=false in tests");
-        let mut resp = self.rt.block_on(self.client.read(query, after, limit, false, None))?;
+        assert!(
+            !subscribe,
+            "SyncGrpcEventStore::read only supports subscribe=false in tests"
+        );
+        let mut resp = self
+            .rt
+            .block_on(self.client.read(query, after, limit, false, None))?;
         // Cache head eagerly because DCBReadResponse::head() is synchronous
         let head = self.rt.block_on(async { resp.head().await })?;
         Ok(Box::new(SyncReadResponse {
@@ -1063,8 +1093,11 @@ impl DCBEventStore for SyncUmaDBClient {
         self.rt.block_on(self.client.head())
     }
 
-    fn append(&self, events: Vec<DCBEvent>, condition: Option<DCBAppendCondition>) -> Result<u64, DCBError> {
+    fn append(
+        &self,
+        events: Vec<DCBEvent>,
+        condition: Option<DCBAppendCondition>,
+    ) -> Result<u64, DCBError> {
         self.rt.block_on(self.client.append(events, condition))
     }
 }
-

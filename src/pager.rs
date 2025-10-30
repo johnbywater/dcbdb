@@ -1,6 +1,7 @@
 use crate::common::PageID;
 use crate::header_node::HeaderNode;
 use crate::page::calc_crc;
+use memmap2::{Mmap, MmapOptions};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -8,7 +9,6 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
-use memmap2::{Mmap, MmapOptions};
 // use memmap2::{Advice, Mmap, MmapOptions};
 
 // Pager for file I/O
@@ -86,7 +86,11 @@ impl Pager {
         // Minimum number of DB pages to reach at least the min window size
         let min_pages = (min_window_bytes + page_size - 1) / page_size; // ceil
         // Choose smallest multiple of align_pages that is >= min_pages
-        let k = if min_pages == 0 { 1 } else { (min_pages + align_pages - 1) / align_pages }; // ceil
+        let k = if min_pages == 0 {
+            1
+        } else {
+            (min_pages + align_pages - 1) / align_pages
+        }; // ceil
         let mmap_pages_per_map = align_pages * usize::max(1, k);
 
         Ok(Self {
@@ -324,7 +328,11 @@ impl Pager {
                     format!("Page {page_id:?} not found"),
                 ));
             }
-            return Ok(MappedPage { mmap: mmap_arc, start, len: self.page_size });
+            return Ok(MappedPage {
+                mmap: mmap_arc,
+                start,
+                len: self.page_size,
+            });
         }
 
         // Slow path: need to create the mapping with double-checked locking
@@ -344,7 +352,11 @@ impl Pager {
                     format!("Page {page_id:?} not found"),
                 ));
             }
-            return Ok(MappedPage { mmap: mmap_arc, start, len: self.page_size });
+            return Ok(MappedPage {
+                mmap: mmap_arc,
+                start,
+                len: self.page_size,
+            });
         }
 
         // Calculate standard mapping window length (does not depend on current file length)
@@ -399,7 +411,11 @@ impl Pager {
                 format!("Page {page_id:?} not found"),
             ));
         }
-        Ok(MappedPage { mmap: mmap_arc, start, len: self.page_size })
+        Ok(MappedPage {
+            mmap: mmap_arc,
+            start,
+            len: self.page_size,
+        })
     }
 
     pub fn flush(&self) -> io::Result<()> {
@@ -427,13 +443,12 @@ impl Pager {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::Pager;
     use crate::common::PageID;
-    use tempfile::tempdir;
     use std::path::PathBuf;
+    use tempfile::tempdir;
 
     fn temp_file_path(name: &str) -> PathBuf {
         let dir = tempdir().expect("tempdir");
@@ -507,7 +522,11 @@ mod tests {
         let _ = pager.read_page_mmap(PageID(0)).expect("read0m");
         assert_eq!(pager.debug_mmap_count(), 1, "first mmap created");
         let _ = pager.read_page_mmap(PageID(1)).expect("read1m");
-        assert_eq!(pager.debug_mmap_count(), 1, "should reuse same mmap for pages in same window");
+        assert_eq!(
+            pager.debug_mmap_count(),
+            1,
+            "should reuse same mmap for pages in same window"
+        );
     }
 
     #[test]

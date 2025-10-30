@@ -102,7 +102,6 @@ impl EventLeafNode {
         total_size
     }
 
-
     /// No-allocation serialization into the provided buffer. Returns number of bytes written.
     pub fn serialize_into(&self, buf: &mut [u8]) -> usize {
         let mut i = 0usize;
@@ -120,39 +119,60 @@ impl EventLeafNode {
         for value in &self.values {
             match value {
                 EventValue::Inline(rec) => {
-                    buf[i] = 0u8; i += 1;
+                    buf[i] = 0u8;
+                    i += 1;
                     let et_len = rec.event_type.len() as u16;
-                    buf[i..i + 2].copy_from_slice(&et_len.to_le_bytes()); i += 2;
+                    buf[i..i + 2].copy_from_slice(&et_len.to_le_bytes());
+                    i += 2;
                     let s = rec.event_type.as_bytes();
-                    buf[i..i + s.len()].copy_from_slice(s); i += s.len();
+                    buf[i..i + s.len()].copy_from_slice(s);
+                    i += s.len();
                     let dlen = rec.data.len() as u16;
-                    buf[i..i + 2].copy_from_slice(&dlen.to_le_bytes()); i += 2;
-                    buf[i..i + rec.data.len()].copy_from_slice(&rec.data); i += rec.data.len();
+                    buf[i..i + 2].copy_from_slice(&dlen.to_le_bytes());
+                    i += 2;
+                    buf[i..i + rec.data.len()].copy_from_slice(&rec.data);
+                    i += rec.data.len();
                     let tlen = rec.tags.len() as u16;
-                    buf[i..i + 2].copy_from_slice(&tlen.to_le_bytes()); i += 2;
+                    buf[i..i + 2].copy_from_slice(&tlen.to_le_bytes());
+                    i += 2;
                     for tag in &rec.tags {
                         let tl = tag.len() as u16;
-                        buf[i..i + 2].copy_from_slice(&tl.to_le_bytes()); i += 2;
+                        buf[i..i + 2].copy_from_slice(&tl.to_le_bytes());
+                        i += 2;
                         let tb = tag.as_bytes();
-                        buf[i..i + tb.len()].copy_from_slice(tb); i += tb.len();
+                        buf[i..i + tb.len()].copy_from_slice(tb);
+                        i += tb.len();
                     }
                 }
-                EventValue::Overflow { event_type, data_len, tags, root_id } => {
-                    buf[i] = 1u8; i += 1;
+                EventValue::Overflow {
+                    event_type,
+                    data_len,
+                    tags,
+                    root_id,
+                } => {
+                    buf[i] = 1u8;
+                    i += 1;
                     let et_len = event_type.len() as u16;
-                    buf[i..i + 2].copy_from_slice(&et_len.to_le_bytes()); i += 2;
+                    buf[i..i + 2].copy_from_slice(&et_len.to_le_bytes());
+                    i += 2;
                     let s = event_type.as_bytes();
-                    buf[i..i + s.len()].copy_from_slice(s); i += s.len();
-                    buf[i..i + 8].copy_from_slice(&data_len.to_le_bytes()); i += 8;
+                    buf[i..i + s.len()].copy_from_slice(s);
+                    i += s.len();
+                    buf[i..i + 8].copy_from_slice(&data_len.to_le_bytes());
+                    i += 8;
                     let tlen = tags.len() as u16;
-                    buf[i..i + 2].copy_from_slice(&tlen.to_le_bytes()); i += 2;
+                    buf[i..i + 2].copy_from_slice(&tlen.to_le_bytes());
+                    i += 2;
                     for tag in tags {
                         let tl = tag.len() as u16;
-                        buf[i..i + 2].copy_from_slice(&tl.to_le_bytes()); i += 2;
+                        buf[i..i + 2].copy_from_slice(&tl.to_le_bytes());
+                        i += 2;
                         let tb = tag.as_bytes();
-                        buf[i..i + tb.len()].copy_from_slice(tb); i += tb.len();
+                        buf[i..i + tb.len()].copy_from_slice(tb);
+                        i += tb.len();
                     }
-                    buf[i..i + 8].copy_from_slice(&root_id.0.to_le_bytes()); i += 8;
+                    buf[i..i + 8].copy_from_slice(&root_id.0.to_le_bytes());
+                    i += 8;
                 }
             }
         }
@@ -382,8 +402,14 @@ impl EventLeafNode {
     }
 
     pub fn pop_last_key_and_value(&mut self) -> DCBResult<(Position, EventValue)> {
-        let last_key = self.keys.pop().expect("EventLeafNode should have some keys");
-        let last_value = self.values.pop().expect("EventLeafNode should have some values");
+        let last_key = self
+            .keys
+            .pop()
+            .expect("EventLeafNode should have some keys");
+        let last_value = self
+            .values
+            .pop()
+            .expect("EventLeafNode should have some values");
         Ok((last_key, last_value))
     }
 }
@@ -399,7 +425,6 @@ impl EventOverflowNode {
         // 8 bytes for next + data bytes
         8 + self.data.len()
     }
-
 
     pub fn serialize_into(&self, buf: &mut [u8]) -> usize {
         let size = self.calc_serialized_size();
@@ -442,16 +467,18 @@ impl EventInternalNode {
         total_size
     }
 
-
     pub fn serialize_into(&self, buf: &mut [u8]) -> DCBResult<usize> {
         let mut i = 0usize;
         let klen = self.keys.len() as u16;
-        buf[i..i + 2].copy_from_slice(&klen.to_le_bytes()); i += 2;
+        buf[i..i + 2].copy_from_slice(&klen.to_le_bytes());
+        i += 2;
         for key in &self.keys {
-            buf[i..i + 8].copy_from_slice(&key.0.to_le_bytes()); i += 8;
+            buf[i..i + 8].copy_from_slice(&key.0.to_le_bytes());
+            i += 8;
         }
         for child_id in &self.child_ids {
-            buf[i..i + 8].copy_from_slice(&child_id.0.to_le_bytes()); i += 8;
+            buf[i..i + 8].copy_from_slice(&child_id.0.to_le_bytes());
+            i += 8;
         }
         Ok(i)
     }

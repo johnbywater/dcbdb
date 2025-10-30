@@ -1,8 +1,8 @@
-use std::cmp::max;
 use clap::Parser;
+use std::cmp::max;
+use std::time::Instant;
 use umadb::dcb::DCBEvent;
 use umadb::grpc::AsyncUmaDBClient;
-use std::time::Instant;
 
 #[derive(Parser)]
 #[command(author, version, about = "UmaDB Example Client", long_about = None)]
@@ -37,7 +37,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     println!("Appending event...");
-    let events_to_append = vec![event.clone(), event.clone(), event.clone(), event.clone(), event.clone()];
+    let events_to_append = vec![
+        event.clone(),
+        event.clone(),
+        event.clone(),
+        event.clone(),
+        event.clone(),
+    ];
     let events_len = events_to_append.len();
     let t_append = Instant::now();
     let position = client.append(events_to_append, None).await?;
@@ -62,21 +68,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let t_read = Instant::now();
     let head_opt = client.head().await?;
     let read_after_position = max(head_opt.unwrap_or(0).saturating_sub(tail as u64), 0);
-    let mut resp = client.read(
-        None,
-        Some(read_after_position),
-        Some(tail),
-        false,
-        Some(500),
-    )
-    .await?;
+    let mut resp = client
+        .read(
+            None,
+            Some(read_after_position),
+            Some(tail),
+            false,
+            Some(500),
+        )
+        .await?;
 
     // Iterate through the events from the async batched response
     let mut ev_count = 0usize;
     let mut total_bytes = 0usize;
     loop {
         let batch = resp.next_batch().await?;
-        if batch.is_empty() { break; }
+        if batch.is_empty() {
+            break;
+        }
         for event in batch.into_iter() {
             ev_count += 1;
             total_bytes += event.event.data.len();
@@ -92,7 +101,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("--- Timing summary ---");
     println!("Connect: {:?}", connect_elapsed);
-    println!("Append {events_len}: {:?} ({:.2} events/s)", append_elapsed, append_eps);
-    println!("Read {ev_count}:   {:?} ({:.2} events/s)", read_elapsed, read_eps);
+    println!(
+        "Append {events_len}: {:?} ({:.2} events/s)",
+        append_elapsed, append_eps
+    );
+    println!(
+        "Read {ev_count}:   {:?} ({:.2} events/s)",
+        read_elapsed, read_eps
+    );
     Ok(())
 }

@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main,  BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use umadb::common::{PageID, Position, Tsn};
 use umadb::header_node::HeaderNode;
 
@@ -24,7 +24,9 @@ pub fn header_node_benchmarks(c: &mut Criterion) {
         b.iter(|| {
             let mut v = black_box(Vec::<u8>::with_capacity(48));
             // ensure vec has length 48 so we can serialize into it
-            unsafe { v.set_len(48); }
+            unsafe {
+                v.set_len(48);
+            }
             black_box(&HEADER).serialize_into(black_box(&mut v));
             black_box(v)
         })
@@ -39,52 +41,66 @@ pub fn header_node_benchmarks(c: &mut Criterion) {
     });
 
     // Allocation-free serialization into a fixed stack buffer
-    group.bench_function(BenchmarkId::new("serialize_into_stack", header_size_bytes), |b| {
-        let mut buf = [0u8; 48];
-        b.iter(|| {
-            black_box(&HEADER).serialize_into(black_box(&mut buf));
-            black_box(&buf);
-        })
-    });
+    group.bench_function(
+        BenchmarkId::new("serialize_into_stack", header_size_bytes),
+        |b| {
+            let mut buf = [0u8; 48];
+            b.iter(|| {
+                black_box(&HEADER).serialize_into(black_box(&mut buf));
+                black_box(&buf);
+            })
+        },
+    );
 
     // Prepare serialized bytes once for deserialization benchmark (outside iter)
     let mut serialized = [0u8; 48];
     HEADER.serialize_into(&mut serialized);
 
     // Benchmark deserialization reusing the same bytes each iteration (pure from_slice; no cloning/allocation)
-    group.bench_function(BenchmarkId::new("deserialize_reuse", header_size_bytes), |b| {
-        b.iter(|| {
-            let node = HeaderNode::from_slice(black_box(&serialized)).expect("valid header bytes");
-            black_box(node)
-        })
-    });
+    group.bench_function(
+        BenchmarkId::new("deserialize_reuse", header_size_bytes),
+        |b| {
+            b.iter(|| {
+                let node =
+                    HeaderNode::from_slice(black_box(&serialized)).expect("valid header bytes");
+                black_box(node)
+            })
+        },
+    );
 
     // Benchmark deserialization immediately after a fresh serialize (setup does serialize; measure only from_slice)
-    group.bench_function(BenchmarkId::new("deserialize_after_serialize", header_size_bytes), |b| {
-        b.iter_batched(
-            || {
-                let mut buf = [0u8; 48];
-                HEADER.serialize_into(&mut buf);
-                buf
-            },
-            |bytes: [u8; 48]| {
-                let node = HeaderNode::from_slice(black_box(&bytes)).expect("valid header bytes");
-                black_box(node)
-            },
-            criterion::BatchSize::SmallInput,
-        )
-    });
+    group.bench_function(
+        BenchmarkId::new("deserialize_after_serialize", header_size_bytes),
+        |b| {
+            b.iter_batched(
+                || {
+                    let mut buf = [0u8; 48];
+                    HEADER.serialize_into(&mut buf);
+                    buf
+                },
+                |bytes: [u8; 48]| {
+                    let node =
+                        HeaderNode::from_slice(black_box(&bytes)).expect("valid header bytes");
+                    black_box(node)
+                },
+                criterion::BatchSize::SmallInput,
+            )
+        },
+    );
 
     // Allocation-free round trip using a reusable stack buffer
-    group.bench_function(BenchmarkId::new("round_trip_no_alloc", header_size_bytes), |b| {
-        let mut buf = [0u8; 48];
-        b.iter(|| {
-            let header = black_box(&HEADER);
-            header.serialize_into(black_box(&mut buf));
-            let node = HeaderNode::from_slice(black_box(&buf)).unwrap();
-            black_box(node)
-        })
-    });
+    group.bench_function(
+        BenchmarkId::new("round_trip_no_alloc", header_size_bytes),
+        |b| {
+            let mut buf = [0u8; 48];
+            b.iter(|| {
+                let header = black_box(&HEADER);
+                header.serialize_into(black_box(&mut buf));
+                let node = HeaderNode::from_slice(black_box(&buf)).unwrap();
+                black_box(node)
+            })
+        },
+    );
 
     // Benchmark serialize + deserialize round trip (alloc + encode + decode)
     group.bench_function(BenchmarkId::new("round_trip", header_size_bytes), |b| {

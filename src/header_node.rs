@@ -17,7 +17,10 @@ impl HeaderNode {
     /// Writes the serialized HeaderNode into the provided buffer and returns the number of bytes written (48).
     /// The buffer must be at least 48 bytes long.
     pub fn serialize_into(&self, buf: &mut [u8]) -> usize {
-        assert!(buf.len() >= 48, "HeaderNode::serialize_into dst must be at least 48 bytes");
+        assert!(
+            buf.len() >= 48,
+            "HeaderNode::serialize_into dst must be at least 48 bytes"
+        );
         // Write fields in little-endian order
         buf[0..8].copy_from_slice(&self.tsn.0.to_le_bytes());
         buf[8..16].copy_from_slice(&self.next_page_id.0.to_le_bytes());
@@ -27,7 +30,6 @@ impl HeaderNode {
         buf[40..48].copy_from_slice(&self.next_position.0.to_le_bytes());
         48
     }
-
 
     /// Creates a HeaderNode from a byte slice
     /// Expects a slice with 48 bytes:

@@ -1,15 +1,15 @@
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput, black_box};
-use umadb::dcb::{DCBEvent, DCBEventStore};
-use umadb::db::UmaDB;
-use umadb::grpc::{AsyncUmaDBClient, start_server};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use futures::future::join_all;
 use std::net::TcpListener;
-use std::thread;
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 use tempfile::tempdir;
 use tokio::runtime::Builder as RtBuilder;
 use tokio::sync::oneshot;
-use futures::future::join_all;
+use umadb::db::UmaDB;
+use umadb::dcb::{DCBEvent, DCBEventStore};
+use umadb::grpc::{AsyncUmaDBClient, start_server};
 
 fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
     let dir = tempdir().expect("tempdir");
@@ -39,7 +39,6 @@ fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
     (dir, path)
 }
 
-
 pub fn grpc_append_benchmark(c: &mut Criterion) {
     // for &threads in &[1usize, 2, 4] {
     let mut group = c.benchmark_group("grpc_append");
@@ -64,7 +63,9 @@ pub fn grpc_append_benchmark(c: &mut Criterion) {
         let addr_clone = addr.clone();
 
         let server_thread = thread::spawn(move || {
-            let server_threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+            let server_threads = std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1);
             let rt = RtBuilder::new_multi_thread()
                 .worker_threads(server_threads)
                 .enable_all()
@@ -96,7 +97,9 @@ pub fn grpc_append_benchmark(c: &mut Criterion) {
         let events_per_iter = 1usize;
 
         // Report throughput as the total across all runtime worker threads (informational)
-        group.throughput(Throughput::Elements((events_per_iter as u64) * (threads as u64)));
+        group.throughput(Throughput::Elements(
+            (events_per_iter as u64) * (threads as u64),
+        ));
 
         // Build a Tokio runtime and multiple persistent clients (one per concurrent writer)
         let rt = RtBuilder::new_multi_thread()
@@ -131,7 +134,12 @@ pub fn grpc_append_benchmark(c: &mut Criterion) {
                         let client = clients[i].clone();
                         let evs = events.clone();
                         async move {
-                            let _ = black_box(client.append(black_box(evs), None).await.expect("append events"));
+                            let _ = black_box(
+                                client
+                                    .append(black_box(evs), None)
+                                    .await
+                                    .expect("append events"),
+                            );
                         }
                     });
                     let _ = join_all(futs).await;
@@ -141,13 +149,10 @@ pub fn grpc_append_benchmark(c: &mut Criterion) {
         // Shutdown server
         let _ = shutdown_tx.send(());
         let _ = server_thread.join();
-
     }
 
     group.finish();
-
 }
-
 
 criterion_group!(benches, grpc_append_benchmark);
 criterion_main!(benches);

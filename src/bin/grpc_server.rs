@@ -1,7 +1,7 @@
 use clap::Parser;
-use umadb::grpc;
 use std::path::PathBuf;
 use tokio::signal;
+use umadb::grpc;
 
 #[derive(Parser)]
 #[command(author, version, about = "UmaDB gRPC Server", long_about = None)]
@@ -22,8 +22,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Starting gRPC server for database at {:?}", args.path);
     println!("Listening on {}", args.address);
-    let workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
-    println!("Tokio runtime flavor: multi_thread; worker threads (default) = {}", workers);
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    println!(
+        "Tokio runtime flavor: multi_thread; worker threads (default) = {}",
+        workers
+    );
     println!("Press Ctrl+C to shutdown gracefully");
 
     // Create a shutdown channel

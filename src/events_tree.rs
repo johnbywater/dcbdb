@@ -51,7 +51,11 @@ fn write_overflow_chain(mvcc: &Mvcc, writer: &mut Writer, data: &[u8]) -> DCBRes
     Ok(next_id)
 }
 
-fn read_overflow_chain(mvcc: &Mvcc, dirty: &HashMap<PageID, Page>, mut page_id: PageID) -> DCBResult<Vec<u8>> {
+fn read_overflow_chain(
+    mvcc: &Mvcc,
+    dirty: &HashMap<PageID, Page>,
+    mut page_id: PageID,
+) -> DCBResult<Vec<u8>> {
     let mut out: Vec<u8> = Vec::new();
     while page_id.0 != 0 {
         // Prefer the dirty (unflushed) page if present; otherwise read from disk
@@ -75,7 +79,11 @@ fn read_overflow_chain(mvcc: &Mvcc, dirty: &HashMap<PageID, Page>, mut page_id: 
     Ok(out)
 }
 
-fn materialize_event_value(mvcc: &Mvcc, dirty: &HashMap<PageID, Page>, value: &EventValue) -> DCBResult<EventRecord> {
+fn materialize_event_value(
+    mvcc: &Mvcc,
+    dirty: &HashMap<PageID, Page>,
+    value: &EventValue,
+) -> DCBResult<EventRecord> {
     match value {
         EventValue::Inline(rec) => Ok(rec.clone()),
         EventValue::Overflow {
@@ -130,7 +138,10 @@ pub fn event_tree_append(
                 println!("{:?} is internal node", current_page_ref.page_id);
             }
             stack.push(current_page_id);
-            current_page_id = *internal_node.child_ids.last().expect("Internal node should have some children");
+            current_page_id = *internal_node
+                .child_ids
+                .last()
+                .expect("Internal node should have some children");
         } else {
             return Err(DCBError::DatabaseCorrupted(
                 "Expected EventInternal node".to_string(),
@@ -317,8 +328,7 @@ pub fn event_tree_append(
                 }
 
                 // Move the right-most key to a new node. Promote the next right-most key.
-                let (promoted_key, new_keys, new_child_ids) =
-                    dirty_internal_node.split_off()?;
+                let (promoted_key, new_keys, new_child_ids) = dirty_internal_node.split_off()?;
 
                 // Ensure old node maintain the B-tree invariant: n keys should have n+1 child pointers
                 assert_eq!(
@@ -425,7 +435,7 @@ pub fn event_tree_lookup(
             }
             Node::EventLeaf(leaf) => match leaf.keys.binary_search(&position) {
                 Ok(i) => {
-                    let rec = materialize_event_value(mvcc, dirty,&leaf.values[i])?;
+                    let rec = materialize_event_value(mvcc, dirty, &leaf.values[i])?;
                     return Ok(rec);
                 }
                 Err(_) => {
@@ -435,19 +445,17 @@ pub fn event_tree_lookup(
                 }
             },
             _ => {
-                return Err(DCBError::DatabaseCorrupted(
-                    format!(
-                        "Expected EventInternal or EventLeaf node in event tree, got {}",
-                        page.node.type_name()
-                    ),
-                ));
+                return Err(DCBError::DatabaseCorrupted(format!(
+                    "Expected EventInternal or EventLeaf node in event tree, got {}",
+                    page.node.type_name()
+                )));
             }
         }
     }
 }
 
 pub struct EventIterator<'a> {
-    pub db: &'a Mvcc,
+    pub mvcc: &'a Mvcc,
     pub dirty: &'a HashMap<PageID, Page>,
     pub stack: Vec<(PageID, usize)>,
     pub page_cache: HashMap<PageID, Page>,
@@ -455,11 +463,16 @@ pub struct EventIterator<'a> {
 }
 
 impl<'a> EventIterator<'a> {
-    pub fn new(db: &'a Mvcc, dirty: &'a HashMap<PageID, Page>, events_tree_root_id: PageID, after: Option<Position>) -> Self {
+    pub fn new(
+        mvcc: &'a Mvcc,
+        dirty: &'a HashMap<PageID, Page>,
+        events_tree_root_id: PageID,
+        after: Option<Position>,
+    ) -> Self {
         let next_position = (events_tree_root_id, 0);
         let after = after.unwrap_or(Position(0));
         Self {
-            db,
+            mvcc,
             dirty,
             stack: vec![next_position],
             page_cache: HashMap::new(),
@@ -490,9 +503,11 @@ impl<'a> EventIterator<'a> {
                 } else if let Some(p) = self.page_cache.get(&page_id) {
                     p
                 } else {
-                    let page = self.db.read_page(page_id)?;
+                    let page = self.mvcc.read_page(page_id)?;
                     self.page_cache.insert(page_id, page);
-                    self.page_cache.get(&page_id).expect("page should be in cache")
+                    self.page_cache
+                        .get(&page_id)
+                        .expect("page should be in cache")
                 };
 
                 match &page_ref.node {
@@ -545,7 +560,11 @@ impl<'a> EventIterator<'a> {
                                 remove_page = true;
                             }
                             let pos = leaf.keys[item_idx];
-                            let rec = materialize_event_value(self.db, self.dirty, &leaf.values[item_idx])?;
+                            let rec = materialize_event_value(
+                                self.mvcc,
+                                self.dirty,
+                                &leaf.values[item_idx],
+                            )?;
                             if pos > self.after {
                                 emit = Some((pos, rec));
                             } else {
@@ -558,12 +577,10 @@ impl<'a> EventIterator<'a> {
                         }
                     }
                     _ => {
-                        return Err(DCBError::DatabaseCorrupted(
-                            format!(
-                                "Expected EventInternal or EventLeaf node in event tree, got {}",
-                                page_ref.node.type_name()
-                            ),
-                        ));
+                        return Err(DCBError::DatabaseCorrupted(format!(
+                            "Expected EventInternal or EventLeaf node in event tree, got {}",
+                            page_ref.node.type_name()
+                        )));
                     }
                 }
             }
@@ -1169,7 +1186,8 @@ mod tests {
         let events_tree_root_id = reader.events_tree_root_id;
         let reader_tsn = reader.tsn;
         let dirty = HashMap::new();
-        let mut events_iterator = EventIterator::new(&db, &dirty, events_tree_root_id, Some(after_pos));
+        let mut events_iterator =
+            EventIterator::new(&db, &dirty, events_tree_root_id, Some(after_pos));
 
         // Ensure the reader's tsn is registered while the iterator is alive
         {

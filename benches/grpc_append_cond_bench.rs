@@ -1,14 +1,14 @@
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput, black_box};
-use umadb::dcb::{DCBEvent, DCBEventStore, DCBAppendCondition, DCBQuery, DCBQueryItem};
-use umadb::db::UmaDB;
-use umadb::grpc::{AsyncUmaDBClient, start_server};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use futures::future::join_all;
 use std::net::TcpListener;
-use std::thread;
 use std::sync::Arc;
+use std::thread;
 use tempfile::tempdir;
 use tokio::runtime::Builder as RtBuilder;
-use tokio::sync::{oneshot, Mutex};
-use futures::future::join_all;
+use tokio::sync::{Mutex, oneshot};
+use umadb::db::UmaDB;
+use umadb::dcb::{DCBAppendCondition, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem};
+use umadb::grpc::{AsyncUmaDBClient, start_server};
 
 fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
     let dir = tempdir().expect("tempdir");
@@ -56,7 +56,9 @@ pub fn grpc_append_cond_benchmark(c: &mut Criterion) {
     let addr_clone = addr.clone();
 
     let server_thread = thread::spawn(move || {
-        let server_threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+        let server_threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
         let rt = RtBuilder::new_multi_thread()
             .worker_threads(server_threads)
             .enable_all()
@@ -92,7 +94,9 @@ pub fn grpc_append_cond_benchmark(c: &mut Criterion) {
 
     for &threads in &[1usize, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024] {
         // Report throughput as the total across all writer clients
-        group.throughput(Throughput::Elements((events_per_iter as u64) * (threads as u64)));
+        group.throughput(Throughput::Elements(
+            (events_per_iter as u64) * (threads as u64),
+        ));
 
         // Build a Tokio runtime and multiple persistent clients (one per concurrent writer)
         let rt = RtBuilder::new_multi_thread()
@@ -152,12 +156,18 @@ pub fn grpc_append_cond_benchmark(c: &mut Criterion) {
                             // Build condition: fail if any events with this tag exist after `after`
                             let condition = DCBAppendCondition {
                                 fail_if_events_match: DCBQuery {
-                                    items: vec![DCBQueryItem { types: vec![], tags: vec![tag.clone()] }],
+                                    items: vec![DCBQueryItem {
+                                        types: vec![],
+                                        tags: vec![tag.clone()],
+                                    }],
                                 },
                                 after,
                             };
 
-                            let new_pos = client.append(black_box(events), Some(condition)).await.expect("append events");
+                            let new_pos = client
+                                .append(black_box(events), Some(condition))
+                                .await
+                                .expect("append events");
                             // Update last known position for this writer
                             *guard = Some(new_pos);
                         }

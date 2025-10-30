@@ -1,14 +1,17 @@
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput, black_box};
-use umadb::dcb::{DCBEvent, DCBEventStore};
-use umadb::db::UmaDB;
-use umadb::grpc::{AsyncUmaDBClient, start_server};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use std::net::TcpListener;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::thread;
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::time::Duration;
 use tempfile::tempdir;
 use tokio::runtime::Builder as RtBuilder;
 use tokio::sync::oneshot;
+use umadb::db::UmaDB;
+use umadb::dcb::{DCBEvent, DCBEventStore};
+use umadb::grpc::{AsyncUmaDBClient, start_server};
 // use futures::StreamExt;
 use futures::future::join_all;
 
@@ -62,7 +65,9 @@ pub fn grpc_read_with_writers_benchmark(c: &mut Criterion) {
     let addr_clone = addr.clone();
 
     let server_thread = thread::spawn(move || {
-        let server_threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+        let server_threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
         let rt = RtBuilder::new_multi_thread()
             .worker_threads(server_threads)
             .enable_all()
@@ -139,7 +144,9 @@ pub fn grpc_read_with_writers_benchmark(c: &mut Criterion) {
 
     for &threads in &[1usize, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024] {
         // Report throughput as the total across all runtime worker threads
-        group.throughput(Throughput::Elements((TOTAL_EVENTS as u64) * (threads as u64)));
+        group.throughput(Throughput::Elements(
+            (TOTAL_EVENTS as u64) * (threads as u64),
+        ));
 
         // Build a Tokio runtime and multiple persistent clients (one per concurrent reader)
         let rt = RtBuilder::new_multi_thread()
@@ -173,13 +180,18 @@ pub fn grpc_read_with_writers_benchmark(c: &mut Criterion) {
                             let mut count = 0usize;
                             loop {
                                 let batch = resp.next_batch().await.expect("next_batch ok");
-                                if batch.is_empty() { break; }
+                                if batch.is_empty() {
+                                    break;
+                                }
                                 for item in batch.into_iter() {
                                     let _evt = black_box(item);
                                     count += 1;
                                 }
                             }
-                            assert_eq!(count, TOTAL_EVENTS, "expected to read all preloaded events");
+                            assert_eq!(
+                                count, TOTAL_EVENTS,
+                                "expected to read all preloaded events"
+                            );
                         }
                     });
                     let _ = join_all(futs).await;

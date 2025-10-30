@@ -43,17 +43,22 @@ impl FreeListLeafNode {
     pub fn serialize_into(&self, buf: &mut [u8]) -> usize {
         let mut i = 0usize;
         let klen = self.keys.len() as u16;
-        buf[i..i + 2].copy_from_slice(&klen.to_le_bytes()); i += 2;
+        buf[i..i + 2].copy_from_slice(&klen.to_le_bytes());
+        i += 2;
         for key in &self.keys {
-            buf[i..i + 8].copy_from_slice(&key.0.to_le_bytes()); i += 8;
+            buf[i..i + 8].copy_from_slice(&key.0.to_le_bytes());
+            i += 8;
         }
         for value in &self.values {
             let plen = value.page_ids.len() as u16;
-            buf[i..i + 2].copy_from_slice(&plen.to_le_bytes()); i += 2;
+            buf[i..i + 2].copy_from_slice(&plen.to_le_bytes());
+            i += 2;
             for page_id in &value.page_ids {
-                buf[i..i + 8].copy_from_slice(&page_id.0.to_le_bytes()); i += 8;
+                buf[i..i + 8].copy_from_slice(&page_id.0.to_le_bytes());
+                i += 8;
             }
-            buf[i..i + 8].copy_from_slice(&value.root_id.0.to_le_bytes()); i += 8;
+            buf[i..i + 8].copy_from_slice(&value.root_id.0.to_le_bytes());
+            i += 8;
         }
         i
     }
@@ -195,8 +200,14 @@ impl FreeListLeafNode {
     }
 
     pub fn pop_last_key_and_value(&mut self) -> DCBResult<(Tsn, FreeListLeafValue)> {
-        let last_key = self.keys.pop().expect("FreeListLeafNode should have at least one key");
-        let last_value = self.values.pop().expect("FreeListLeafNode should have at least one value");
+        let last_key = self
+            .keys
+            .pop()
+            .expect("FreeListLeafNode should have at least one key");
+        let last_value = self
+            .values
+            .pop()
+            .expect("FreeListLeafNode should have at least one value");
         Ok((last_key, last_value))
     }
 }
@@ -228,18 +239,21 @@ impl FreeListInternalNode {
         total_size
     }
 
-
     pub fn serialize_into(&self, buf: &mut [u8]) -> usize {
         let mut i = 0usize;
         let klen = self.keys.len() as u16;
-        buf[i..i + 2].copy_from_slice(&klen.to_le_bytes()); i += 2;
+        buf[i..i + 2].copy_from_slice(&klen.to_le_bytes());
+        i += 2;
         for key in &self.keys {
-            buf[i..i + 8].copy_from_slice(&key.0.to_le_bytes()); i += 8;
+            buf[i..i + 8].copy_from_slice(&key.0.to_le_bytes());
+            i += 8;
         }
         let clen = self.child_ids.len() as u16;
-        buf[i..i + 2].copy_from_slice(&clen.to_le_bytes()); i += 2;
+        buf[i..i + 2].copy_from_slice(&clen.to_le_bytes());
+        i += 2;
         for child_id in &self.child_ids {
-            buf[i..i + 8].copy_from_slice(&child_id.0.to_le_bytes()); i += 8;
+            buf[i..i + 8].copy_from_slice(&child_id.0.to_le_bytes());
+            i += 8;
         }
         i
     }
@@ -375,9 +389,11 @@ impl FreeListTsnLeafNode {
     pub fn serialize_into(&self, dst: &mut [u8]) -> usize {
         let mut i = 0usize;
         let plen = self.page_ids.len() as u16;
-        dst[i..i + 2].copy_from_slice(&plen.to_le_bytes()); i += 2;
+        dst[i..i + 2].copy_from_slice(&plen.to_le_bytes());
+        i += 2;
         for page_id in &self.page_ids {
-            dst[i..i + 8].copy_from_slice(&page_id.0.to_le_bytes()); i += 8;
+            dst[i..i + 8].copy_from_slice(&page_id.0.to_le_bytes());
+            i += 8;
         }
         i
     }
@@ -402,8 +418,14 @@ impl FreeListTsnLeafNode {
         let mut offset = 2;
         for _ in 0..plen {
             let v = u64::from_le_bytes([
-                slice[offset], slice[offset + 1], slice[offset + 2], slice[offset + 3],
-                slice[offset + 4], slice[offset + 5], slice[offset + 6], slice[offset + 7],
+                slice[offset],
+                slice[offset + 1],
+                slice[offset + 2],
+                slice[offset + 3],
+                slice[offset + 4],
+                slice[offset + 5],
+                slice[offset + 6],
+                slice[offset + 7],
             ]);
             page_ids.push(PageID(v));
             offset += 8;
@@ -433,39 +455,64 @@ impl FreeListTsnInternalNode {
     pub fn serialize_into(&self, dst: &mut [u8]) -> usize {
         let mut i = 0usize;
         let klen = self.keys.len() as u16;
-        dst[i..i + 2].copy_from_slice(&klen.to_le_bytes()); i += 2;
+        dst[i..i + 2].copy_from_slice(&klen.to_le_bytes());
+        i += 2;
         for key in &self.keys {
-            dst[i..i + 8].copy_from_slice(&key.0.to_le_bytes()); i += 8;
+            dst[i..i + 8].copy_from_slice(&key.0.to_le_bytes());
+            i += 8;
         }
         let clen = self.child_ids.len() as u16;
-        dst[i..i + 2].copy_from_slice(&clen.to_le_bytes()); i += 2;
+        dst[i..i + 2].copy_from_slice(&clen.to_le_bytes());
+        i += 2;
         for child_id in &self.child_ids {
-            dst[i..i + 8].copy_from_slice(&child_id.0.to_le_bytes()); i += 8;
+            dst[i..i + 8].copy_from_slice(&child_id.0.to_le_bytes());
+            i += 8;
         }
         i
     }
 
     pub fn from_slice(slice: &[u8]) -> DCBResult<Self> {
-        if slice.len() < 2 { return Err(DCBError::DeserializationError("Expected at least 2 bytes".to_string())); }
+        if slice.len() < 2 {
+            return Err(DCBError::DeserializationError(
+                "Expected at least 2 bytes".to_string(),
+            ));
+        }
         let klen = u16::from_le_bytes([slice[0], slice[1]]) as usize;
-        if slice.len() < 2 + klen * 8 + 2 { return Err(DCBError::DeserializationError("Data too short".to_string())); }
+        if slice.len() < 2 + klen * 8 + 2 {
+            return Err(DCBError::DeserializationError("Data too short".to_string()));
+        }
         let mut keys = Vec::with_capacity(klen);
         let mut offset = 2;
         for _ in 0..klen {
             let v = u64::from_le_bytes([
-                slice[offset], slice[offset + 1], slice[offset + 2], slice[offset + 3],
-                slice[offset + 4], slice[offset + 5], slice[offset + 6], slice[offset + 7],
+                slice[offset],
+                slice[offset + 1],
+                slice[offset + 2],
+                slice[offset + 3],
+                slice[offset + 4],
+                slice[offset + 5],
+                slice[offset + 6],
+                slice[offset + 7],
             ]);
             keys.push(PageID(v));
             offset += 8;
         }
-        let clen = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize; offset += 2;
-        if slice.len() < offset + clen * 8 { return Err(DCBError::DeserializationError("Data too short".to_string())); }
+        let clen = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
+        offset += 2;
+        if slice.len() < offset + clen * 8 {
+            return Err(DCBError::DeserializationError("Data too short".to_string()));
+        }
         let mut child_ids = Vec::with_capacity(clen);
         for _ in 0..clen {
             let v = u64::from_le_bytes([
-                slice[offset], slice[offset + 1], slice[offset + 2], slice[offset + 3],
-                slice[offset + 4], slice[offset + 5], slice[offset + 6], slice[offset + 7],
+                slice[offset],
+                slice[offset + 1],
+                slice[offset + 2],
+                slice[offset + 3],
+                slice[offset + 4],
+                slice[offset + 5],
+                slice[offset + 6],
+                slice[offset + 7],
             ]);
             child_ids.push(PageID(v));
             offset += 8;
@@ -480,16 +527,11 @@ impl FreeListTsnInternalNode {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use crate::common::{PageID, Tsn};
     use crate::free_lists_tree_nodes::{
-        FreeListInternalNode,
-        FreeListLeafNode,
-        FreeListLeafValue,
-        FreeListTsnInternalNode,
+        FreeListInternalNode, FreeListLeafNode, FreeListLeafValue, FreeListTsnInternalNode,
         FreeListTsnLeafNode,
     };
 
@@ -639,7 +681,6 @@ mod tests {
         assert_eq!(PageID(22), deserialized.page_ids[1]);
         assert_eq!(PageID(33), deserialized.page_ids[2]);
         assert_eq!(PageID(44), deserialized.page_ids[3]);
-
     }
 
     #[test]
@@ -680,6 +721,5 @@ mod tests {
         assert_eq!(PageID(2000), deserialized.child_ids[1]);
         assert_eq!(PageID(3000), deserialized.child_ids[2]);
         assert_eq!(PageID(4000), deserialized.child_ids[3]);
-
     }
 }

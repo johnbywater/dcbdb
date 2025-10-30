@@ -50,7 +50,6 @@ pub trait DCBEventStore {
     ) -> DCBResult<u64>;
 }
 
-
 /// Represents a query item for filtering events
 #[derive(Debug, Clone, Default)]
 pub struct DCBQueryItem {

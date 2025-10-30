@@ -4,8 +4,8 @@
 //! dynamic consistency boundaries.
 
 pub mod common;
-pub mod dcb;
 pub mod db;
+pub mod dcb;
 mod events_tree;
 mod events_tree_nodes;
 mod free_lists_tree_nodes;
@@ -49,7 +49,10 @@ pub mod bench_api {
             let mut w = self.mvcc.writer()?;
             for _ in 0..n {
                 let id = w.alloc_page_id();
-                let node = Node::EventLeaf(EventLeafNode { keys: Vec::new(), values: Vec::new() });
+                let node = Node::EventLeaf(EventLeafNode {
+                    keys: Vec::new(),
+                    values: Vec::new(),
+                });
                 let page = Page::new(id, node);
                 w.insert_dirty(page)?;
             }

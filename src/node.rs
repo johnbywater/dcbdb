@@ -1,6 +1,8 @@
 use crate::dcb::{DCBError, DCBResult};
 use crate::events_tree_nodes::{EventInternalNode, EventLeafNode, EventOverflowNode};
-use crate::free_lists_tree_nodes::{FreeListInternalNode, FreeListLeafNode, FreeListTsnInternalNode, FreeListTsnLeafNode};
+use crate::free_lists_tree_nodes::{
+    FreeListInternalNode, FreeListLeafNode, FreeListTsnInternalNode, FreeListTsnLeafNode,
+};
 use crate::header_node::HeaderNode;
 use crate::tags_tree_nodes::{TagInternalNode, TagLeafNode, TagsInternalNode, TagsLeafNode};
 
@@ -92,18 +94,54 @@ impl Node {
     /// Implemented for key node types; for others it falls back to allocate-and-copy.
     pub fn serialize_into(&self, buf: &mut [u8]) -> DCBResult<usize> {
         match self {
-            Node::Header(node) => { let n = node.serialize_into(buf); Ok(n) }
-            Node::FreeListLeaf(node) => { let n = node.serialize_into(buf); Ok(n) }
-            Node::FreeListInternal(node) => { let n = node.serialize_into(buf); Ok(n) }
-            Node::EventLeaf(node) => { let n = node.serialize_into(buf); Ok(n) }
-            Node::EventInternal(node) => { let n = node.serialize_into(buf)?; Ok(n) }
-            Node::EventOverflow(node) => { let n = node.serialize_into(buf); Ok(n) }
-            Node::TagsLeaf(node) => { let n = node.serialize_into(buf); Ok(n) }
-            Node::TagsInternal(node) => { let n = node.serialize_into(buf); Ok(n) }
-            Node::TagLeaf(node) => { let n = node.serialize_into(buf); Ok(n) }
-            Node::TagInternal(node) => { let n = node.serialize_into(buf); Ok(n) }
-            Node::FreeListTsnLeaf(node) => { let n = node.serialize_into(buf); Ok(n) }
-            Node::FreeListTsnInternal(node) => { let n = node.serialize_into(buf); Ok(n) }
+            Node::Header(node) => {
+                let n = node.serialize_into(buf);
+                Ok(n)
+            }
+            Node::FreeListLeaf(node) => {
+                let n = node.serialize_into(buf);
+                Ok(n)
+            }
+            Node::FreeListInternal(node) => {
+                let n = node.serialize_into(buf);
+                Ok(n)
+            }
+            Node::EventLeaf(node) => {
+                let n = node.serialize_into(buf);
+                Ok(n)
+            }
+            Node::EventInternal(node) => {
+                let n = node.serialize_into(buf)?;
+                Ok(n)
+            }
+            Node::EventOverflow(node) => {
+                let n = node.serialize_into(buf);
+                Ok(n)
+            }
+            Node::TagsLeaf(node) => {
+                let n = node.serialize_into(buf);
+                Ok(n)
+            }
+            Node::TagsInternal(node) => {
+                let n = node.serialize_into(buf);
+                Ok(n)
+            }
+            Node::TagLeaf(node) => {
+                let n = node.serialize_into(buf);
+                Ok(n)
+            }
+            Node::TagInternal(node) => {
+                let n = node.serialize_into(buf);
+                Ok(n)
+            }
+            Node::FreeListTsnLeaf(node) => {
+                let n = node.serialize_into(buf);
+                Ok(n)
+            }
+            Node::FreeListTsnInternal(node) => {
+                let n = node.serialize_into(buf);
+                Ok(n)
+            }
         }
     }
 

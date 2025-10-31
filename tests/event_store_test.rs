@@ -998,6 +998,47 @@ impl SyncUmaDBClient {
     }
 }
 
+impl DCBEventStore for SyncUmaDBClient {
+    fn read(
+        &self,
+        query: Option<DCBQuery>,
+        after: Option<u64>,
+        limit: Option<usize>,
+        subscribe: bool,
+    ) -> Result<Box<dyn umadb::dcb::DCBReadResponse + '_>, DCBError> {
+        // We only support subscribe=false in this sync wrapper for tests
+        assert!(
+            !subscribe,
+            "SyncGrpcEventStore::read only supports subscribe=false in tests"
+        );
+        let mut resp = self
+            .rt
+            .block_on(self.client.read(query, after, limit, false, None))?;
+        // Cache head eagerly because DCBReadResponse::head() is synchronous
+        let head = self.rt.block_on(async { resp.head().await })?;
+        Ok(Box::new(SyncReadResponse {
+            rt: &self.rt,
+            resp,
+            buffer: Vec::new(),
+            buf_idx: 0,
+            finished: false,
+            head,
+        }))
+    }
+
+    fn head(&self) -> Result<Option<u64>, DCBError> {
+        self.rt.block_on(self.client.head())
+    }
+
+    fn append(
+        &self,
+        events: Vec<DCBEvent>,
+        condition: Option<DCBAppendCondition>,
+    ) -> Result<u64, DCBError> {
+        self.rt.block_on(self.client.append(events, condition))
+    }
+}
+
 struct SyncReadResponse<'a> {
     rt: &'a tokio::runtime::Runtime,
     resp: umadb::grpc::AsyncReadResponse,
@@ -1058,46 +1099,5 @@ impl<'a> umadb::dcb::DCBReadResponse for SyncReadResponse<'a> {
             self.finished = true;
         }
         Ok(batch)
-    }
-}
-
-impl DCBEventStore for SyncUmaDBClient {
-    fn read(
-        &self,
-        query: Option<DCBQuery>,
-        after: Option<u64>,
-        limit: Option<usize>,
-        subscribe: bool,
-    ) -> Result<Box<dyn umadb::dcb::DCBReadResponse + '_>, DCBError> {
-        // We only support subscribe=false in this sync wrapper for tests
-        assert!(
-            !subscribe,
-            "SyncGrpcEventStore::read only supports subscribe=false in tests"
-        );
-        let mut resp = self
-            .rt
-            .block_on(self.client.read(query, after, limit, false, None))?;
-        // Cache head eagerly because DCBReadResponse::head() is synchronous
-        let head = self.rt.block_on(async { resp.head().await })?;
-        Ok(Box::new(SyncReadResponse {
-            rt: &self.rt,
-            resp,
-            buffer: Vec::new(),
-            buf_idx: 0,
-            finished: false,
-            head,
-        }))
-    }
-
-    fn head(&self) -> Result<Option<u64>, DCBError> {
-        self.rt.block_on(self.client.head())
-    }
-
-    fn append(
-        &self,
-        events: Vec<DCBEvent>,
-        condition: Option<DCBAppendCondition>,
-    ) -> Result<u64, DCBError> {
-        self.rt.block_on(self.client.append(events, condition))
     }
 }

@@ -68,7 +68,7 @@ pub async fn start_server<P: AsRef<Path> + Send + 'static>(
 
 // gRPC server implementation
 pub struct UmaDBServer {
-    command_handler: CommandHandler,
+    command_handler: RequestHandler,
     shutdown_rx: watch::Receiver<bool>,
 }
 
@@ -77,7 +77,7 @@ impl UmaDBServer {
         path: P,
         shutdown_rx: watch::Receiver<bool>,
     ) -> std::io::Result<Self> {
-        let command_handler = CommandHandler::new(path)?;
+        let command_handler = RequestHandler::new(path)?;
         Ok(Self {
             command_handler,
             shutdown_rx,
@@ -326,8 +326,8 @@ impl UmaDbService for UmaDBServer {
     }
 }
 
-// Message types for communication between the gRPC server and the command handler thread
-enum Command {
+// Message types for communication between the gRPC server and the request handler's writer thread
+enum WriterRequest {
     Append {
         events: Vec<DCBEvent>,
         condition: Option<DCBAppendCondition>,
@@ -336,19 +336,19 @@ enum Command {
     Shutdown,
 }
 
-// Thread-safe command handler
-struct CommandHandler {
+// Thread-safe client request handler
+struct RequestHandler {
     mvcc: std::sync::Arc<Mvcc>,
     head_tx: watch::Sender<Option<u64>>,
-    request_tx: mpsc::Sender<Command>,
+    request_tx: mpsc::Sender<WriterRequest>,
 }
 
-impl CommandHandler {
+impl RequestHandler {
     fn new<P: AsRef<Path> + Send + 'static>(path: P) -> std::io::Result<Self> {
-        // Create a channel for sending requests to the EventStore thread (for writes)
-        let (request_tx, mut request_rx) = mpsc::channel::<Command>(1024);
+        // Create a channel for sending requests to the writer thread
+        let (request_tx, mut request_rx) = mpsc::channel::<WriterRequest>(1024);
 
-        // Build a shared Mvcc instance (Arc) upfront so reads can proceed concurrently on this thread
+        // Build a shared Mvcc instance (Arc) upfront so reads can proceed concurrently
         let p = path.as_ref();
         let file_path = if p.is_dir() {
             p.join("dcb.db")
@@ -370,25 +370,25 @@ impl CommandHandler {
         };
         let (head_tx, _head_rx) = watch::channel::<Option<u64>>(init_head);
 
-        // Spawn a thread for serialized write operations
+        // Spawn a thread for processing writer requests.
         let mvcc_for_writer = mvcc.clone();
         let head_tx_writer = head_tx.clone();
         thread::spawn(move || {
             let db = UmaDB::from_arc(mvcc_for_writer);
 
-            // Create a runtime for async operations
+            // Create a runtime for processing writer requests.
             let rt = tokio::runtime::Runtime::new().unwrap();
 
-            // Process requests (append/head if needed). Note: reads will be served directly without going through this loop.
+            // Process writer requests.
             rt.block_on(async {
                 while let Some(request) = request_rx.recv().await {
                     match request {
-                        Command::Append {
+                        WriterRequest::Append {
                             events,
                             condition,
                             response_tx,
                         } => {
-                            // Batch processing: drain any immediately available append requests
+                            // Batch processing: drain any immediately available requests
                             let mut items: Vec<(Vec<DCBEvent>, Option<DCBAppendCondition>)> =
                                 Vec::new();
                             let mut responders: Vec<oneshot::Sender<DCBResult<u64>>> = Vec::new();
@@ -398,7 +398,7 @@ impl CommandHandler {
                             items.push((events, condition));
                             responders.push(response_tx);
 
-                            // Drain the channel for more pending append requests without awaiting.
+                            // Drain the channel for more pending writer requests without awaiting.
                             // Important: do not drop a popped request when hitting the batch limit.
                             // We stop draining BEFORE attempting to recv if we've reached the limit.
                             loop {
@@ -406,7 +406,7 @@ impl CommandHandler {
                                     break;
                                 }
                                 match request_rx.try_recv() {
-                                    Ok(Command::Append {
+                                    Ok(WriterRequest::Append {
                                         events,
                                         condition,
                                         response_tx,
@@ -416,7 +416,7 @@ impl CommandHandler {
                                         responders.push(response_tx);
                                         total_events += ev_len;
                                     }
-                                    Ok(Command::Shutdown) => {
+                                    Ok(WriterRequest::Shutdown) => {
                                         // Push back the shutdown signal by breaking and letting outer loop handle after batch.
                                         // We'll process current batch first, then break outer loop on next iteration when channel is empty.
                                         break;
@@ -499,7 +499,7 @@ impl CommandHandler {
                                 }
                             }
                         }
-                        Command::Shutdown => {
+                        WriterRequest::Shutdown => {
                             break;
                         }
                     }
@@ -557,6 +557,20 @@ impl CommandHandler {
         .map_err(|e| DCBError::Io(std::io::Error::other(format!("Join error: {e}"))))?
     }
 
+    async fn head(&self) -> DCBResult<Option<u64>> {
+        // Offload blocking head read to a dedicated threadpool
+        let mvcc = self.mvcc.clone();
+        tokio::task::spawn_blocking(move || -> DCBResult<Option<u64>> {
+            let (_, header) = mvcc
+                .get_latest_header()
+                .map_err(|e| DCBError::Corruption(format!("{e}")))?;
+            let last = header.next_position.0.saturating_sub(1);
+            if last == 0 { Ok(None) } else { Ok(Some(last)) }
+        })
+            .await
+            .map_err(|e| DCBError::Io(std::io::Error::other(format!("Join error: {e}"))))?
+    }
+
     async fn append(
         &self,
         events: Vec<DCBEvent>,
@@ -608,7 +622,7 @@ impl CommandHandler {
         let (response_tx, response_rx) = oneshot::channel();
 
         self.request_tx
-            .send(Command::Append {
+            .send(WriterRequest::Append {
                 events,
                 condition: adjusted_condition,
                 response_tx,
@@ -631,28 +645,14 @@ impl CommandHandler {
         self.head_tx.subscribe()
     }
 
-    async fn head(&self) -> DCBResult<Option<u64>> {
-        // Offload blocking head read to a dedicated threadpool
-        let mvcc = self.mvcc.clone();
-        tokio::task::spawn_blocking(move || -> DCBResult<Option<u64>> {
-            let (_, header) = mvcc
-                .get_latest_header()
-                .map_err(|e| DCBError::Corruption(format!("{e}")))?;
-            let last = header.next_position.0.saturating_sub(1);
-            if last == 0 { Ok(None) } else { Ok(Some(last)) }
-        })
-        .await
-        .map_err(|e| DCBError::Io(std::io::Error::other(format!("Join error: {e}"))))?
-    }
-
     #[allow(dead_code)]
     async fn shutdown(&self) {
-        let _ = self.request_tx.send(Command::Shutdown).await;
+        let _ = self.request_tx.send(WriterRequest::Shutdown).await;
     }
 }
 
 // Clone implementation for EventStoreHandle
-impl Clone for CommandHandler {
+impl Clone for RequestHandler {
     fn clone(&self) -> Self {
         Self {
             mvcc: self.mvcc.clone(),

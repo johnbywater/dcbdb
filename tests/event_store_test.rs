@@ -1,13 +1,10 @@
-use umadb::dcb::{
-    DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem,
-    DCBSequencedEvent,
-};
+use umadb::dcb::{DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem};
 // gRPC client sync trait support has been removed; tests use the local EventStore
 use std::net::TcpListener;
 use tempfile::tempdir;
 use tokio::runtime::Builder as RtBuilder;
 use umadb::db::UmaDB;
-use umadb::grpc::{AsyncUmaDBClient, start_server};
+use umadb::grpc::{SyncUmaDBClient, start_server};
 use uuid::Uuid;
 // Import the EventStore and related types from the main crate
 
@@ -965,7 +962,7 @@ fn test_grpc_event_store_client() {
         use std::{thread, time::Duration};
         let mut attempts = 0;
         loop {
-            match rt.block_on(AsyncUmaDBClient::connect(addr_with_scheme.clone())) {
+            match SyncUmaDBClient::connect(addr_with_scheme.clone()) {
                 Ok(c) => break c,
                 Err(e) => {
                     attempts += 1;
@@ -978,126 +975,8 @@ fn test_grpc_event_store_client() {
         }
     };
 
-    // Wrap with sync adapter and run the standard event store tests
-    let wrapper = SyncUmaDBClient::new(client, rt);
-    dcb_event_store_test(&wrapper);
+    dcb_event_store_test(&client);
 
     // Shutdown server
     let _ = shutdown_tx.send(());
-}
-
-// --- Sync wrapper around the async gRPC client for tests ---
-struct SyncUmaDBClient {
-    rt: tokio::runtime::Runtime,
-    client: AsyncUmaDBClient,
-}
-
-impl SyncUmaDBClient {
-    fn new(client: AsyncUmaDBClient, rt: tokio::runtime::Runtime) -> Self {
-        Self { rt, client }
-    }
-}
-
-impl DCBEventStore for SyncUmaDBClient {
-    fn read(
-        &self,
-        query: Option<DCBQuery>,
-        after: Option<u64>,
-        limit: Option<usize>,
-        subscribe: bool,
-    ) -> Result<Box<dyn umadb::dcb::DCBReadResponse + '_>, DCBError> {
-        // We only support subscribe=false in this sync wrapper for tests
-        assert!(
-            !subscribe,
-            "SyncGrpcEventStore::read only supports subscribe=false in tests"
-        );
-        let mut resp = self
-            .rt
-            .block_on(self.client.read(query, after, limit, false, None))?;
-        // Cache head eagerly because DCBReadResponse::head() is synchronous
-        let head = self.rt.block_on(async { resp.head().await })?;
-        Ok(Box::new(SyncReadResponse {
-            rt: &self.rt,
-            resp,
-            buffer: Vec::new(),
-            buf_idx: 0,
-            finished: false,
-            head,
-        }))
-    }
-
-    fn head(&self) -> Result<Option<u64>, DCBError> {
-        self.rt.block_on(self.client.head())
-    }
-
-    fn append(
-        &self,
-        events: Vec<DCBEvent>,
-        condition: Option<DCBAppendCondition>,
-    ) -> Result<u64, DCBError> {
-        self.rt.block_on(self.client.append(events, condition))
-    }
-}
-
-struct SyncReadResponse<'a> {
-    rt: &'a tokio::runtime::Runtime,
-    resp: umadb::grpc::AsyncReadResponse,
-    buffer: Vec<DCBSequencedEvent>,
-    buf_idx: usize,
-    finished: bool,
-    head: Option<u64>,
-}
-
-impl<'a> Iterator for SyncReadResponse<'a> {
-    type Item = DCBSequencedEvent;
-    fn next(&mut self) -> Option<Self::Item> {
-        // If current buffer exhausted, fetch the next batch from the async stream
-        if self.buf_idx >= self.buffer.len() {
-            if self.finished {
-                return None;
-            }
-            let batch = self
-                .rt
-                .block_on(self.resp.next_batch())
-                .expect("grpc next_batch should not fail in sync wrapper");
-            if batch.is_empty() {
-                self.finished = true;
-                return None;
-            }
-            self.buffer = batch;
-            self.buf_idx = 0;
-        }
-        let ev = self.buffer[self.buf_idx].clone();
-        self.buf_idx += 1;
-        Some(ev)
-    }
-}
-
-impl<'a> umadb::dcb::DCBReadResponse for SyncReadResponse<'a> {
-    fn head(&self) -> Option<u64> {
-        self.head
-    }
-    fn collect_with_head(&mut self) -> (Vec<DCBSequencedEvent>, Option<u64>) {
-        let mut out = Vec::new();
-        while let Some(e) = self.next() {
-            out.push(e);
-        }
-        (out, self.head)
-    }
-    fn next_batch(&mut self) -> Result<Vec<DCBSequencedEvent>, DCBError> {
-        // If there are unread items in the current buffer, return them first
-        if self.buf_idx < self.buffer.len() {
-            let out = self.buffer[self.buf_idx..].to_vec();
-            self.buf_idx = self.buffer.len();
-            return Ok(out);
-        }
-        if self.finished {
-            return Ok(Vec::new());
-        }
-        let batch = self.rt.block_on(self.resp.next_batch())?;
-        if batch.is_empty() {
-            self.finished = true;
-        }
-        Ok(batch)
-    }
 }

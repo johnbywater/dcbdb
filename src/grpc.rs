@@ -8,7 +8,8 @@ use tonic::{Code, Request, Response, Status, transport::Server};
 
 use crate::db::{DEFAULT_PAGE_SIZE, UmaDB, read_conditional};
 use crate::dcb::{
-    DCBAppendCondition, DCBError, DCBEvent, DCBQuery, DCBQueryItem, DCBResult, DCBSequencedEvent,
+    DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem, DCBResult,
+    DCBSequencedEvent,
 };
 use crate::mvcc::Mvcc;
 
@@ -19,7 +20,7 @@ pub mod umadb {
 
 use prost::Message;
 use prost::bytes::Bytes;
-
+use tokio::runtime::{Handle, Runtime};
 use umadb::{
     AppendConditionProto, AppendRequestProto, AppendResponseProto, ErrorResponseProto, EventProto,
     HeadRequestProto, HeadResponseProto, QueryItemProto, QueryProto, ReadRequestProto,
@@ -567,8 +568,8 @@ impl RequestHandler {
             let last = header.next_position.0.saturating_sub(1);
             if last == 0 { Ok(None) } else { Ok(Some(last)) }
         })
-            .await
-            .map_err(|e| DCBError::Io(std::io::Error::other(format!("Join error: {e}"))))?
+        .await
+        .map_err(|e| DCBError::Io(std::io::Error::other(format!("Join error: {e}"))))?
     }
 
     async fn append(
@@ -979,5 +980,147 @@ fn dcb_error_from_status(status: Status) -> DCBError {
         Code::InvalidArgument => DCBError::SerializationError(status.message().to_string()),
         Code::Internal => DCBError::InternalError(status.message().to_string()),
         _ => DCBError::Io(std::io::Error::other(format!("gRPC error: {}", status))),
+    }
+}
+
+// --- Sync wrapper around the async client ---
+pub struct SyncUmaDBClient {
+    async_client: AsyncUmaDBClient,
+    _runtime: Option<Runtime>, // Keeps runtime alive if we created it
+    handle: Handle,
+}
+
+impl SyncUmaDBClient {
+    pub fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
+    where
+        D: TryInto<tonic::transport::Endpoint>,
+        D::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    {
+        // Try to use an existing runtime first
+        if let Ok(handle) = Handle::try_current() {
+            let async_client = handle.block_on(AsyncUmaDBClient::connect(dst))?;
+            return Ok(Self {
+                async_client,
+                _runtime: None, // We didn’t create a runtime
+                handle,
+            });
+        }
+
+        // No runtime → create and own one
+        let rt = Runtime::new().expect("failed to create Tokio runtime");
+        let handle = rt.handle().clone();
+        let async_client = rt.block_on(AsyncUmaDBClient::connect(dst))?;
+        Ok(Self {
+            async_client,
+            _runtime: Some(rt), // Keep runtime alive for the client lifetime
+            handle,
+        })
+    }
+}
+
+impl DCBEventStore for SyncUmaDBClient {
+    fn read(
+        &self,
+        query: Option<DCBQuery>,
+        after: Option<u64>,
+        limit: Option<usize>,
+        subscribe: bool,
+        batch_size: Option<usize>,
+    ) -> Result<Box<dyn crate::dcb::DCBReadResponse + '_>, DCBError> {
+        // We only support subscribe=false in this sync wrapper for tests
+        assert!(
+            !subscribe,
+            "SyncGrpcEventStore::read only supports subscribe=false in tests"
+        );
+        let mut resp = self.handle.block_on(
+            self.async_client
+                .read(query, after, limit, subscribe, batch_size),
+        )?;
+        // Cache head eagerly because DCBReadResponse::head() is synchronous
+        let head = self.handle.block_on(async { resp.head().await })?;
+        Ok(Box::new(SyncReadResponse {
+            rt: &self.handle,
+            resp,
+            buffer: Vec::new(),
+            buf_idx: 0,
+            finished: false,
+            head,
+        }))
+    }
+
+    fn head(&self) -> Result<Option<u64>, DCBError> {
+        self.handle.block_on(self.async_client.head())
+    }
+
+    fn append(
+        &self,
+        events: Vec<DCBEvent>,
+        condition: Option<DCBAppendCondition>,
+    ) -> Result<u64, DCBError> {
+        self.handle
+            .block_on(self.async_client.append(events, condition))
+    }
+}
+
+struct SyncReadResponse<'a> {
+    rt: &'a Handle,
+    resp: AsyncReadResponse,
+    buffer: Vec<DCBSequencedEvent>,
+    buf_idx: usize,
+    finished: bool,
+    head: Option<u64>,
+}
+
+impl<'a> Iterator for SyncReadResponse<'a> {
+    type Item = DCBSequencedEvent;
+    fn next(&mut self) -> Option<Self::Item> {
+        // If current buffer exhausted, fetch the next batch from the async stream
+        if self.buf_idx >= self.buffer.len() {
+            if self.finished {
+                return None;
+            }
+            let batch = self
+                .rt
+                .block_on(self.resp.next_batch())
+                .expect("grpc next_batch should not fail in sync wrapper");
+            if batch.is_empty() {
+                self.finished = true;
+                return None;
+            }
+            self.buffer = batch;
+            self.buf_idx = 0;
+        }
+        let ev = self.buffer[self.buf_idx].clone();
+        self.buf_idx += 1;
+        Some(ev)
+    }
+}
+
+impl<'a> crate::dcb::DCBReadResponse for SyncReadResponse<'a> {
+    fn head(&self) -> Option<u64> {
+        self.head
+    }
+    fn collect_with_head(&mut self) -> (Vec<DCBSequencedEvent>, Option<u64>) {
+        let mut out = Vec::new();
+        while let Some(e) = self.next() {
+            out.push(e);
+        }
+        (out, self.head)
+    }
+    fn next_batch(&mut self) -> Result<Vec<DCBSequencedEvent>, DCBError> {
+        // If there are unread items in the current buffer, return them first
+        if self.buf_idx < self.buffer.len() {
+            let out = self.buffer[self.buf_idx..].to_vec();
+            self.buf_idx = self.buffer.len();
+            return Ok(out);
+        }
+        if self.finished {
+            return Ok(Vec::new());
+        }
+        let batch = self.rt.block_on(self.resp.next_batch())?;
+        if batch.is_empty() {
+            self.finished = true;
+        }
+        Ok(batch)
     }
 }

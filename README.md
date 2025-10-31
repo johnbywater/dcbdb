@@ -362,8 +362,6 @@ concurrent writers.
 
 The benchmark plots above were produced on an Apple MacBook Pro M4 (10 performance cores and 4 efficiency cores).
 
-
-
 ## Quick Start
 
 1. Build the project:
@@ -439,9 +437,11 @@ The example client:
 3. Reads a tail of recent events (no filter)
 4. Prints counts and a timing summary
 
-### Using the Rust Client in Your Own Code
+### Using the Rust Clients in Your Own Code
 
-UmaDB provides a Rust client that you can use to interact with the gRPC server in your own code. Here's an example of how to use it:
+UmaDB provides async and non-async Rust clients that you can use to interact with the gRPC server in your own code.
+
+Here's an example of how to use the async Rust client:
 
 ```rust
 use umadb::dcb::{DCBEvent, DCBQuery, DCBQueryItem};
@@ -470,7 +470,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut resp = client.read(Some(query), None, None, false, None).await?;
 
-    // Iterate through the events from the async batched response
+    // Iterate through the events from the async read response
     loop {
         let batch = resp.next_batch().await?;
         if batch.is_empty() {
@@ -483,6 +483,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+```
+Here's an example of how to use the non-async Rust client:
+
+```rust
+use umadb::dcb::{DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem};
+use umadb::grpc::SyncUmaDBClient;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Connect to the gRPC server
+    let client = SyncUmaDBClient::connect("http://127.0.0.1:50051").unwrap();
+
+    // Append an event
+    let event = DCBEvent {
+        event_type: "example".to_string(),
+        tags: vec!["tag1".to_string(), "tag2".to_string()],
+        data: b"Hello, world!".to_vec(),
+    };
+    let position = client.append(vec![event], None).unwrap();
+    println!("Appended event at position: {}", position);
+
+    // Read events
+    let query = DCBQuery {
+        items: vec![DCBQueryItem {
+            types: vec!["example".to_string()],
+            tags: vec!["tag1".to_string()],
+        }],
+    };
+    let mut resp = client.read(Some(query), None, None, false, None).unwrap();
+
+    // Iterate through the events from the sync read response
+    loop {
+        let batch = resp.next_batch().unwrap();
+        if batch.is_empty() {
+            break;
+        }
+        for event in batch.into_iter() {
+            println!("Event at position {}: {:?}", event.position, event.event);
+        }
+    }
+
+    Ok(())
+}
+
 ```
 
 ### Query as the consistency boundary

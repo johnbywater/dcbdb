@@ -867,10 +867,7 @@ impl AsyncReadResponse {
 impl Stream for AsyncReadResponse {
     type Item = Result<DCBSequencedEvent, Status>;
 
-    fn poll_next(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         // SAFETY: we only take &mut refs, no field moves.
         let this = self.get_mut();
 

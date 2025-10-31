@@ -190,7 +190,7 @@ mod tests {
             let mut batch = Vec::new();
             while let Some(result) = self.next() {
                 match result {
-                    Ok(event) =>batch.push(event),
+                    Ok(event) => batch.push(event),
                     Err(err) => {
                         panic!("{}", err);
                     }

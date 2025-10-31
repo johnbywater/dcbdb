@@ -667,14 +667,6 @@ pub struct AsyncUmaDBClient {
     client: umadb::uma_db_service_client::UmaDbServiceClient<tonic::transport::Channel>,
 }
 
-// Async read response wrapper that provides batched access and head metadata
-pub struct AsyncReadResponse {
-    stream: tonic::Streaming<ReadResponseProto>,
-    buffered: Vec<crate::dcb::DCBSequencedEvent>,
-    last_head: Option<Option<u64>>, // None = unknown yet; Some(x) = known
-    ended: bool,
-}
-
 impl AsyncUmaDBClient {
     pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
     where
@@ -792,6 +784,14 @@ impl AsyncUmaDBClient {
             Err(status) => Err(dcb_error_from_status(status)),
         }
     }
+}
+
+// Async read response wrapper that provides batched access and head metadata
+pub struct AsyncReadResponse {
+    stream: tonic::Streaming<ReadResponseProto>,
+    buffered: Vec<crate::dcb::DCBSequencedEvent>,
+    last_head: Option<Option<u64>>, // None = unknown yet; Some(x) = known
+    ended: bool,
 }
 
 impl AsyncReadResponse {

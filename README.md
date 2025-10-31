@@ -272,7 +272,7 @@ UmaDB uses a monotonically increasing Transaction Sequence Number (TSN) as the v
 for MVCC. Every committed write transaction increments the TSN, creating a new database snapshot.
 
 The TSN is written into oldest header node at the end of each writer commit. Readers and writers
-read both header pages and select the one with the higher TSN as the "latest" header.
+read both header pages and select the one with the higher TSN as the "newest" header.
 
 #### Reader Transactions
 
@@ -300,12 +300,12 @@ and atomically publishing a new header that points to the new tree roots. Only o
 a time. This is enforced by the writer lock mutex, but in practice there is no contention because there
 is only one append request handler thread.
 
-A writer transaction reads the newest header, increments the TSN, reads the reader TSN register, finds all
-reusable page IDs from the free lists tree. It executes append requests by running an append condition
-query after a given position, and if no events are found, then appends new events by manipulating the
-events and tags trees.
+A writer transaction takes a snapshot of the newest header, increments the TSN, reads the reader TSN register,
+and finds all reusable page IDs from the free lists tree. It executes append requests by running an append
+condition query after a given position, and if no events are found, then appends new events by manipulating
+the events and tags trees.
 
-UmaDB never modifies pages in place. Instead, writers create new page versions, leaving old
+UmaDB writers never modify pages in place. Instead, writers create new page versions, leaving old
 versions accessible to concurrent readers.
 
 When a writer needs to modify a page, it will:
@@ -315,7 +315,7 @@ When a writer needs to modify a page, it will:
 * Add the new page to a map of dirty pages
 * Add the old page ID to a list of freed page IDs
 
-Once a page is dirty, it may be modified further by the same writer, and possibly freed.
+Once a page has been made "dirty" in this way, it may be modified several times by the same writer.
 
 After all operations for appending new events have been completed, the reused page IDs are removed from
 free lists tree, and the freed page IDs are inserted. Because this may involve further reuse and freeing
@@ -445,12 +445,12 @@ UmaDB provides a Rust client that you can use to interact with the gRPC server i
 
 ```rust
 use umadb::dcb::{DCBEvent, DCBQuery, DCBQueryItem};
-use umadb::grpc::GrpcEventStoreClient;
+use umadb::grpc::AsyncUmaDBClient;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Connect to the gRPC server
-    let client = GrpcEventStoreClient::connect("http://127.0.0.1:50051").await?;
+    let client = AsyncUmaDBClient::connect("http://127.0.0.1:50051").await?;
 
     // Append an event
     let event = DCBEvent {
@@ -473,7 +473,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Iterate through the events from the async batched response
     loop {
         let batch = resp.next_batch().await?;
-        if batch.is_empty() { break; }
+        if batch.is_empty() {
+            break;
+        }
         for event in batch.into_iter() {
             println!("Event at position {}: {:?}", event.position, event.event);
         }
@@ -492,12 +494,12 @@ You can use a query as the consistency boundary for your write (carried inside a
 Example:
 
 ```rust
-use umadb::dcb::{DCBEvent, DCBAppendCondition, DCBQuery, DCBQueryItem};
-use umadb::grpc::GrpcEventStoreClient;
+use umadb::dcb::{DCBAppendCondition, DCBEvent, DCBQuery, DCBQueryItem};
+use umadb::grpc::AsyncUmaDBClient;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = GrpcEventStoreClient::connect("http://127.0.0.1:50051").await?;
+    let client = AsyncUmaDBClient::connect("http://127.0.0.1:50051").await?;
 
     // Suppose we are creating an order and want to ensure we don't create it twice.
     let order_id = "12345";
@@ -551,16 +553,14 @@ Key semantics:
   - If the client drops the stream or the server shuts down, the stream terminates. The server actively signals shutdown to terminate ongoing subscriptions gracefully.
 - Batch sizing: you can pass an optional batch_size hint; the server will cap it to its configured maximum.
 
-Example: simple subscription from the beginning
+Example: simple subscription from the beginning.
 
 ```rust
-use umadb::grpc::GrpcEventStoreClient;
-use umadb::dcb::DCBEvent;
-use futures::StreamExt;
+use umadb::grpc::AsyncUmaDBClient;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = GrpcEventStoreClient::connect("http://127.0.0.1:50051").await?;
+    let client = AsyncUmaDBClient::connect("http://127.0.0.1:50051").await?;
 
     // Start a subscription: catch up all events and continue with new ones
     let mut resp = client.read(None, None, None, true, None).await?;
@@ -569,26 +569,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         let batch = resp.next_batch().await?;
         for se in batch.into_iter() {
-            println!("event {} type={} tags={:?}", se.position, se.event.event_type, se.event.tags);
+            println!(
+                "event {} type={} tags={:?}",
+                se.position, se.event.event_type, se.event.tags
+            );
         }
     }
-    Ok(())
 }
 ```
 
-Example: subscribe from current head (tail)
+Example: subscribe from specific position (e.g. position of last processed event in a projection).
 
 ```rust
-use umadb::grpc::GrpcEventStoreClient;
-use futures::StreamExt;
+use umadb::grpc::AsyncUmaDBClient;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = GrpcEventStoreClient::connect("http://127.0.0.1:50051").await?;
+    let client = AsyncUmaDBClient::connect("http://127.0.0.1:50051").await?;
 
     // Find current head, then subscribe to only future events
-    let head = client.head().await?.unwrap_or(0);
-    let mut resp = client.read(None, Some(head), None, true, None).await?;
+    let position = client.head().await?.unwrap_or(0);
+    let mut resp = client.read(None, Some(position), None, true, None).await?;
 
     loop {
         let batch = resp.next_batch().await?;
@@ -596,8 +597,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("new event: {:?}", item);
         }
     }
-    // never returns in this simple example
-    // Ok(())
 }
 ```
 

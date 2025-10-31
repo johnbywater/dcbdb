@@ -191,14 +191,14 @@ struct ReadResponse {
 }
 
 impl Iterator for ReadResponse {
-    type Item = DCBSequencedEvent;
+    type Item = DCBResult<DCBSequencedEvent>;
     fn next(&mut self) -> Option<Self::Item> {
         if self.idx >= self.events.len() {
             return None;
         }
         let item = self.events[self.idx].clone();
         self.idx += 1;
-        Some(item)
+        Some(Ok(item))
     }
 }
 

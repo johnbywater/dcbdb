@@ -97,7 +97,7 @@ pub struct DCBSequencedEvent {
 }
 
 /// Response from a read operation, providing an iterator over sequenced events
-pub trait DCBReadResponse: Iterator<Item = DCBSequencedEvent> {
+pub trait DCBReadResponse: Iterator<Item = Result<DCBSequencedEvent, DCBError>> {
     /// Returns the current head position of the event store, or None if empty
     fn head(&self) -> Option<u64>;
     /// Returns a vector of events with head
@@ -164,13 +164,13 @@ mod tests {
     }
 
     impl Iterator for TestReadResponse {
-        type Item = DCBSequencedEvent;
+        type Item = Result<DCBSequencedEvent, DCBError>;
 
         fn next(&mut self) -> Option<Self::Item> {
             if self.current_index < self.events.len() {
                 let event = self.events[self.current_index].clone();
                 self.current_index += 1;
-                Some(event)
+                Some(Ok(event))
             } else {
                 None
             }
@@ -188,8 +188,13 @@ mod tests {
 
         fn next_batch(&mut self) -> DCBResult<Vec<DCBSequencedEvent>> {
             let mut batch = Vec::new();
-            while let Some(event) = self.next() {
-                batch.push(event);
+            while let Some(result) = self.next() {
+                match result {
+                    Ok(event) =>batch.push(event),
+                    Err(err) => {
+                        panic!("{}", err);
+                    }
+                }
             }
             Ok(batch)
         }
@@ -228,8 +233,8 @@ mod tests {
         assert_eq!(response.head(), Some(2));
 
         // Test iterator functionality
-        assert_eq!(response.next().unwrap().position, 1);
-        assert_eq!(response.next().unwrap().position, 2);
+        assert_eq!(response.next().unwrap().unwrap().position, 1);
+        assert_eq!(response.next().unwrap().unwrap().position, 2);
         assert!(response.next().is_none());
     }
 }

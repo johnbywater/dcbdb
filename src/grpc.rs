@@ -1136,27 +1136,31 @@ struct SyncReadResponse<'a> {
 }
 
 impl<'a> Iterator for SyncReadResponse<'a> {
-    type Item = DCBSequencedEvent;
+    type Item = Result<DCBSequencedEvent, DCBError>;
+
     fn next(&mut self) -> Option<Self::Item> {
         // If current buffer exhausted, fetch the next batch from the async stream
         if self.buf_idx >= self.buffer.len() {
             if self.finished {
                 return None;
             }
-            let batch = self
-                .rt
-                .block_on(self.resp.next_batch())
-                .expect("grpc next_batch should not fail in sync wrapper");
-            if batch.is_empty() {
-                self.finished = true;
-                return None;
+
+            match self.rt.block_on(self.resp.next_batch()) {
+                Ok(batch) if !batch.is_empty() => {
+                    self.buffer = batch;
+                    self.buf_idx = 0;
+                }
+                Ok(_) => {
+                    self.finished = true;
+                    return None;
+                }
+                Err(e) => return Some(Err(e)),
             }
-            self.buffer = batch;
-            self.buf_idx = 0;
         }
+
         let ev = self.buffer[self.buf_idx].clone();
         self.buf_idx += 1;
-        Some(ev)
+        Some(Ok(ev))
     }
 }
 
@@ -1164,13 +1168,15 @@ impl<'a> crate::dcb::DCBReadResponse for SyncReadResponse<'a> {
     fn head(&self) -> Option<u64> {
         self.head
     }
+
     fn collect_with_head(&mut self) -> (Vec<DCBSequencedEvent>, Option<u64>) {
         let mut out = Vec::new();
-        while let Some(e) = self.next() {
+        while let Some(Ok(e)) = self.next() {
             out.push(e);
         }
         (out, self.head)
     }
+
     fn next_batch(&mut self) -> Result<Vec<DCBSequencedEvent>, DCBError> {
         // If there are unread items in the current buffer, return them first
         if self.buf_idx < self.buffer.len() {
@@ -1178,13 +1184,16 @@ impl<'a> crate::dcb::DCBReadResponse for SyncReadResponse<'a> {
             self.buf_idx = self.buffer.len();
             return Ok(out);
         }
+
         if self.finished {
             return Ok(Vec::new());
         }
+
         let batch = self.rt.block_on(self.resp.next_batch())?;
         if batch.is_empty() {
             self.finished = true;
         }
+
         Ok(batch)
     }
 }

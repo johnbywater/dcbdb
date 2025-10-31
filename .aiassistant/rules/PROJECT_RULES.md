@@ -3,11 +3,22 @@ apply: always
 ---
 
 # Project Overview
-This project implements an append-only event store for dynamic consistency boundaries in Rust, inspired by LMDB-style Copy-on-Write pages. It provides a crash-safe, high-performance event store suitable for event-sourced systems.
+This project implements an append-only event store for dynamic consistency boundaries (DCB) in Rust
+that follows the LMDB design for implement mult-version concurrent control (MVCC).
+
+Dynamic consistency boundaries (DCB) stores a single sequence of events. Each event has a binary data string,
+a type string, and an array of tags. Events can be selected using a query that has zero-many query items, with
+each query item having zero-many tags and zero-many event types.
+
+The LMDB design uses a single file that is used to store pages of a fixed size. There are two header files
+that contain the page IDs of the root pages for three B+trees. One B+tree has events keyed by position. Another
+B+tree has positions keyed by tags. A third B+tree has page IDs keyed by transaction sequence number (TSN).
+
+It provides a crash-safe, high-performance event store suitable for event-sourced systems.
 
 Key features:
-- CoW pages with **two headers** per page to manage atomic updates
-- B+Tree indexes for:
+- Copy-on-write (CoW) pages
+- B+Tree trees for:
     - `position -> events`
     - `tags -> positions`
     - `TSN (transaction sequence number) -> PageIDs`
@@ -48,12 +59,6 @@ Key features:
     - `position -> events` B+Tree stores monotonic positions
     - `tags -> positions` B+Tree indexes multiple positions per tag
     - `TSN -> PageIDs` B+Tree tracks transaction sequence numbers to pages
-- **WAL**:
-    - Flushes are batched at checkpoint
-    - Supports partial recovery from crashes
-- **Query Engine**:
-    - Check committed B+Tree index first
-    - Fallback to segment scan / WAL tail for unindexed events
 - **Memory & Performance**:
     - Avoid unnecessary cloning
     - Keep hot paths lock-free if possible

@@ -1,4 +1,5 @@
 use futures::Stream;
+use futures::ready;
 use std::path::Path;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -863,29 +864,29 @@ impl AsyncReadResponse {
 }
 
 impl Stream for AsyncReadResponse {
-    type Item = DCBSequencedEvent;
+    type Item = Result<DCBSequencedEvent, Status>;
 
     fn poll_next(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        // SAFETY: We won't move out of `self`, only get a mutable reference.
+        // SAFETY: we only take &mut refs, no field moves.
         let this = self.get_mut();
 
-        // If we still have buffered events, yield one immediately
+        // Return buffered event if available
         if this.buf_idx < this.buffered.len() {
             let ev = this.buffered[this.buf_idx].clone();
             this.buf_idx += 1;
-            return Poll::Ready(Some(ev));
+            return Poll::Ready(Some(Ok(ev)));
         }
 
-        // If the stream has ended, we’re done
+        // If stream is marked ended, stop
         if this.ended {
             return Poll::Ready(None);
         }
 
-        // Poll the underlying tonic stream safely
-        match futures::ready!(Pin::new(&mut this.stream).poll_next(cx)) {
+        // Poll underlying gRPC stream
+        match ready!(Pin::new(&mut this.stream).poll_next(cx)) {
             Some(Ok(resp)) => {
                 this.last_head = Some(resp.head);
                 this.buffered = resp
@@ -905,18 +906,17 @@ impl Stream for AsyncReadResponse {
                 this.buf_idx = 0;
 
                 if this.buffered.is_empty() {
-                    // Nothing in this batch — poll again
+                    // Nothing buffered in this batch → continue polling
                     Self::poll_next(Pin::new(this), cx)
                 } else {
                     let ev = this.buffered[this.buf_idx].clone();
                     this.buf_idx += 1;
-                    Poll::Ready(Some(ev))
+                    Poll::Ready(Some(Ok(ev)))
                 }
             }
             Some(Err(status)) => {
                 this.ended = true;
-                eprintln!("gRPC stream error: {:?}", status);
-                Poll::Ready(None)
+                Poll::Ready(Some(Err(status)))
             }
             None => {
                 this.ended = true;

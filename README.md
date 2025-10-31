@@ -467,8 +467,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     // Build decision model
-    while let Some(ev) = read_response.next().await {
-        println!("Got event at {}: {:?}", ev.position, ev.event);
+    while let Some(result) = read_response.next().await {
+        match result {
+            Ok(event) => {
+                println!("Got event at position {}: {:?}", event.position, event.event);
+            }
+            Err(status) => panic!("gRPC stream error: {}", status),
+        }
     }
 
     // Remember the last-known position
@@ -516,14 +521,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut subscription = client.read(None, None, None, true, None).await?;
 
     // Build an up-to-date view
-    while let Some(ev) = subscription.next().await {
-        println!("Processing event at {}: {:?}", ev.position, ev.event);
-        if ev.position == commit_position {
-            println!("Projection has processed new event!");
-            break;
+    while let Some(result) = subscription.next().await {
+        match result {
+            Ok(ev) => {
+                println!("Processing event at {}: {:?}", ev.position, ev.event);
+                if ev.position == commit_position {
+                    println!("Projection has processed new event!");
+                    break;
+                }
+            }
+            Err(status) => panic!("gRPC stream error: {}", status),
         }
-    }
 
+    }
     Ok(())
 }
 ```

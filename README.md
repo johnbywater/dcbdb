@@ -444,7 +444,8 @@ UmaDB provides async and non-async Rust clients that you can use to interact wit
 Here's an example of how to use the async Rust client:
 
 ```rust
-use umadb::dcb::{DCBEvent, DCBQuery, DCBQueryItem};
+use futures::StreamExt;
+use umadb::dcb::{DCBAppendCondition, DCBError, DCBEvent, DCBQuery, DCBQueryItem};
 use umadb::grpc::AsyncUmaDBClient;
 
 #[tokio::main]
@@ -452,32 +453,74 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Connect to the gRPC server
     let client = AsyncUmaDBClient::connect("http://127.0.0.1:50051").await?;
 
-    // Append an event
+    // Define a consistency boundary
+    let cb = DCBQuery {
+        items: vec![DCBQueryItem {
+            types: vec!["example".to_string()],
+            tags: vec!["tag1".to_string(), "tag2".to_string()],
+        }],
+    };
+
+    // Read events for a decision model
+    let mut read_response = client
+        .read(Some(cb.clone()), None, None, false, None)
+        .await?;
+
+    // Build decision model
+    while let Some(ev) = read_response.next().await {
+        println!("Got event at {}: {:?}", ev.position, ev.event);
+    }
+
+    // Remember the last-known position
+    let last_known_position = read_response.head().await?;
+    println!("Last known position is: {:?}", last_known_position);
+
+    // Produce new event
     let event = DCBEvent {
         event_type: "example".to_string(),
         tags: vec!["tag1".to_string(), "tag2".to_string()],
         data: b"Hello, world!".to_vec(),
     };
-    let position = client.append(vec![event], None).await?;
-    println!("Appended event at position: {}", position);
 
-    // Read events
-    let query = DCBQuery {
-        items: vec![DCBQueryItem {
-            types: vec!["example".to_string()],
-            tags: vec!["tag1".to_string()],
-        }],
-    };
-    let mut resp = client.read(Some(query), None, None, false, None).await?;
+    // Append event in consistency boundary
+    let commit_position = client
+        .append(
+            vec![event.clone()],
+            Some(DCBAppendCondition {
+                fail_if_events_match: cb.clone(),
+                after: last_known_position,
+            }),
+        )
+        .await?;
+    println!("Appended event at position: {}", commit_position);
 
-    // Iterate through the events from the async read response
-    loop {
-        let batch = resp.next_batch().await?;
-        if batch.is_empty() {
-            break;
+    // Append conflicting event - expect an error
+    let conflicting_result = client
+        .append(
+            vec![event.clone()],
+            Some(DCBAppendCondition {
+                fail_if_events_match: cb.clone(),
+                after: last_known_position,
+            }),
+        )
+        .await;
+
+    match conflicting_result {
+        Err(DCBError::IntegrityError(integrity_error)) => {
+            println!("Error appending conflicting event: {:?}", integrity_error);
         }
-        for event in batch.into_iter() {
-            println!("Event at position {}: {:?}", event.position, event.event);
+        other => panic!("Expected IntegrityError, got {:?}", other),
+    }
+
+    // Subscribe to all events for a projection
+    let mut subscription = client.read(None, None, None, true, None).await?;
+
+    // Build an up-to-date view
+    while let Some(ev) = subscription.next().await {
+        println!("Processing event at {}: {:?}", ev.position, ev.event);
+        if ev.position == commit_position {
+            println!("Projection has processed new event!");
+            break;
         }
     }
 
@@ -487,45 +530,80 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Here's an example of how to use the non-async Rust client:
 
 ```rust
-use umadb::dcb::{DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem};
+use umadb::dcb::{DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem};
 use umadb::grpc::SyncUmaDBClient;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Connect to the gRPC server
-    let client = SyncUmaDBClient::connect("http://127.0.0.1:50051").unwrap();
+    let client = SyncUmaDBClient::connect("http://127.0.0.1:50051")?;
 
-    // Append an event
+    // Define a consistency boundary
+    let cb = DCBQuery {
+        items: vec![DCBQueryItem {
+            types: vec!["example".to_string()],
+            tags: vec!["tag1".to_string(), "tag2".to_string()],
+        }],
+    };
+
+    // Read events for a decision model
+    let mut read_response = client.read(Some(cb.clone()), None, None, false, None)?;
+
+    // Build decision model
+    while let Some(ev) = read_response.next() {
+        println!("Got event at {}: {:?}", ev.position, ev.event);
+    }
+
+    // Remember the last-known position
+    let last_known_position = read_response.head();
+    println!("Last known position is: {:?}", last_known_position);
+
+    // Produce new event
     let event = DCBEvent {
         event_type: "example".to_string(),
         tags: vec!["tag1".to_string(), "tag2".to_string()],
         data: b"Hello, world!".to_vec(),
     };
-    let position = client.append(vec![event], None).unwrap();
-    println!("Appended event at position: {}", position);
 
-    // Read events
-    let query = DCBQuery {
-        items: vec![DCBQueryItem {
-            types: vec!["example".to_string()],
-            tags: vec!["tag1".to_string()],
-        }],
-    };
-    let mut resp = client.read(Some(query), None, None, false, None).unwrap();
+    // Append event in consistency boundary
+    let commit_position = client.append(
+        vec![event.clone()],
+        Some(DCBAppendCondition {
+            fail_if_events_match: cb.clone(),
+            after: last_known_position,
+        }),
+    )?;
+    println!("Appended event at position: {}", commit_position);
 
-    // Iterate through the events from the sync read response
-    loop {
-        let batch = resp.next_batch().unwrap();
-        if batch.is_empty() {
-            break;
+    // Append conflicting event - expect an error
+    let conflicting_result = client.append(
+        vec![event.clone()],
+        Some(DCBAppendCondition {
+            fail_if_events_match: cb.clone(),
+            after: last_known_position,
+        }),
+    );
+
+    match conflicting_result {
+        Err(DCBError::IntegrityError(integrity_error)) => {
+            println!("Error appending conflicting event: {:?}", integrity_error);
         }
-        for event in batch.into_iter() {
-            println!("Event at position {}: {:?}", event.position, event.event);
+        other => panic!("Expected IntegrityError, got {:?}", other),
+    }
+
+    // Subscribe to all events for a projection
+    let mut subscription = client.read(None, None, None, true, None)?;
+
+    // Build an up-to-date view
+    while let Some(ev) = subscription.next() {
+        println!("Processing event at {}: {:?}", ev.position, ev.event);
+        if ev.position == commit_position {
+            println!("Projection has processed new event!");
+            break;
         }
     }
 
     Ok(())
 }
-
 ```
 
 ### Query as the consistency boundary

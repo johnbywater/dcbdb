@@ -75,11 +75,8 @@ impl UmaDB {
                 match found {
                     Ok(found_vec) => {
                         if let Some(matched) = found_vec.first() {
-                            let msg = format!(
-                                "matching event: {:?}, condition: {:?}",
-                                matched,
-                                cond.fail_if_events_match.clone()
-                            );
+                            let msg =
+                                format!("condition: {:?} matched: {:?}, ", cond.clone(), matched,);
                             results.push(Err(DCBError::IntegrityError(msg)));
                             continue;
                         }
@@ -1057,7 +1054,9 @@ mod tests {
 
         // After semantics: skip the first event
         let first_pos = all[0].position;
-        let mut resp3 = store.read(None, Some(first_pos), None, false, None).unwrap();
+        let mut resp3 = store
+            .read(None, Some(first_pos), None, false, None)
+            .unwrap();
         let out3 = resp3.next_batch().unwrap();
         assert_eq!(out3.len(), 1);
         assert_eq!(out3[0].event.event_type, "TypeB");

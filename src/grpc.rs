@@ -1,6 +1,7 @@
 use futures::Stream;
 use std::path::Path;
 use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::thread;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_stream::wrappers::ReceiverStream;
@@ -602,10 +603,7 @@ impl RequestHandler {
                 .map_err(|e| DCBError::Corruption(format!("{e}")))?;
 
                 if let Some(matched) = found.first() {
-                    let msg = format!(
-                        "matching event: {:?} condition: {:?}",
-                        matched, cond.fail_if_events_match
-                    );
+                    let msg = format!("condition: {:?} matched: {:?} ", cond.clone(), matched,);
                     return Err(DCBError::IntegrityError(msg));
                 }
 
@@ -730,19 +728,14 @@ impl AsyncUmaDBClient {
         let response = client.read(request).await.map_err(dcb_error_from_status)?;
         let stream = response.into_inner();
 
-        Ok(AsyncReadResponse {
-            stream,
-            buffered: Vec::new(),
-            last_head: None,
-            ended: false,
-        })
+        Ok(AsyncReadResponse::new(stream))
     }
 
     pub async fn append(
         &self,
-        events: Vec<crate::dcb::DCBEvent>,
-        condition: Option<crate::dcb::DCBAppendCondition>,
-    ) -> crate::dcb::DCBResult<u64> {
+        events: Vec<DCBEvent>,
+        condition: Option<DCBAppendCondition>,
+    ) -> DCBResult<u64> {
         let events_proto: Vec<EventProto> = events
             .into_iter()
             .map(|e| EventProto {
@@ -790,32 +783,45 @@ impl AsyncUmaDBClient {
 // Async read response wrapper that provides batched access and head metadata
 pub struct AsyncReadResponse {
     stream: tonic::Streaming<ReadResponseProto>,
-    buffered: Vec<crate::dcb::DCBSequencedEvent>,
+    buffered: Vec<DCBSequencedEvent>,
+    buf_idx: usize,
     last_head: Option<Option<u64>>, // None = unknown yet; Some(x) = known
     ended: bool,
 }
 
 impl AsyncReadResponse {
-    async fn fetch_next_if_needed(&mut self) -> crate::dcb::DCBResult<()> {
-        if !self.buffered.is_empty() || self.ended {
+    pub fn new(stream: tonic::Streaming<ReadResponseProto>) -> Self {
+        Self {
+            stream,
+            buffered: Vec::new(),
+            buf_idx: 0,
+            last_head: None,
+            ended: false,
+        }
+    }
+
+    async fn fetch_next_if_needed(&mut self) -> DCBResult<()> {
+        if self.buf_idx < self.buffered.len() || self.ended {
             return Ok(());
         }
         match self.stream.message().await {
             Ok(Some(resp)) => {
                 self.last_head = Some(resp.head);
-                self.buffered.clear();
-                for e in resp.events.into_iter() {
-                    if let Some(ev) = e.event {
-                        self.buffered.push(crate::dcb::DCBSequencedEvent {
+                self.buffered = resp
+                    .events
+                    .into_iter()
+                    .filter_map(|e| {
+                        e.event.map(|ev| DCBSequencedEvent {
                             position: e.position,
-                            event: crate::dcb::DCBEvent {
+                            event: DCBEvent {
                                 event_type: ev.event_type,
                                 tags: ev.tags,
                                 data: ev.data,
                             },
-                        });
-                    }
-                }
+                        })
+                    })
+                    .collect();
+                self.buf_idx = 0;
                 Ok(())
             }
             Ok(None) => {
@@ -826,7 +832,7 @@ impl AsyncReadResponse {
         }
     }
 
-    pub async fn head(&mut self) -> crate::dcb::DCBResult<Option<u64>> {
+    pub async fn head(&mut self) -> DCBResult<Option<u64>> {
         if let Some(h) = self.last_head {
             return Ok(h);
         }
@@ -835,25 +841,83 @@ impl AsyncReadResponse {
         Ok(self.last_head.unwrap_or(None))
     }
 
-    // Returns the next batch of events; empty vec indicates end of stream
-    pub async fn next_batch(
-        &mut self,
-    ) -> crate::dcb::DCBResult<Vec<crate::dcb::DCBSequencedEvent>> {
-        // If we have buffered events from a previous fetch, return them first
-        if !self.buffered.is_empty() {
-            let mut out = Vec::new();
-            std::mem::swap(&mut out, &mut self.buffered);
+    /// Returns the next batch of events; empty vec indicates end of stream
+    pub async fn next_batch(&mut self) -> DCBResult<Vec<DCBSequencedEvent>> {
+        // If buffered events remain, return them
+        if self.buf_idx < self.buffered.len() {
+            let out = self.buffered[self.buf_idx..].to_vec();
+            self.buf_idx = self.buffered.len();
             return Ok(out);
         }
-        // Otherwise fetch a new message (which may be empty but carries head)
+
+        // Otherwise fetch the next batch from the stream
         self.fetch_next_if_needed().await?;
-        if !self.buffered.is_empty() {
-            let mut out = Vec::new();
-            std::mem::swap(&mut out, &mut self.buffered);
+        if self.buf_idx < self.buffered.len() {
+            let out = self.buffered[self.buf_idx..].to_vec();
+            self.buf_idx = self.buffered.len();
             return Ok(out);
         }
-        // No buffered events. If stream ended or message had no events, return empty.
+
         Ok(Vec::new())
+    }
+}
+
+impl Stream for AsyncReadResponse {
+    type Item = DCBSequencedEvent;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        // If we have buffered events, yield one immediately
+        if self.buf_idx < self.buffered.len() {
+            let ev = self.buffered[self.buf_idx].clone();
+            self.buf_idx += 1;
+            return Poll::Ready(Some(ev));
+        }
+
+        // If the stream has ended, stop
+        if self.ended {
+            return Poll::Ready(None);
+        }
+
+        // Otherwise, poll the underlying tonic stream
+        let mut stream = unsafe { self.as_mut().map_unchecked_mut(|s| &mut s.stream) };
+        match futures::ready!(stream.poll_next(cx)) {
+            Some(Ok(resp)) => {
+                self.last_head = Some(resp.head);
+                self.buffered = resp
+                    .events
+                    .into_iter()
+                    .filter_map(|e| {
+                        e.event.map(|ev| DCBSequencedEvent {
+                            position: e.position,
+                            event: DCBEvent {
+                                event_type: ev.event_type,
+                                tags: ev.tags,
+                                data: ev.data,
+                            },
+                        })
+                    })
+                    .collect();
+                self.buf_idx = 0;
+
+                if self.buffered.is_empty() {
+                    // No events in this message, poll again
+                    self.poll_next(cx)
+                } else {
+                    let ev = self.buffered[self.buf_idx].clone();
+                    self.buf_idx += 1;
+                    Poll::Ready(Some(ev))
+                }
+            }
+            Some(Err(status)) => {
+                self.ended = true;
+                eprintln!("gRPC stream error: {:?}", status);
+                Poll::Ready(None)
+            }
+            None => {
+                self.ended = true;
+                Poll::Ready(None)
+            }
+        }
     }
 }
 
@@ -1027,11 +1091,6 @@ impl DCBEventStore for SyncUmaDBClient {
         subscribe: bool,
         batch_size: Option<usize>,
     ) -> Result<Box<dyn crate::dcb::DCBReadResponse + '_>, DCBError> {
-        // We only support subscribe=false in this sync wrapper for tests
-        assert!(
-            !subscribe,
-            "SyncGrpcEventStore::read only supports subscribe=false in tests"
-        );
         let mut resp = self.handle.block_on(
             self.async_client
                 .read(query, after, limit, subscribe, batch_size),

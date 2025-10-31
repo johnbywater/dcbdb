@@ -1,5 +1,6 @@
 use futures::Stream;
 use futures::ready;
+use std::collections::VecDeque;
 use std::path::Path;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -1096,19 +1097,16 @@ impl DCBEventStore for SyncUmaDBClient {
         subscribe: bool,
         batch_size: Option<usize>,
     ) -> Result<Box<dyn crate::dcb::DCBReadResponse + '_>, DCBError> {
-        let mut resp = self.handle.block_on(
+        let resp = self.handle.block_on(
             self.async_client
                 .read(query, after, limit, subscribe, batch_size),
         )?;
         // Cache head eagerly because DCBReadResponse::head() is synchronous
-        let head = self.handle.block_on(async { resp.head().await })?;
         Ok(Box::new(SyncReadResponse {
             rt: &self.handle,
             resp,
-            buffer: Vec::new(),
-            buf_idx: 0,
+            buffer: VecDeque::new(),
             finished: false,
-            head,
         }))
     }
 
@@ -1126,74 +1124,75 @@ impl DCBEventStore for SyncUmaDBClient {
     }
 }
 
-struct SyncReadResponse<'a> {
+pub struct SyncReadResponse<'a> {
     rt: &'a Handle,
     resp: AsyncReadResponse,
-    buffer: Vec<DCBSequencedEvent>,
-    buf_idx: usize,
+    buffer: VecDeque<DCBSequencedEvent>, // efficient pop_front()
     finished: bool,
-    head: Option<u64>,
+}
+
+impl<'a> SyncReadResponse<'a> {
+    pub fn new(rt: &'a Handle, resp: AsyncReadResponse) -> Self {
+        Self {
+            rt,
+            resp,
+            buffer: VecDeque::new(),
+            finished: false,
+        }
+    }
+
+    /// Fetch the next batch from the async response, filling the buffer
+    fn fetch_next_batch(&mut self) -> Result<(), DCBError> {
+        if self.finished {
+            return Ok(());
+        }
+
+        let batch = self.rt.block_on(self.resp.next_batch())?;
+        if batch.is_empty() {
+            self.finished = true;
+        } else {
+            self.buffer = batch.into();
+        }
+        Ok(())
+    }
 }
 
 impl<'a> Iterator for SyncReadResponse<'a> {
     type Item = Result<DCBSequencedEvent, DCBError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // If current buffer exhausted, fetch the next batch from the async stream
-        if self.buf_idx >= self.buffer.len() {
-            if self.finished {
-                return None;
-            }
-
-            match self.rt.block_on(self.resp.next_batch()) {
-                Ok(batch) if !batch.is_empty() => {
-                    self.buffer = batch;
-                    self.buf_idx = 0;
-                }
-                Ok(_) => {
-                    self.finished = true;
-                    return None;
-                }
-                Err(e) => return Some(Err(e)),
+        // Fetch the next batch if buffer is empty
+        while self.buffer.is_empty() && !self.finished {
+            if let Err(e) = self.fetch_next_batch() {
+                return Some(Err(e));
             }
         }
 
-        let ev = self.buffer[self.buf_idx].clone();
-        self.buf_idx += 1;
-        Some(Ok(ev))
+        self.buffer.pop_front().map(Ok)
     }
 }
 
 impl<'a> crate::dcb::DCBReadResponse for SyncReadResponse<'a> {
-    fn head(&self) -> Option<u64> {
-        self.head
+    fn head(&mut self) -> Option<u64> {
+        self.rt.block_on(self.resp.head()).unwrap_or(None)
     }
 
     fn collect_with_head(&mut self) -> (Vec<DCBSequencedEvent>, Option<u64>) {
         let mut out = Vec::new();
-        while let Some(Ok(e)) = self.next() {
-            out.push(e);
+        while let Some(Ok(ev)) = self.next() {
+            out.push(ev);
         }
-        (out, self.head)
+        (out, self.head())
     }
 
     fn next_batch(&mut self) -> Result<Vec<DCBSequencedEvent>, DCBError> {
-        // If there are unread items in the current buffer, return them first
-        if self.buf_idx < self.buffer.len() {
-            let out = self.buffer[self.buf_idx..].to_vec();
-            self.buf_idx = self.buffer.len();
-            return Ok(out);
+        // If there are remaining events in the buffer, drain them
+        if !self.buffer.is_empty() {
+            return Ok(self.buffer.drain(..).collect());
         }
 
-        if self.finished {
-            return Ok(Vec::new());
-        }
-
-        let batch = self.rt.block_on(self.resp.next_batch())?;
-        if batch.is_empty() {
-            self.finished = true;
-        }
-
-        Ok(batch)
+        // Otherwise fetch a new batch
+        self.fetch_next_batch()?;
+        Ok(self.buffer.drain(..).collect())
     }
 }

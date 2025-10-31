@@ -203,7 +203,7 @@ impl Iterator for ReadResponse {
 }
 
 impl DCBReadResponse for ReadResponse {
-    fn head(&self) -> Option<u64> {
+    fn head(&mut self) -> Option<u64> {
         self.head
     }
     fn collect_with_head(&mut self) -> (Vec<DCBSequencedEvent>, Option<u64>) {

@@ -99,7 +99,7 @@ pub struct DCBSequencedEvent {
 /// Response from a read operation, providing an iterator over sequenced events
 pub trait DCBReadResponse: Iterator<Item = Result<DCBSequencedEvent, DCBError>> {
     /// Returns the current head position of the event store, or None if empty
-    fn head(&self) -> Option<u64>;
+    fn head(&mut self) -> Option<u64>;
     /// Returns a vector of events with head
     fn collect_with_head(&mut self) -> (Vec<DCBSequencedEvent>, Option<u64>);
     /// Returns a batch of events, updating head with the last event in the batch if there is one and if limit.is_some() is true
@@ -178,7 +178,7 @@ mod tests {
     }
 
     impl DCBReadResponse for TestReadResponse {
-        fn head(&self) -> Option<u64> {
+        fn head(&mut self) -> Option<u64> {
             self.head_position
         }
 

@@ -428,12 +428,30 @@ impl Writer {
         }
     }
 
+    /// Returns the current issue position and increments the next position.
+    ///
+    /// Returns:
+    ///
+    /// The current issue position.
     pub fn issue_position(&mut self) -> Position {
         let pos = self.next_position;
         self.next_position = Position(self.next_position.0 + 1);
         pos
     }
 
+    /// Retrieves a reference to the page with the given ID.
+    ///
+    /// First checks the dirty pages map, then the deserialized pages map.
+    /// If the page is not found in either map, it is deserialized from the MVCC.
+    ///
+    /// # Arguments
+    ///
+    /// * `mvcc`: A reference to the MVCC.
+    /// * `page_id`: The ID of the page to retrieve.
+    ///
+    /// # Returns
+    ///
+    /// A `DCBResult` containing a reference to the page if found, or an error if the page could not be found.
     pub fn get_page_ref(&mut self, mvcc: &Mvcc, page_id: PageID) -> DCBResult<&Page> {
         // Check the dirty pages first
         if self.dirty.contains_key(&page_id) {

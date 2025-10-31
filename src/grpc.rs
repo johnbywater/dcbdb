@@ -865,25 +865,30 @@ impl AsyncReadResponse {
 impl Stream for AsyncReadResponse {
     type Item = DCBSequencedEvent;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // If we have buffered events, yield one immediately
-        if self.buf_idx < self.buffered.len() {
-            let ev = self.buffered[self.buf_idx].clone();
-            self.buf_idx += 1;
+    fn poll_next(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        // SAFETY: We won't move out of `self`, only get a mutable reference.
+        let this = self.get_mut();
+
+        // If we still have buffered events, yield one immediately
+        if this.buf_idx < this.buffered.len() {
+            let ev = this.buffered[this.buf_idx].clone();
+            this.buf_idx += 1;
             return Poll::Ready(Some(ev));
         }
 
-        // If the stream has ended, stop
-        if self.ended {
+        // If the stream has ended, we’re done
+        if this.ended {
             return Poll::Ready(None);
         }
 
-        // Otherwise, poll the underlying tonic stream
-        let mut stream = unsafe { self.as_mut().map_unchecked_mut(|s| &mut s.stream) };
-        match futures::ready!(stream.poll_next(cx)) {
+        // Poll the underlying tonic stream safely
+        match futures::ready!(Pin::new(&mut this.stream).poll_next(cx)) {
             Some(Ok(resp)) => {
-                self.last_head = Some(resp.head);
-                self.buffered = resp
+                this.last_head = Some(resp.head);
+                this.buffered = resp
                     .events
                     .into_iter()
                     .filter_map(|e| {
@@ -897,24 +902,24 @@ impl Stream for AsyncReadResponse {
                         })
                     })
                     .collect();
-                self.buf_idx = 0;
+                this.buf_idx = 0;
 
-                if self.buffered.is_empty() {
-                    // No events in this message, poll again
-                    self.poll_next(cx)
+                if this.buffered.is_empty() {
+                    // Nothing in this batch — poll again
+                    Self::poll_next(Pin::new(this), cx)
                 } else {
-                    let ev = self.buffered[self.buf_idx].clone();
-                    self.buf_idx += 1;
+                    let ev = this.buffered[this.buf_idx].clone();
+                    this.buf_idx += 1;
                     Poll::Ready(Some(ev))
                 }
             }
             Some(Err(status)) => {
-                self.ended = true;
+                this.ended = true;
                 eprintln!("gRPC stream error: {:?}", status);
                 Poll::Ready(None)
             }
             None => {
-                self.ended = true;
+                this.ended = true;
                 Poll::Ready(None)
             }
         }

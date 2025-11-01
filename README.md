@@ -400,30 +400,28 @@ The `uma` executable accepts the following command-line options:
 
 ## gRPC API
 
-This section documents the **UmaDB gRPC protocol** defined in `umadb.proto`.
-
-You can interact with an UmaDB server using its gRPC API. The server implements the following methods:
+You can interact with an UmaDB server using its **gRPC API**. The server implements the following methods:
 
 - `Read`: Read events from the event store
-- `Head`: Get the sequence position of the last recorded event
 - `Append`: Append events to the event store
+- `Head`: Get the sequence position of the last recorded event
 
-The protocol provides an interface for appending and reading events, querying by tags and types, and checking the current head position.
+The following sections detail the protocol defined in `umadb.proto`.
 
 ### Service Definition — `UmaDBService`
 
 The main gRPC service for reading and appending events.
 
-| RPC | Request | Response                                            | Description |
-|------|----------|-----------------------------------------------------|-------------|
-| `Read` | `ReadRequestProto` | **stream**&nbsp;`ReadResponseProto` | Streams events matching the query; may remain open if `subscribe=true`. |
-| `Append` | `AppendRequestProto` | `AppendResponseProto`            | Appends new events atomically, returning the final sequence position. |
-| `Head` | `HeadRequestProto` | `HeadResponseProto`              | Returns the current head position of the store. |
+| RPC | Request | Response                                            | Description                                                                        |
+|------|----------|-----------------------------------------------------|------------------------------------------------------------------------------------|
+| `Read` | `ReadRequestProto` | **stream**&nbsp;`ReadResponseProto` | Streams batches of events matching the query; may remain open if `subscribe=true`. |
+| `Append` | `AppendRequestProto` | `AppendResponseProto`            | Appends new events atomically, returning the final sequence position.              |
+| `Head` | `HeadRequestProto` | `HeadResponseProto`              | Returns the current head position of the store.                                    |
 
 
 ### Read Request — **`ReadRequestProto`**
 
-Parameters for reading events from the store.
+Request to read events from the event store.
 
 | Field | Type                 | Description |
 |--------|----------------------|-------------|
@@ -435,7 +433,7 @@ Parameters for reading events from the store.
 
 ### Read Response — **`ReadResponseProto`**
 
-Returned for each streamed message in response to a `Read` request.
+Returned for each streamed batch of messages in response to a `Read` request.
 
 | Field | Type                              | Description |
 |--------|-----------------------------------|-------------|
@@ -678,6 +676,10 @@ The project provides both **asynchronous** and **synchronous** clients for readi
 
 The synchronous client functions effectively as a wrapper around the asynchronous client.
 
+The Rust UmaDB clients implement the same Rust traits and DCB object types used internally in the UmaDB server, and so
+effectively remotely present the internal server operations, using the same arguments, return values, 
+and errors, with gRPC used as a transport layer.
+
 ### Retrieve Events from UmaDB  — `read()`
 
 Reads events from the event store, optionally with filters, sequence position, limits, and live subscription support.
@@ -717,10 +719,14 @@ Arguments:
 | `events` | `Vec<DCBEvent>` | The list of events to append. Each includes an event type, tags, and data payload. |
 | `condition` | `Option<DCBAppendCondition>` | Optional append condition (e.g. `After(u64)`) to ensure no conflicting writes occur. |
 
-Returns the **sequence number** (`u64`) of the last successfully appended event.
+Returns the **sequence number** (`u64`) of the last successfully appended event from this operation.
 
 This value can be used to wait for downstream event-processing components in
 a CQRS system to become up-to-date.
+
+### Get Head Position  — `head()`
+
+Returns the **sequence number** (`u64`) of the very last successfully appended event in the database.
 
 ### Examples
 

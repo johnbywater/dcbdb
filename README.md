@@ -676,9 +676,14 @@ The project provides both **asynchronous** and **synchronous** clients for readi
 
 The synchronous client functions effectively as a wrapper around the asynchronous client.
 
-The Rust UmaDB clients implement the same Rust traits and DCB object types used internally in the UmaDB server, and so
-effectively remotely present the internal server operations, using the same arguments, return values, 
-and errors, with gRPC used as a transport layer.
+The Rust UmaDB clients implement the same traits and types used internally in the UmaDB server, and so
+effectively represent the essential internal server operations remotely, with gRPC used as a transport
+layer for inter-process communication (IPC). This project's test suite leverages this fact to validate both
+the server and the clients support the specified DCB read and append logic, using the same tests that
+work only with the abstracted traits and types. This also means it would be possible to use UmaDB as
+an embedded database.
+
+The client methods and DCB object types are described below, followed by examples of using the Rust clients for UmaDB.
 
 ### Retrieve Events from UmaDB  — `read()`
 
@@ -724,9 +729,84 @@ Returns the **sequence number** (`u64`) of the last successfully appended event 
 This value can be used to wait for downstream event-processing components in
 a CQRS system to become up-to-date.
 
-### Get Head Position  — `head()`
+### Get Head Position — `head()`
 
 Returns the **sequence number** (`u64`) of the very last successfully appended event in the database.
+
+### DCB Sequenced Event — `DCBSequencedEvent`
+
+A recorded event with its assigned **sequence position** in the event store.
+
+| Field | Type | Description |
+|--------|------|-------------|
+| `event` | [`DCBEvent`](#dcbevent) | The underlying event. |
+| `position` | `u64` | The event’s absolute position in the global sequence. |
+
+### DCB Event — `DCBEvent`
+
+Represents a single event either to be appended or already stored in the event log.
+
+| Field | Type | Description |
+|--------|------|-------------|
+| `event_type` | `String` | The event’s logical type or name. |
+| `data` | `Vec<u8>` | Binary payload associated with the event. |
+| `tags` | `Vec<String>` | Tags assigned to the event (used for filtering and indexing). |
+
+### DCB Query — `DCBQuery`
+
+A query composed of one or more `DCBQueryItem` filters.  
+An event matches the query if it matches **any** of the query items.
+
+| Field | Type | Description |
+|--------|------|-------------|
+| `items` | `Vec<DCBQueryItem>` | A list of query items. Events matching **any** of these items are included in results. |
+
+### DCB Query Item — `DCBQueryItem`
+
+Represents a single **query clause** for filtering events.
+
+| Field | Type | Description |
+|--------|------|-------------|
+| `types` | `Vec<String>` | Event types to match. If empty, all event types are considered. |
+| `tags` | `Vec<String>` | Tags that must **all** be present in the event for it to match. |
+
+### DCB Append Condition — `DCBAppendCondition`
+
+Conditions that must be satisfied before an append operation succeeds.
+
+| Field | Type | Description |
+|--------|------|-------------|
+| `fail_if_events_match` | `Arc<DCBQuery>` | If this query matches **any** existing events, the append operation will fail. |
+| `after` | `Option<u64>` | Optional position constraint. If set, the append will only succeed if no events exist **after** this position. |
+
+### DCB Error — `DCBError`
+
+Represents all errors that can occur in UmaDB.
+
+| Variant | Description |
+|----------|-------------|
+| `Io(error)` | I/O or filesystem error. |
+| `IntegrityError(message)` | Append condition failed or data integrity violated. |
+| `Corruption(message)` | Corruption detected in stored data. |
+| `PageNotFound(page_id)` | Referenced page not found in storage. |
+| `DirtyPageNotFound(page_id)` | Dirty page expected in cache not found. |
+| `RootIDMismatch(old_id, new_id)` | Mismatch between stored and computed root page IDs. |
+| `DatabaseCorrupted(message)` | Database file corrupted or invalid. |
+| `InternalError(message)` | Unexpected internal logic error. |
+| `SerializationError(message)` | Failure to serialize data to bytes. |
+| `DeserializationError(message)` | Failure to parse serialized data. |
+| `PageAlreadyFreed(page_id)` | Attempted to free a page that was already freed. |
+| `PageAlreadyDirty(page_id)` | Attempted to mark a page dirty that was already dirty. |
+
+### DCB Result — `DCBResult<T>`
+
+A convenience alias for results returned by the methods:
+
+```rust
+type DCBResult<T> = Result<T, DCBError>;
+```
+
+All the methods return this type, which yields either a successful result `T` or a `DCBError`.
 
 ### Examples
 

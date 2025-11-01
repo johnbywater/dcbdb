@@ -35,7 +35,7 @@ pub trait DCBEventStoreSync {
         limit: Option<usize>,
     ) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
         let mut response = self.read(query, after, limit, false, None)?;
-        Ok(response.collect_with_head())
+        response.collect_with_head()
     }
 
     /// Returns the current head position of the event store, or None if empty
@@ -56,9 +56,9 @@ pub trait DCBEventStoreSync {
 /// Response from a read operation, providing an iterator over sequenced events
 pub trait DCBReadResponseSync: Iterator<Item = Result<DCBSequencedEvent, DCBError>> {
     /// Returns the current head position of the event store, or None if empty
-    fn head(&mut self) -> Option<u64>;
+    fn head(&mut self) -> DCBResult<Option<u64>>;
     /// Returns a vector of events with head
-    fn collect_with_head(&mut self) -> (Vec<DCBSequencedEvent>, Option<u64>);
+    fn collect_with_head(&mut self) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)>;
     /// Returns a batch of events, updating head with the last event in the batch if there is one and if limit.is_some() is true
     fn next_batch(&mut self) -> DCBResult<Vec<DCBSequencedEvent>>;
 }
@@ -245,11 +245,11 @@ mod tests {
     }
 
     impl DCBReadResponseSync for TestReadResponse {
-        fn head(&mut self) -> Option<u64> {
-            self.head_position
+        fn head(&mut self) -> DCBResult<Option<u64>> {
+            Ok(self.head_position)
         }
 
-        fn collect_with_head(&mut self) -> (Vec<DCBSequencedEvent>, Option<u64>) {
+        fn collect_with_head(&mut self) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
             todo!()
         }
 
@@ -297,7 +297,7 @@ mod tests {
             TestReadResponse::new(vec![seq_event1.clone(), seq_event2.clone()], Some(2));
 
         // Test head position
-        assert_eq!(response.head(), Some(2));
+        assert_eq!(response.head().unwrap(), Some(2));
 
         // Test iterator functionality
         assert_eq!(response.next().unwrap().unwrap().position, 1);

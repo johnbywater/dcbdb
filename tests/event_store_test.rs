@@ -6,7 +6,7 @@ use std::net::TcpListener;
 use tempfile::tempdir;
 use tokio::runtime::Builder as RtBuilder;
 use umadb::db::UmaDB;
-use umadb::grpc::{SyncUmaDBClient, start_server};
+use umadb::grpc::{UmaDBClient, start_server};
 use uuid::Uuid;
 // Import the EventStore and related types from the main crate
 
@@ -964,7 +964,7 @@ fn test_grpc_event_store_client() {
         use std::{thread, time::Duration};
         let mut attempts = 0;
         loop {
-            match SyncUmaDBClient::connect(addr_with_scheme.clone()) {
+            match UmaDBClient::connect(addr_with_scheme.clone()) {
                 Ok(c) => break c,
                 Err(e) => {
                     attempts += 1;

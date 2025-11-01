@@ -203,11 +203,11 @@ impl Iterator for ReadResponse {
 }
 
 impl DCBReadResponseSync for ReadResponse {
-    fn head(&mut self) -> Option<u64> {
-        self.head
+    fn head(&mut self) -> DCBResult<Option<u64>> {
+        Ok(self.head)
     }
-    fn collect_with_head(&mut self) -> (Vec<DCBSequencedEvent>, Option<u64>) {
-        (self.events.clone(), self.head)
+    fn collect_with_head(&mut self) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
+        Ok((self.events.clone(), self.head))
     }
     fn next_batch(&mut self) -> DCBResult<Vec<DCBSequencedEvent>> {
         let batch = self.events[self.idx..].to_vec();
@@ -1027,7 +1027,7 @@ mod tests {
 
         // Read all
         let mut resp = store.read(None, None, None, false, None).unwrap();
-        let (all, head) = resp.collect_with_head();
+        let (all, head) = resp.collect_with_head().unwrap();
         assert_eq!(head, Some(last));
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].event.event_type, "TypeA");
@@ -1035,7 +1035,7 @@ mod tests {
 
         // Limit semantics: only first event returned and head equals that position
         let mut resp_lim1 = store.read(None, None, Some(1), false, None).unwrap();
-        let (only_one, head_lim1) = resp_lim1.collect_with_head();
+        let (only_one, head_lim1) = resp_lim1.collect_with_head().unwrap();
         assert_eq!(only_one.len(), 1);
         assert_eq!(only_one[0].event.event_type, "TypeA");
         assert_eq!(head_lim1, Some(only_one[0].position));

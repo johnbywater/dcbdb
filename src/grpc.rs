@@ -1060,13 +1060,13 @@ fn dcb_error_from_status(status: Status) -> DCBError {
 }
 
 // --- Sync wrapper around the async client ---
-pub struct SyncUmaDBClient {
+pub struct UmaDBClient {
     async_client: AsyncUmaDBClient,
     _runtime: Option<Runtime>, // Keeps runtime alive if we created it
     handle: Handle,
 }
 
-impl SyncUmaDBClient {
+impl UmaDBClient {
     pub fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
     where
         D: TryInto<tonic::transport::Endpoint>,
@@ -1094,7 +1094,7 @@ impl SyncUmaDBClient {
     }
 }
 
-impl DCBEventStoreSync for SyncUmaDBClient {
+impl DCBEventStoreSync for UmaDBClient {
     fn read(
         &self,
         query: Option<DCBQuery>,
@@ -1107,7 +1107,7 @@ impl DCBEventStoreSync for SyncUmaDBClient {
             self.async_client
                 .read(query, after, limit, subscribe, batch_size),
         )?;
-        Ok(Box::new(SyncReadResponse {
+        Ok(Box::new(SyncClientReadResponse {
             rt: &self.handle,
             resp: async_read_response,
             buffer: VecDeque::new(),
@@ -1129,14 +1129,14 @@ impl DCBEventStoreSync for SyncUmaDBClient {
     }
 }
 
-pub struct SyncReadResponse<'a> {
+pub struct SyncClientReadResponse<'a> {
     rt: &'a Handle,
     resp: Box<dyn DCBReadResponseAsync + Send + 'a>,
     buffer: VecDeque<DCBSequencedEvent>, // efficient pop_front()
     finished: bool,
 }
 
-impl<'a> SyncReadResponse<'a> {
+impl<'a> SyncClientReadResponse<'a> {
     /// Fetch the next batch from the async response, filling the buffer
     fn fetch_next_batch(&mut self) -> Result<(), DCBError> {
         if self.finished {
@@ -1153,7 +1153,7 @@ impl<'a> SyncReadResponse<'a> {
     }
 }
 
-impl<'a> Iterator for SyncReadResponse<'a> {
+impl<'a> Iterator for SyncClientReadResponse<'a> {
     type Item = Result<DCBSequencedEvent, DCBError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -1168,17 +1168,17 @@ impl<'a> Iterator for SyncReadResponse<'a> {
     }
 }
 
-impl<'a> DCBReadResponseSync for SyncReadResponse<'a> {
-    fn head(&mut self) -> Option<u64> {
-        self.rt.block_on(self.resp.head()).unwrap_or(None)
+impl<'a> DCBReadResponseSync for SyncClientReadResponse<'a> {
+    fn head(&mut self) -> DCBResult<Option<u64>> {
+        self.rt.block_on(self.resp.head())
     }
 
-    fn collect_with_head(&mut self) -> (Vec<DCBSequencedEvent>, Option<u64>) {
+    fn collect_with_head(&mut self) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
         let mut out = Vec::new();
-        while let Some(Ok(ev)) = self.next() {
-            out.push(ev);
+        while let Some(result) = self.next() {
+            out.push(result?);
         }
-        (out, self.head())
+        Ok((out, self.head()?))
     }
 
     fn next_batch(&mut self) -> Result<Vec<DCBSequencedEvent>, DCBError> {

@@ -413,6 +413,100 @@ See the file `umadb.proto` in the `proto/` folder for details.
 
 This project provides async and non-async Rust clients that you can use to interact with the gRPC server in your own code.
 
+Here's an example of how to use the non-async Rust client:
+
+```rust
+use umadb::dcb::{
+    DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreSync, DCBQuery, DCBQueryItem,
+};
+use umadb::grpc::UmaDBClient;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Connect to the gRPC server
+    let client = UmaDBClient::connect("http://127.0.0.1:50051")?;
+
+    // Define a consistency boundary
+    let cb = DCBQuery {
+        items: vec![DCBQueryItem {
+            types: vec!["example".to_string()],
+            tags: vec!["tag1".to_string(), "tag2".to_string()],
+        }],
+    };
+
+    // Read events for a decision model
+    let mut read_response = client.read(Some(cb.clone()), None, None, false, None)?;
+
+    // Build decision model
+    while let Some(result) = read_response.next() {
+        match result {
+            Ok(event) => {
+                println!(
+                    "Got event at position {}: {:?}",
+                    event.position, event.event
+                );
+            }
+            Err(status) => panic!("gRPC stream error: {}", status),
+        }
+    }
+
+    // Remember the last-known position
+    let last_known_position = read_response.head().unwrap();
+    println!("Last known position is: {:?}", last_known_position);
+
+    // Produce new event
+    let event = DCBEvent {
+        event_type: "example".to_string(),
+        tags: vec!["tag1".to_string(), "tag2".to_string()],
+        data: b"Hello, world!".to_vec(),
+    };
+
+    // Append event in consistency boundary
+    let commit_position = client.append(
+        vec![event.clone()],
+        Some(DCBAppendCondition {
+            fail_if_events_match: cb.clone(),
+            after: last_known_position,
+        }),
+    )?;
+    println!("Appended event at position: {}", commit_position);
+
+    // Append conflicting event - expect an error
+    let conflicting_result = client.append(
+        vec![event.clone()],
+        Some(DCBAppendCondition {
+            fail_if_events_match: cb.clone(),
+            after: last_known_position,
+        }),
+    );
+
+    match conflicting_result {
+        Err(DCBError::IntegrityError(integrity_error)) => {
+            println!("Error appending conflicting event: {:?}", integrity_error);
+        }
+        other => panic!("Expected IntegrityError, got {:?}", other),
+    }
+
+    // Subscribe to all events for a projection
+    let mut subscription = client.read(None, None, None, true, None)?;
+
+    // Build an up-to-date view
+    while let Some(result) = subscription.next() {
+        match result {
+            Ok(ev) => {
+                println!("Processing event at {}: {:?}", ev.position, ev.event);
+                if ev.position == commit_position {
+                    println!("Projection has processed new event!");
+                    break;
+                }
+            }
+            Err(status) => panic!("gRPC stream error: {}", status),
+        }
+    }
+
+    Ok(())
+}
+```
+
 Here's an example of how to use the async Rust client:
 
 ```rust
@@ -512,101 +606,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(status) => panic!("gRPC stream error: {}", status),
         }
     }
-    Ok(())
-}
-```
-Here's an example of how to use the non-async Rust client:
-
-```rust
-use umadb::dcb::{
-    DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreSync, DCBQuery, DCBQueryItem,
-};
-use umadb::grpc::SyncUmaDBClient;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Connect to the gRPC server
-    let client = SyncUmaDBClient::connect("http://127.0.0.1:50051")?;
-
-    // Define a consistency boundary
-    let cb = DCBQuery {
-        items: vec![DCBQueryItem {
-            types: vec!["example".to_string()],
-            tags: vec!["tag1".to_string(), "tag2".to_string()],
-        }],
-    };
-
-    // Read events for a decision model
-    let mut read_response = client.read(Some(cb.clone()), None, None, false, None)?;
-
-    // Build decision model
-    while let Some(result) = read_response.next() {
-        match result {
-            Ok(event) => {
-                println!(
-                    "Got event at position {}: {:?}",
-                    event.position, event.event
-                );
-            }
-            Err(status) => panic!("gRPC stream error: {}", status),
-        }
-    }
-
-    // Remember the last-known position
-    let last_known_position = read_response.head();
-    
-    println!("Last known position is: {:?}", last_known_position);
-
-    // Produce new event
-    let event = DCBEvent {
-        event_type: "example".to_string(),
-        tags: vec!["tag1".to_string(), "tag2".to_string()],
-        data: b"Hello, world!".to_vec(),
-    };
-
-    // Append event in consistency boundary
-    let commit_position = client.append(
-        vec![event.clone()],
-        Some(DCBAppendCondition {
-            fail_if_events_match: cb.clone(),
-            after: last_known_position,
-        }),
-    )?;
-    
-    println!("Appended event at position: {}", commit_position);
-
-    // Append conflicting event - expect an error
-    let conflicting_result = client.append(
-        vec![event.clone()],
-        Some(DCBAppendCondition {
-            fail_if_events_match: cb.clone(),
-            after: last_known_position,
-        }),
-    );
-
-    match conflicting_result {
-        Err(DCBError::IntegrityError(integrity_error)) => {
-            println!("Error appending conflicting event: {:?}", integrity_error);
-        }
-        other => panic!("Expected IntegrityError, got {:?}", other),
-    }
-
-    // Subscribe to all events for a projection
-    let mut subscription = client.read(None, None, None, true, None)?;
-
-    // Build an up-to-date view
-    while let Some(result) = subscription.next() {
-        match result {
-            Ok(ev) => {
-                println!("Processing event at {}: {:?}", ev.position, ev.event);
-                if ev.position == commit_position {
-                    println!("Projection has processed new event!");
-                    break;
-                }
-            }
-            Err(status) => panic!("gRPC stream error: {}", status),
-        }
-    }
-
     Ok(())
 }
 ```

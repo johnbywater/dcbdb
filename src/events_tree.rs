@@ -91,6 +91,7 @@ fn materialize_event_value(
             data_len,
             tags,
             root_id,
+            uuid,
         } => {
             let data = read_overflow_chain(mvcc, dirty, *root_id)?;
             if (data.len() as u64) != *data_len {
@@ -102,6 +103,7 @@ fn materialize_event_value(
                 event_type: event_type.clone(),
                 data,
                 tags: tags.clone(),
+                uuid: uuid.clone(),
             })
         }
     }
@@ -160,6 +162,7 @@ pub fn event_tree_append(
             data_len: event.data.len() as u64,
             tags: event.tags.clone(),
             root_id,
+            uuid: event.uuid,
         }
     } else {
         EventValue::Inline(event)
@@ -235,6 +238,7 @@ pub fn event_tree_append(
                 data_len: rec.data.len() as u64,
                 tags: rec.tags,
                 root_id,
+                uuid: rec.uuid,
             };
             new_leaf_node = EventLeafNode {
                 keys: vec![last_key],
@@ -639,6 +643,7 @@ mod tests {
             event_type: "UserCreated".to_string(),
             data: vec![1, 2, 3, 4],
             tags: vec!["users".to_string(), "creation".to_string()],
+            uuid: None,
         };
 
         // Call append_event
@@ -697,6 +702,7 @@ mod tests {
                 event_type: "UserCreated".to_string(),
                 data: (0..8).map(|_| random::<u8>()).collect(),
                 tags: vec!["users".to_string(), "creation".to_string()],
+                uuid: None,
             };
             appended.push((position, record.clone()));
 
@@ -768,6 +774,7 @@ mod tests {
                 event_type: "UserCreated".to_string(),
                 data: (0..8).map(|_| random::<u8>()).collect(),
                 tags: vec!["users".to_string(), "creation".to_string()],
+                uuid: None,
             };
             appended.push((position, record.clone()));
 
@@ -844,6 +851,7 @@ mod tests {
                 event_type: "UserCreated".to_string(),
                 data: (0..8).map(|_| random::<u8>()).collect(),
                 tags: vec!["users".to_string(), "creation".to_string()],
+                uuid: None,
             };
             appended.push((position, record.clone()));
 
@@ -931,6 +939,7 @@ mod tests {
                 event_type: "UserCreated".to_string(),
                 data: (0..8).map(|_| random::<u8>()).collect(),
                 tags: vec!["users".to_string(), "creation".to_string()],
+                uuid: None,
             };
             appended.push((position, record.clone()));
 
@@ -1024,6 +1033,7 @@ mod tests {
                 event_type: "UserCreated".to_string(),
                 data: (0..8).map(|_| random::<u8>()).collect(),
                 tags: vec!["users".to_string(), "creation".to_string()],
+                uuid: None,
             };
             appended.push((position, record.clone()));
 
@@ -1149,6 +1159,7 @@ mod tests {
                 event_type: "UserCreated".to_string(),
                 data: (0..8).map(|_| random::<u8>()).collect(),
                 tags: vec!["users".to_string(), "creation".to_string()],
+                uuid: None,
             };
             appended.push((position, record.clone()));
 
@@ -1252,6 +1263,7 @@ mod tests {
             event_type: "Big".into(),
             data: data.clone(),
             tags: vec![],
+            uuid: None,
         };
         event_tree_append(&db, &mut writer, event.clone(), pos).unwrap();
         db.commit(&mut writer).unwrap();
@@ -1299,6 +1311,7 @@ mod tests {
             event_type: "Bigger".into(),
             data: data.clone(),
             tags: vec![],
+            uuid: None,
         };
         event_tree_append(&db, &mut writer, event.clone(), pos).unwrap();
         db.commit(&mut writer).unwrap();

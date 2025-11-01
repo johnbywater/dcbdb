@@ -238,6 +238,7 @@ pub fn unconditional_append(
             event_type: ev.event_type,
             data: ev.data,
             tags: ev.tags,
+            uuid: None,
         };
         // Clone tags so we can index them after moving record into event_tree_append
         let tags = record.tags.clone();

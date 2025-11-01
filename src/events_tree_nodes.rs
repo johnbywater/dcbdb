@@ -3,12 +3,14 @@ use crate::common::Position;
 use crate::dcb::DCBError;
 use crate::dcb::DCBResult;
 use byteorder::{ByteOrder, LittleEndian};
+use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EventRecord {
     pub event_type: String,
     pub data: Vec<u8>,
     pub tags: Vec<String>,
+    pub uuid: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,6 +22,7 @@ pub enum EventValue {
         data_len: u64,
         tags: Vec<String>,
         root_id: PageID,
+        uuid: Option<Uuid>,
     },
 }
 
@@ -83,6 +86,7 @@ impl EventLeafNode {
                     data_len: _,
                     tags,
                     root_id: _,
+                    uuid,
                 } => {
                     // 2 bytes for event_type length + bytes for the string
                     total_size += 2 + event_type.len();
@@ -96,6 +100,9 @@ impl EventLeafNode {
                     }
                     // 8 bytes for root_id
                     total_size += 8;
+                    if uuid.is_some() {
+                        total_size += 16;
+                    }
                 }
             }
         }
@@ -120,6 +127,7 @@ impl EventLeafNode {
         for value in &self.values {
             match value {
                 EventValue::Inline(rec) => {
+                    // Todo: flags for UUID
                     buf[i] = 0u8;
                     i += 1;
                     let et_len = rec.event_type.len() as u16;
@@ -144,13 +152,20 @@ impl EventLeafNode {
                         buf[i..i + tb.len()].copy_from_slice(tb);
                         i += tb.len();
                     }
+                    if let Some(uuid) = rec.uuid {
+                        buf[i..i + 16].copy_from_slice(uuid.as_bytes());
+                        i += 16;
+                    }
+
                 }
                 EventValue::Overflow {
                     event_type,
                     data_len,
                     tags,
                     root_id,
+                    uuid,
                 } => {
+                    // Todo: flags for UUID
                     buf[i] = 1u8;
                     i += 1;
                     let et_len = event_type.len() as u16;
@@ -174,6 +189,10 @@ impl EventLeafNode {
                     }
                     buf[i..i + 8].copy_from_slice(&root_id.0.to_le_bytes());
                     i += 8;
+                    if uuid.is_some() {
+                        buf[i..i + 16].copy_from_slice(uuid.unwrap().as_bytes());
+                        i += 16;
+                    }
                 }
             }
         }
@@ -304,6 +323,7 @@ impl EventLeafNode {
                         event_type,
                         data,
                         tags,
+                        uuid: None,
                     }));
                 }
                 1 => {
@@ -362,6 +382,7 @@ impl EventLeafNode {
                         data_len,
                         tags,
                         root_id,
+                        uuid: None,
                     });
                 }
                 _ => {
@@ -591,6 +612,7 @@ mod tests {
                     event_type: "event_type_1".to_string(),
                     data: vec![1, 0, 0, 0], // 100 as little-endian bytes
                     tags: vec!["tag1".to_string(), "tag2".to_string(), "tag3".to_string()],
+                    uuid: None,
                 }),
                 EventValue::Inline(EventRecord {
                     event_type: "event_type_2".to_string(),
@@ -601,11 +623,13 @@ mod tests {
                         "tag6".to_string(),
                         "tag7".to_string(),
                     ],
+                    uuid: None,
                 }),
                 EventValue::Inline(EventRecord {
                     event_type: "event_type_3".to_string(),
                     data: vec![3, 0, 0, 0], // 300 as little-endian bytes
                     tags: vec!["tag8".to_string(), "tag9".to_string()],
+                    uuid: None,
                 }),
             ],
         };
@@ -642,6 +666,7 @@ mod tests {
                     vec!["tag1".to_string(), "tag2".to_string(), "tag3".to_string()],
                     v.tags
                 );
+                assert_eq!(None, v.uuid);
             }
             _ => panic!("Expected Inline for first value"),
         }
@@ -660,6 +685,7 @@ mod tests {
                     ],
                     v.tags
                 );
+                assert_eq!(None, v.uuid);
             }
             _ => panic!("Expected Inline for second value"),
         }
@@ -670,6 +696,7 @@ mod tests {
                 assert_eq!("event_type_3", v.event_type);
                 assert_eq!(vec![3, 0, 0, 0], v.data);
                 assert_eq!(vec!["tag8".to_string(), "tag9".to_string()], v.tags);
+                assert_eq!(None, v.uuid);
             }
             _ => panic!("Expected Inline for third value"),
         }
@@ -684,6 +711,7 @@ mod tests {
                 data_len: 1234567,
                 tags: vec!["a".to_string(), "b".to_string()],
                 root_id: PageID(123),
+                uuid: None,
             }],
         };
         // Serialize
@@ -705,6 +733,7 @@ mod tests {
                 data_len,
                 tags,
                 root_id,
+                uuid: None,
             } => {
                 assert_eq!("over_evt", event_type);
                 assert_eq!(1234567, *data_len);
@@ -721,12 +750,14 @@ mod tests {
             event_type: "inline_evt".to_string(),
             data: vec![1, 2, 3],
             tags: vec!["x".to_string()],
+            uuid: None,
         });
         let overflow = EventValue::Overflow {
             event_type: "overflow_evt".to_string(),
             data_len: 9999,
             tags: vec!["y".to_string(), "z".to_string()],
             root_id: PageID(999),
+            uuid: None,
         };
         let leaf_node = EventLeafNode {
             keys: vec![Position(10), Position(20)],
@@ -743,6 +774,7 @@ mod tests {
                 assert_eq!("inline_evt", rec.event_type);
                 assert_eq!(vec![1, 2, 3], rec.data);
                 assert_eq!(vec!["x".to_string()], rec.tags);
+                assert_eq!(None, rec.uuid);
             }
             _ => panic!("Expected Inline at index 0"),
         }
@@ -752,11 +784,13 @@ mod tests {
                 data_len,
                 tags,
                 root_id,
+                uuid,
             } => {
                 assert_eq!("overflow_evt", event_type);
                 assert_eq!(9999, *data_len);
                 assert_eq!(vec!["y".to_string(), "z".to_string()], *tags);
                 assert_eq!(PageID(999), *root_id);
+                assert_eq!(None, *uuid)
             }
             _ => panic!("Expected Overflow at index 1"),
         }

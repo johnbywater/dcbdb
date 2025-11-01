@@ -78,6 +78,7 @@ pub mod bench_api {
                     event_type: "ev".to_string(),
                     data: data.clone(),
                     tags: tags.clone(),
+                    uuid: None,
                 }));
             }
             let keys_vec: Vec<Position> = (0..keys).map(|i| Position(i as u64)).collect();
@@ -119,6 +120,7 @@ pub mod bench_api {
                     data_len: data_len as u64,
                     tags: tags.clone(),
                     root_id: PageID(1 + i as u64),
+                    uuid: None,
                 });
             }
             let keys_vec: Vec<Position> = (0..keys).map(|i| Position(i as u64)).collect();

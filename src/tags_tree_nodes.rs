@@ -1,5 +1,6 @@
 use crate::common::{PageID, Position};
 use crate::dcb::{DCBError, DCBResult};
+use byteorder::{ByteOrder, LittleEndian};
 
 /// Length in bytes of the hashed tag key used in tag index leaf/internal nodes
 pub const TAG_HASH_LEN: usize = 8;
@@ -75,7 +76,7 @@ impl TagsLeafNode {
         }
 
         // keys_len
-        let keys_len = u16::from_le_bytes([slice[0], slice[1]]) as usize;
+        let keys_len = LittleEndian::read_u16(&slice[0..2]) as usize;
 
         // keys
         let keys_bytes = 2 + keys_len * TAG_HASH_LEN;
@@ -105,20 +106,11 @@ impl TagsLeafNode {
                 ));
             }
             // root_id (8 bytes)
-            let root_id_u64 = u64::from_le_bytes([
-                slice[offset],
-                slice[offset + 1],
-                slice[offset + 2],
-                slice[offset + 3],
-                slice[offset + 4],
-                slice[offset + 5],
-                slice[offset + 6],
-                slice[offset + 7],
-            ]);
+            let root_id_u64 = LittleEndian::read_u64(&slice[offset..offset + 8]);
             let root_id = PageID(root_id_u64);
             offset += 8;
             // positions len
-            let positions_len = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
+            let positions_len = LittleEndian::read_u16(&slice[offset..offset + 2]) as usize;
             offset += 2;
 
             // positions
@@ -131,16 +123,7 @@ impl TagsLeafNode {
             let mut positions = Vec::with_capacity(positions_len);
             for i in 0..positions_len {
                 let p = offset + i * 8;
-                let pos = u64::from_le_bytes([
-                    slice[p],
-                    slice[p + 1],
-                    slice[p + 2],
-                    slice[p + 3],
-                    slice[p + 4],
-                    slice[p + 5],
-                    slice[p + 6],
-                    slice[p + 7],
-                ]);
+                let pos = LittleEndian::read_u64(&slice[p..p + 8]);
                 positions.push(Position(pos));
             }
             offset += need;
@@ -203,7 +186,7 @@ impl TagsInternalNode {
                 slice.len()
             )));
         }
-        let keys_len = u16::from_le_bytes([slice[0], slice[1]]) as usize;
+        let keys_len = LittleEndian::read_u16(&slice[0..2]) as usize;
         let keys_bytes = 2 + keys_len * TAG_HASH_LEN;
         if slice.len() < keys_bytes {
             return Err(DCBError::DeserializationError(format!(
@@ -232,16 +215,7 @@ impl TagsInternalNode {
         let mut child_ids = Vec::with_capacity(child_ids_len);
         for i in 0..child_ids_len {
             let p = keys_bytes + i * 8;
-            let id = u64::from_le_bytes([
-                slice[p],
-                slice[p + 1],
-                slice[p + 2],
-                slice[p + 3],
-                slice[p + 4],
-                slice[p + 5],
-                slice[p + 6],
-                slice[p + 7],
-            ]);
+            let id = LittleEndian::read_u64(&slice[p..p + 8]);
             child_ids.push(PageID(id));
         }
 
@@ -324,7 +298,7 @@ impl TagLeafNode {
             )));
         }
         // positions len (first 2 bytes)
-        let positions_len = u16::from_le_bytes([slice[0], slice[1]]) as usize;
+        let positions_len = LittleEndian::read_u16(&slice[0..2]) as usize;
         let need = positions_len * 8;
         if slice.len() < 2 + need {
             return Err(DCBError::DeserializationError(format!(
@@ -336,16 +310,7 @@ impl TagLeafNode {
         let mut positions = Vec::with_capacity(positions_len);
         for i in 0..positions_len {
             let p = 2 + i * 8;
-            let v = u64::from_le_bytes([
-                slice[p],
-                slice[p + 1],
-                slice[p + 2],
-                slice[p + 3],
-                slice[p + 4],
-                slice[p + 5],
-                slice[p + 6],
-                slice[p + 7],
-            ]);
+            let v = LittleEndian::read_u64(&slice[p..p + 8]);
             positions.push(Position(v));
         }
         Ok(TagLeafNode { positions })
@@ -394,7 +359,7 @@ impl TagInternalNode {
                 slice.len()
             )));
         }
-        let keys_len = u16::from_le_bytes([slice[0], slice[1]]) as usize;
+        let keys_len = LittleEndian::read_u16(&slice[0..2]) as usize;
         let keys_bytes = 2 + keys_len * 8;
         if slice.len() < keys_bytes {
             return Err(DCBError::DeserializationError(format!(
@@ -406,16 +371,7 @@ impl TagInternalNode {
         let mut keys = Vec::with_capacity(keys_len);
         for i in 0..keys_len {
             let p = 2 + i * 8;
-            let v = u64::from_le_bytes([
-                slice[p],
-                slice[p + 1],
-                slice[p + 2],
-                slice[p + 3],
-                slice[p + 4],
-                slice[p + 5],
-                slice[p + 6],
-                slice[p + 7],
-            ]);
+            let v = LittleEndian::read_u64(&slice[p..p + 8]);
             keys.push(Position(v));
         }
 
@@ -431,16 +387,7 @@ impl TagInternalNode {
         let mut child_ids = Vec::with_capacity(child_ids_len);
         for i in 0..child_ids_len {
             let p = keys_bytes + i * 8;
-            let v = u64::from_le_bytes([
-                slice[p],
-                slice[p + 1],
-                slice[p + 2],
-                slice[p + 3],
-                slice[p + 4],
-                slice[p + 5],
-                slice[p + 6],
-                slice[p + 7],
-            ]);
+            let v = LittleEndian::read_u64(&slice[p..p + 8]);
             child_ids.push(PageID(v));
         }
 

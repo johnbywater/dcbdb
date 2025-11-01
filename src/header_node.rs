@@ -1,6 +1,7 @@
 use crate::common::Position;
 use crate::common::{PageID, Tsn};
 use crate::dcb::{DCBError, DCBResult};
+use byteorder::{ByteOrder, LittleEndian};
 
 // Node type definitions
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,24 +54,12 @@ impl HeaderNode {
             )));
         }
 
-        let tsn = u64::from_le_bytes([
-            slice[0], slice[1], slice[2], slice[3], slice[4], slice[5], slice[6], slice[7],
-        ]);
-        let next_page_id = u64::from_le_bytes([
-            slice[8], slice[9], slice[10], slice[11], slice[12], slice[13], slice[14], slice[15],
-        ]);
-        let freetree_root_id = u64::from_le_bytes([
-            slice[16], slice[17], slice[18], slice[19], slice[20], slice[21], slice[22], slice[23],
-        ]);
-        let position_root_id = u64::from_le_bytes([
-            slice[24], slice[25], slice[26], slice[27], slice[28], slice[29], slice[30], slice[31],
-        ]);
-        let tags_root_id = u64::from_le_bytes([
-            slice[32], slice[33], slice[34], slice[35], slice[36], slice[37], slice[38], slice[39],
-        ]);
-        let next_position = u64::from_le_bytes([
-            slice[40], slice[41], slice[42], slice[43], slice[44], slice[45], slice[46], slice[47],
-        ]);
+        let tsn = LittleEndian::read_u64(&slice[0..8]);
+        let next_page_id = LittleEndian::read_u64(&slice[8..16]);
+        let freetree_root_id = LittleEndian::read_u64(&slice[16..24]);
+        let position_root_id = LittleEndian::read_u64(&slice[24..32]);
+        let tags_root_id = LittleEndian::read_u64(&slice[32..40]);
+        let next_position = LittleEndian::read_u64(&slice[40..48]);
 
         Ok(HeaderNode {
             tsn: Tsn(tsn),

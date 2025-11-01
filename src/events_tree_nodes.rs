@@ -2,6 +2,7 @@ use crate::common::PageID;
 use crate::common::Position;
 use crate::dcb::DCBError;
 use crate::dcb::DCBResult;
+use byteorder::{ByteOrder, LittleEndian};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EventRecord {
@@ -189,7 +190,7 @@ impl EventLeafNode {
         }
 
         // Extract the length of the keys (first 2 bytes)
-        let keys_len = u16::from_le_bytes([slice[0], slice[1]]) as usize;
+        let keys_len = LittleEndian::read_u16(&slice[0..2]) as usize;
 
         // Calculate the minimum expected size for the keys
         let min_expected_size = 2 + (keys_len * 8);
@@ -205,16 +206,7 @@ impl EventLeafNode {
         let mut keys = Vec::with_capacity(keys_len);
         for i in 0..keys_len {
             let start = 2 + (i * 8);
-            let position = u64::from_le_bytes([
-                slice[start],
-                slice[start + 1],
-                slice[start + 2],
-                slice[start + 3],
-                slice[start + 4],
-                slice[start + 5],
-                slice[start + 6],
-                slice[start + 7],
-            ]);
+            let position = LittleEndian::read_u64(&slice[start..start + 8]);
             keys.push(Position(position));
         }
 
@@ -238,7 +230,7 @@ impl EventLeafNode {
                     "Unexpected end of data while reading event_type length".to_string(),
                 ));
             }
-            let event_type_len = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
+            let event_type_len = LittleEndian::read_u16(&slice[offset..offset + 2]) as usize;
             offset += 2;
             if offset + event_type_len > slice.len() {
                 return Err(DCBError::DeserializationError(
@@ -263,7 +255,7 @@ impl EventLeafNode {
                             "Unexpected end of data while reading data length".to_string(),
                         ));
                     }
-                    let data_len = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
+                    let data_len = LittleEndian::read_u16(&slice[offset..offset + 2]) as usize;
                     offset += 2;
                     if offset + data_len > slice.len() {
                         return Err(DCBError::DeserializationError(
@@ -279,7 +271,7 @@ impl EventLeafNode {
                             "Unexpected end of data while reading number of tags".to_string(),
                         ));
                     }
-                    let num_tags = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
+                    let num_tags = LittleEndian::read_u16(&slice[offset..offset + 2]) as usize;
                     offset += 2;
                     let mut tags = Vec::with_capacity(num_tags);
                     for _ in 0..num_tags {
@@ -289,7 +281,7 @@ impl EventLeafNode {
                             ));
                         }
                         let tag_len =
-                            u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
+                            LittleEndian::read_u16(&slice[offset..offset + 2]) as usize;
                         offset += 2;
                         if offset + tag_len > slice.len() {
                             return Err(DCBError::DeserializationError(
@@ -321,16 +313,7 @@ impl EventLeafNode {
                             "Unexpected end of data while reading overflow data_len".to_string(),
                         ));
                     }
-                    let data_len = u64::from_le_bytes([
-                        slice[offset],
-                        slice[offset + 1],
-                        slice[offset + 2],
-                        slice[offset + 3],
-                        slice[offset + 4],
-                        slice[offset + 5],
-                        slice[offset + 6],
-                        slice[offset + 7],
-                    ]);
+                    let data_len = LittleEndian::read_u64(&slice[offset..offset + 8]);
                     offset += 8;
 
                     if offset + 2 > slice.len() {
@@ -338,7 +321,7 @@ impl EventLeafNode {
                             "Unexpected end of data while reading number of tags".to_string(),
                         ));
                     }
-                    let num_tags = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
+                    let num_tags = LittleEndian::read_u16(&slice[offset..offset + 2]) as usize;
                     offset += 2;
                     let mut tags = Vec::with_capacity(num_tags);
                     for _ in 0..num_tags {
@@ -348,7 +331,7 @@ impl EventLeafNode {
                             ));
                         }
                         let tag_len =
-                            u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
+                            LittleEndian::read_u16(&slice[offset..offset + 2]) as usize;
                         offset += 2;
                         if offset + tag_len > slice.len() {
                             return Err(DCBError::DeserializationError(
@@ -371,16 +354,7 @@ impl EventLeafNode {
                             "Unexpected end of data while reading overflow root_id".to_string(),
                         ));
                     }
-                    let root_id = PageID(u64::from_le_bytes([
-                        slice[offset],
-                        slice[offset + 1],
-                        slice[offset + 2],
-                        slice[offset + 3],
-                        slice[offset + 4],
-                        slice[offset + 5],
-                        slice[offset + 6],
-                        slice[offset + 7],
-                    ]));
+                    let root_id = PageID(LittleEndian::read_u64(&slice[offset..offset + 8]));
                     offset += 8;
 
                     values.push(EventValue::Overflow {
@@ -439,9 +413,7 @@ impl EventOverflowNode {
                 "Overflow node too small".to_string(),
             ));
         }
-        let next = PageID(u64::from_le_bytes([
-            slice[0], slice[1], slice[2], slice[3], slice[4], slice[5], slice[6], slice[7],
-        ]));
+        let next = PageID(LittleEndian::read_u64(&slice[0..8]));
         let data = slice[8..].to_vec();
         Ok(Self { next, data })
     }
@@ -493,7 +465,7 @@ impl EventInternalNode {
         }
 
         // Extract the length of the keys (first 2 bytes)
-        let keys_len = u16::from_le_bytes([slice[0], slice[1]]) as usize;
+        let keys_len = LittleEndian::read_u16(&slice[0..2]) as usize;
 
         // Calculate the minimum expected size for the keys
         let min_expected_size = 2 + (keys_len * 8);
@@ -509,16 +481,7 @@ impl EventInternalNode {
         let mut keys = Vec::with_capacity(keys_len);
         for i in 0..keys_len {
             let start = 2 + (i * 8);
-            let position = u64::from_le_bytes([
-                slice[start],
-                slice[start + 1],
-                slice[start + 2],
-                slice[start + 3],
-                slice[start + 4],
-                slice[start + 5],
-                slice[start + 6],
-                slice[start + 7],
-            ]);
+            let position = LittleEndian::read_u64(&slice[start..start + 8]);
             keys.push(Position(position));
         }
 
@@ -542,16 +505,7 @@ impl EventInternalNode {
         let mut child_ids = Vec::with_capacity(child_ids_len);
         for i in 0..child_ids_len {
             let start = offset + (i * 8);
-            let page_id = u64::from_le_bytes([
-                slice[start],
-                slice[start + 1],
-                slice[start + 2],
-                slice[start + 3],
-                slice[start + 4],
-                slice[start + 5],
-                slice[start + 6],
-                slice[start + 7],
-            ]);
+            let page_id = LittleEndian::read_u64(&slice[start..start + 8]);
             child_ids.push(PageID(page_id));
         }
 

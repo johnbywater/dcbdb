@@ -1,5 +1,6 @@
 use crate::common::{PageID, Tsn};
 use crate::dcb::{DCBError, DCBResult};
+use byteorder::{ByteOrder, LittleEndian};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FreeListLeafNode {
@@ -80,7 +81,7 @@ impl FreeListLeafNode {
         }
 
         // Extract the length of the keys (first 2 bytes)
-        let keys_len = u16::from_le_bytes([slice[0], slice[1]]) as usize;
+        let keys_len = LittleEndian::read_u16(&slice[0..2]) as usize;
 
         // Calculate the minimum expected size for the keys
         let min_expected_size = 2 + (keys_len * 8);
@@ -96,16 +97,7 @@ impl FreeListLeafNode {
         let mut keys = Vec::with_capacity(keys_len);
         for i in 0..keys_len {
             let start = 2 + (i * 8);
-            let tsn = u64::from_le_bytes([
-                slice[start],
-                slice[start + 1],
-                slice[start + 2],
-                slice[start + 3],
-                slice[start + 4],
-                slice[start + 5],
-                slice[start + 6],
-                slice[start + 7],
-            ]);
+            let tsn = LittleEndian::read_u64(&slice[start..start + 8]);
             keys.push(Tsn(tsn));
         }
 
@@ -121,7 +113,7 @@ impl FreeListLeafNode {
             }
 
             // Extract the length of page_ids (2 bytes)
-            let page_ids_len = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
+            let page_ids_len = LittleEndian::read_u16(&slice[offset..offset + 2]) as usize;
             offset += 2;
 
             if offset + (page_ids_len * 8) > slice.len() {
@@ -134,16 +126,7 @@ impl FreeListLeafNode {
             let mut page_ids = Vec::with_capacity(page_ids_len);
             for j in 0..page_ids_len {
                 let start = offset + (j * 8);
-                let page_id = u64::from_le_bytes([
-                    slice[start],
-                    slice[start + 1],
-                    slice[start + 2],
-                    slice[start + 3],
-                    slice[start + 4],
-                    slice[start + 5],
-                    slice[start + 6],
-                    slice[start + 7],
-                ]);
+                let page_id = LittleEndian::read_u64(&slice[start..start + 8]);
                 page_ids.push(PageID(page_id));
             }
             offset += page_ids_len * 8;
@@ -155,16 +138,7 @@ impl FreeListLeafNode {
             }
 
             // Extract the root_id (always 8 bytes); PageID(0) indicates no subtree
-            let page_id = u64::from_le_bytes([
-                slice[offset],
-                slice[offset + 1],
-                slice[offset + 2],
-                slice[offset + 3],
-                slice[offset + 4],
-                slice[offset + 5],
-                slice[offset + 6],
-                slice[offset + 7],
-            ]);
+            let page_id = LittleEndian::read_u64(&slice[offset..offset + 8]);
             offset += 8;
             let root_id = PageID(page_id);
 
@@ -275,7 +249,7 @@ impl FreeListInternalNode {
         }
 
         // Extract the length of the keys (first 2 bytes)
-        let keys_len = u16::from_le_bytes([slice[0], slice[1]]) as usize;
+        let keys_len = LittleEndian::read_u16(&slice[0..2]) as usize;
 
         // Calculate the minimum expected size for the keys
         let min_expected_size = 2 + (keys_len * 8);
@@ -291,16 +265,7 @@ impl FreeListInternalNode {
         let mut keys = Vec::with_capacity(keys_len);
         for i in 0..keys_len {
             let start = 2 + (i * 8);
-            let tsn = u64::from_le_bytes([
-                slice[start],
-                slice[start + 1],
-                slice[start + 2],
-                slice[start + 3],
-                slice[start + 4],
-                slice[start + 5],
-                slice[start + 6],
-                slice[start + 7],
-            ]);
+            let tsn = LittleEndian::read_u64(&slice[start..start + 8]);
             keys.push(Tsn(tsn));
         }
 
@@ -312,7 +277,7 @@ impl FreeListInternalNode {
             ));
         }
 
-        let child_ids_len = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
+        let child_ids_len = LittleEndian::read_u16(&slice[offset..offset + 2]) as usize;
 
         // Calculate the minimum expected size for the child_ids
         let min_expected_size = offset + 2 + (child_ids_len * 8);
@@ -328,16 +293,7 @@ impl FreeListInternalNode {
         let mut child_ids = Vec::with_capacity(child_ids_len);
         for i in 0..child_ids_len {
             let start = offset + 2 + (i * 8);
-            let page_id = u64::from_le_bytes([
-                slice[start],
-                slice[start + 1],
-                slice[start + 2],
-                slice[start + 3],
-                slice[start + 4],
-                slice[start + 5],
-                slice[start + 6],
-                slice[start + 7],
-            ]);
+            let page_id = LittleEndian::read_u64(&slice[start..start + 8]);
             child_ids.push(PageID(page_id));
         }
 
@@ -405,7 +361,7 @@ impl FreeListTsnLeafNode {
                 slice.len()
             )));
         }
-        let plen = u16::from_le_bytes([slice[0], slice[1]]) as usize;
+        let plen = LittleEndian::read_u16(&slice[0..2]) as usize;
         let need = 2 + plen * 8;
         if slice.len() < need {
             return Err(DCBError::DeserializationError(format!(
@@ -417,16 +373,7 @@ impl FreeListTsnLeafNode {
         let mut page_ids = Vec::with_capacity(plen);
         let mut offset = 2;
         for _ in 0..plen {
-            let v = u64::from_le_bytes([
-                slice[offset],
-                slice[offset + 1],
-                slice[offset + 2],
-                slice[offset + 3],
-                slice[offset + 4],
-                slice[offset + 5],
-                slice[offset + 6],
-                slice[offset + 7],
-            ]);
+            let v = LittleEndian::read_u64(&slice[offset..offset + 8]);
             page_ids.push(PageID(v));
             offset += 8;
         }
@@ -477,43 +424,25 @@ impl FreeListTsnInternalNode {
                 "Expected at least 2 bytes".to_string(),
             ));
         }
-        let klen = u16::from_le_bytes([slice[0], slice[1]]) as usize;
+        let klen = LittleEndian::read_u16(&slice[0..2]) as usize;
         if slice.len() < 2 + klen * 8 + 2 {
             return Err(DCBError::DeserializationError("Data too short".to_string()));
         }
         let mut keys = Vec::with_capacity(klen);
         let mut offset = 2;
         for _ in 0..klen {
-            let v = u64::from_le_bytes([
-                slice[offset],
-                slice[offset + 1],
-                slice[offset + 2],
-                slice[offset + 3],
-                slice[offset + 4],
-                slice[offset + 5],
-                slice[offset + 6],
-                slice[offset + 7],
-            ]);
+            let v = LittleEndian::read_u64(&slice[offset..offset + 8]);
             keys.push(PageID(v));
             offset += 8;
         }
-        let clen = u16::from_le_bytes([slice[offset], slice[offset + 1]]) as usize;
+        let clen = LittleEndian::read_u16(&slice[offset..offset + 2]) as usize;
         offset += 2;
         if slice.len() < offset + clen * 8 {
             return Err(DCBError::DeserializationError("Data too short".to_string()));
         }
         let mut child_ids = Vec::with_capacity(clen);
         for _ in 0..clen {
-            let v = u64::from_le_bytes([
-                slice[offset],
-                slice[offset + 1],
-                slice[offset + 2],
-                slice[offset + 3],
-                slice[offset + 4],
-                slice[offset + 5],
-                slice[offset + 6],
-                slice[offset + 7],
-            ]);
+            let v = LittleEndian::read_u64(&slice[offset..offset + 8]);
             child_ids.push(PageID(v));
             offset += 8;
         }

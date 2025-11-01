@@ -23,8 +23,6 @@ UmaDB offers:
 Consistency boundaries are expressed as queries over event tags and types, allowing
 applications to define constraints dynamically per write operation.
 
-----
-
 ## Key Features
 
 ### Dynamic Consistency Boundaries
@@ -76,8 +74,6 @@ Concurrent append requests are automatically grouped and processed as a nested t
 This approach **significantly improves throughput under concurrent load** by amortizing disk I/O
 across multiple requests, while still ensuring **atomic per-request semantics** and **crash safety**.
 
-----
-
 ## Core Concepts
 
 ### Events and Positions
@@ -97,7 +93,6 @@ Event positions are:
 * **Globally unique**: No two events share the same position.
 * **Sequential**: No gaps in the sequence (positions 1, 2, 3, ...).
 * **Immutable**: Once assigned, an event's position never changes.
-
 
 ### Tags and Queries
 
@@ -130,8 +125,6 @@ optimistic concurrent control over consistency boundaries).
 In short, a DCB query defines what part of the event history matters for building a decision model and for
 deciding whether a write is allowed. It’s flexible enough to express many business rules, such as uniqueness checks,
 idempotency, or workflow coordination, all without hardcoding fixed entity or aggregate boundaries in the database.
-
-----
 
 ## Architecture
 

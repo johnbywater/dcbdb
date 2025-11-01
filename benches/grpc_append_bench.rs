@@ -3,13 +3,15 @@ use futures::future::join_all;
 use std::net::TcpListener;
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration};
 use tempfile::tempdir;
 use tokio::runtime::Builder as RtBuilder;
 use tokio::sync::oneshot;
 use umadb::db::UmaDB;
 use umadb::dcb::{DCBEvent, DCBEventStoreAsync, DCBEventStoreSync};
 use umadb::grpc::{AsyncUmaDBClient, start_server};
+
+const EVENTS_PER_REQUEST: usize = 1;
 
 fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
     let dir = tempdir().expect("tempdir");
@@ -42,7 +44,7 @@ fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
 pub fn grpc_append_benchmark(c: &mut Criterion) {
     // for &threads in &[1usize, 2, 4] {
     let mut group = c.benchmark_group("grpc_append");
-    group.sample_size(40);
+    group.sample_size(100);
     group.measurement_time(Duration::from_secs(10));
 
     for &threads in &[1usize, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024] {
@@ -93,12 +95,11 @@ pub fn grpc_append_benchmark(c: &mut Criterion) {
             }
         }
 
-        // Number of events appended per iteration by a single runtime
-        let events_per_iter = 1usize;
+        // Number of events appended per iteration per client
 
         // Report throughput as the total across all runtime worker threads (informational)
         group.throughput(Throughput::Elements(
-            (events_per_iter as u64) * (threads as u64),
+            (EVENTS_PER_REQUEST as u64) * (threads as u64),
         ));
 
         // Build a Tokio runtime and multiple persistent clients (one per concurrent writer)
@@ -120,11 +121,12 @@ pub fn grpc_append_benchmark(c: &mut Criterion) {
             let clients = clients.clone();
             b.iter(|| {
                 // Build the batch of events per iteration (per task)
-                let events: Vec<DCBEvent> = (0..events_per_iter)
+                let events: Vec<DCBEvent> = (0..EVENTS_PER_REQUEST)
                     .map(|i| DCBEvent {
                         event_type: "bench-append".to_string(),
-                        data: format!("data-{}", i).into_bytes(),
+                        data: format!("data-{i}").into_bytes(),
                         tags: vec!["append".to_string()],
+                        // tags: vec![format!("append-{i}").to_string()],
                     })
                     .collect();
 

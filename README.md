@@ -331,14 +331,25 @@ This design yields crash-safe commits, allows concurrent readers without blockin
 
 ## Benchmarks
 
-The benchmark plot below shows total completed append operations per second from concurrent clients. Each client
+The benchmark plot below shows total appended events per second from concurrent clients. Each client
 is writing one event per request.
 
-![UmaDB benchmark](UmaDB-append-bench.png)
+![UmaDB benchmark](UmaDB-append-bench-1-per-request.png)
 
-The benchmark plot below shows total completed append operations per second for concurrent clients, whilst there are four other
-clients concurrently reading events. This plot shows writing is not significantly impeded by
-concurrent readers.
+The benchmark plot below shows total appended events per second from concurrent clients. Each client
+is writing 10 events per request.
+
+
+![UmaDB benchmark](UmaDB-append-bench-10-per-request.png)
+
+The benchmark plot below shows total appended events per second from concurrent clients. Each client
+is writing 100 events per request.
+
+![UmaDB benchmark](UmaDB-append-bench-100-per-request.png)
+
+The benchmark plot below shows total completed append operations per second for concurrent clients, whilst
+there are four other clients concurrently reading events. Each client is writing 1 event per request. This
+plot shows writing is not drastically impeded by concurrent readers.
 
 ![UmaDB benchmark](UmaDB-append-with-readers-bench.png)
 
@@ -353,8 +364,7 @@ The rate is ultimately constrained by the CPU and network channel limitations.
 ![UmaDB benchmark](UmaDB-read-unthrottled-bench.png)
 
 The benchmark plot below shows total events received per second across concurrent client read operations, whilst there are four other
-clients concurrently appending events. This plot shows reading is not significantly impeded by
-concurrent writers.
+clients concurrently appending events. This plot shows reading is not drastically impeded by concurrent writers.
 
 ![UmaDB benchmark](UmaDB-read-with-writers-bench.png)
 

@@ -1,4 +1,4 @@
-use umadb::dcb::DCBEvent;
+use umadb::dcb::{DCBEvent, DCBEventStoreAsync};
 use umadb::grpc::{AsyncUmaDBClient, start_server};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -1,4 +1,6 @@
-use umadb::dcb::{DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem};
+use umadb::dcb::{
+    DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreSync, DCBQuery, DCBQueryItem,
+};
 // gRPC client sync trait support has been removed; tests use the local EventStore
 use std::net::TcpListener;
 use tempfile::tempdir;
@@ -8,8 +10,8 @@ use umadb::grpc::{SyncUmaDBClient, start_server};
 use uuid::Uuid;
 // Import the EventStore and related types from the main crate
 
-// Helper function to run the test with implementations of the DCBEventStore trait
-pub fn dcb_event_store_test<T: DCBEventStore>(event_store: &T) {
+// Helper function to run the test with implementations of the DCBEventStoreSync trait
+pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     // Test head() method on empty store
     let head_position = event_store.head().unwrap();
     assert_eq!(None, head_position);

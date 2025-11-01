@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::cmp::max;
 use std::time::Instant;
-use umadb::dcb::DCBEvent;
+use umadb::dcb::{DCBEvent, DCBEventStoreAsync};
 use umadb::grpc::AsyncUmaDBClient;
 
 #[derive(Parser)]

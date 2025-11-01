@@ -5,8 +5,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::common::{PageID, Position};
 use crate::dcb::{
-    DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBReadResponse, DCBResult,
-    DCBSequencedEvent,
+    DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreSync, DCBQuery, DCBReadResponseSync,
+    DCBResult, DCBSequencedEvent,
 };
 use crate::events_tree::{EventIterator, event_tree_append, event_tree_lookup};
 use crate::events_tree_nodes::EventRecord;
@@ -17,7 +17,7 @@ use crate::tags_tree_nodes::TagHash;
 
 pub static DEFAULT_PAGE_SIZE: usize = 4096;
 
-/// EventStore implementing the DCBEventStore interface
+/// EventStore implementing the DCBEventStoreSync interface
 pub struct UmaDB {
     mvcc: std::sync::Arc<Mvcc>,
 }
@@ -110,7 +110,7 @@ impl UmaDB {
     }
 }
 
-impl DCBEventStore for UmaDB {
+impl DCBEventStoreSync for UmaDB {
     fn read(
         &self,
         query: Option<DCBQuery>,
@@ -118,7 +118,7 @@ impl DCBEventStore for UmaDB {
         limit: Option<usize>,
         _subscribe: bool,
         _batch_size: Option<usize>,
-    ) -> DCBResult<Box<dyn DCBReadResponse + '_>> {
+    ) -> DCBResult<Box<dyn DCBReadResponseSync + '_>> {
         let mvcc = &self.mvcc;
         let reader = mvcc.reader()?;
 
@@ -202,7 +202,7 @@ impl Iterator for ReadResponse {
     }
 }
 
-impl DCBReadResponse for ReadResponse {
+impl DCBReadResponseSync for ReadResponse {
     fn head(&mut self) -> Option<u64> {
         self.head
     }
@@ -538,7 +538,7 @@ pub fn tag_to_hash(tag: &str) -> TagHash {
 mod tests {
     use super::*;
     use crate::dcb::{
-        DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem,
+        DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreSync, DCBQuery, DCBQueryItem,
     };
     use crate::page::Page;
     use serial_test::serial;

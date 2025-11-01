@@ -8,7 +8,7 @@ use tempfile::tempdir;
 use tokio::runtime::Builder as RtBuilder;
 use tokio::sync::oneshot;
 use umadb::db::UmaDB;
-use umadb::dcb::{DCBEvent, DCBEventStore};
+use umadb::dcb::{DCBEvent, DCBEventStoreAsync, DCBEventStoreSync};
 use umadb::grpc::{AsyncUmaDBClient, start_server};
 
 fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {

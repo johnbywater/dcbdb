@@ -362,26 +362,10 @@ concurrent writers.
 
 The benchmark plots above were produced on an Apple MacBook Pro M4 (10 performance cores and 4 efficiency cores).
 
-## Quick Start
-
-1. Build the project:
-   ```bash
-   cargo build --release
-   ```
-
-2. Start the gRPC server:
-   ```bash
-   ./target/release/grpc_server --path /path/to/event-store
-   ```
-
-3. In another terminal, run the example client:
-   ```bash
-   ./target/release/example_client
-   ```
-
-This will start a server, connect to it with the example client, append an event, and then read events from the event store.
-
 ## Building the Project
+
+Other distribution options are planned, but current the only way to run UmaDB is to clone the Git repository
+and build the project.
 
 To build the project, you need to have Rust and Cargo installed. If you don't have them installed, you can get them from [rustup.rs](https://rustup.rs/).
 
@@ -391,61 +375,51 @@ Once you have Rust and Cargo installed, you can build the project with:
 cargo build --release
 ```
 
-This will create the executable in `target/release/`.
+This will create the UmaDB server executable `uma` in `target/release/`.
 
-## Running the gRPC Server
+## Running the UmaDB Server
 
-The gRPC server can be started using the `grpc_server` binary. You can run it directly after building:
+The UmaDB server can be started using the `uma` binary. You can run it directly after building:
 
 ```bash
-./target/release/grpc_server --path /path/to/event-store --address 127.0.0.1:50051
+./target/release/uma --path /path/to/event-store --address 127.0.0.1:50051
 ```
 
-Or you can use `cargo run` (dev build, slower):
+Or you can use `cargo run` (dev build, builds faster, runs slower):
 
 ```bash
-cargo run --bin grpc_server -- --path /path/to/event-store --address 127.0.0.1:50051
+cargo run --bin uma -- --path /path/to/event-store --address 127.0.0.1:50051
 ```
 
 ### Command-line Options
 
-The gRPC server accepts the following command-line options:
+The `uma` executable accepts the following command-line options:
 
 - `-p, --path <PATH>`: Path to the event store directory (required)
 - `-a, --address <ADDR>`: Address to listen on (default: "127.0.0.1:50051")
 - `-h, --help`: Print help information
 - `-V, --version`: Print version information
 
-## Interacting with the gRPC Server
+## Interacting with UmaDB
 
-You can interact with the gRPC server using any gRPC client. The server implements the following methods:
+You can interact with an UmaDB server using its gRPC API. The server implements the following methods:
 
 - `Read`: Read events from the event store
 - `Append`: Append events to the event store
 
-### Using the Example Client
+See the file `umadb.proto` in the `proto/` folder for details.
 
-UmaDB includes an example client that you can use to interact with the gRPC server. You can run it with:
+### Rust Clients
 
-```bash
-cargo run --bin example_client -- --address http://127.0.0.1:50051
-```
-
-The example client:
-1. Connects to the gRPC server
-2. Appends a few example events
-3. Reads a tail of recent events (no filter)
-4. Prints counts and a timing summary
-
-### Using the Rust Clients in Your Own Code
-
-UmaDB provides async and non-async Rust clients that you can use to interact with the gRPC server in your own code.
+This project provides async and non-async Rust clients that you can use to interact with the gRPC server in your own code.
 
 Here's an example of how to use the async Rust client:
 
 ```rust
 use futures::StreamExt;
-use umadb::dcb::{DCBAppendCondition, DCBError, DCBEvent, DCBQuery, DCBQueryItem};
+use umadb::dcb::{
+    DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreAsync, DCBQuery, DCBQueryItem,
+};
 use umadb::grpc::AsyncUmaDBClient;
 
 #[tokio::main]
@@ -470,7 +444,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(result) = read_response.next().await {
         match result {
             Ok(event) => {
-                println!("Got event at position {}: {:?}", event.position, event.event);
+                println!(
+                    "Got event at position {}: {:?}",
+                    event.position, event.event
+                );
             }
             Err(status) => panic!("gRPC stream error: {}", status),
         }
@@ -478,6 +455,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Remember the last-known position
     let last_known_position = read_response.head().await?;
+    
     println!("Last known position is: {:?}", last_known_position);
 
     // Produce new event
@@ -497,6 +475,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }),
         )
         .await?;
+    
     println!("Appended event at position: {}", commit_position);
 
     // Append conflicting event - expect an error
@@ -532,7 +511,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Err(status) => panic!("gRPC stream error: {}", status),
         }
-
     }
     Ok(())
 }
@@ -540,7 +518,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Here's an example of how to use the non-async Rust client:
 
 ```rust
-use umadb::dcb::{DCBAppendCondition, DCBError, DCBEvent, DCBEventStore, DCBQuery, DCBQueryItem};
+use umadb::dcb::{
+    DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreSync, DCBQuery, DCBQueryItem,
+};
 use umadb::grpc::SyncUmaDBClient;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -562,7 +542,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(result) = read_response.next() {
         match result {
             Ok(event) => {
-                println!("Got event at position {}: {:?}", event.position, event.event);
+                println!(
+                    "Got event at position {}: {:?}",
+                    event.position, event.event
+                );
             }
             Err(status) => panic!("gRPC stream error: {}", status),
         }
@@ -570,6 +553,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Remember the last-known position
     let last_known_position = read_response.head();
+    
     println!("Last known position is: {:?}", last_known_position);
 
     // Produce new event
@@ -587,6 +571,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             after: last_known_position,
         }),
     )?;
+    
     println!("Appended event at position: {}", commit_position);
 
     // Append conflicting event - expect an error

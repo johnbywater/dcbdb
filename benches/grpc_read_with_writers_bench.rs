@@ -10,7 +10,7 @@ use tempfile::tempdir;
 use tokio::runtime::Builder as RtBuilder;
 use tokio::sync::oneshot;
 use umadb::db::UmaDB;
-use umadb::dcb::{DCBEvent, DCBEventStore};
+use umadb::dcb::{DCBEvent, DCBEventStoreAsync, DCBEventStoreSync};
 use umadb::grpc::{AsyncUmaDBClient, start_server};
 // use futures::StreamExt;
 use futures::future::join_all;

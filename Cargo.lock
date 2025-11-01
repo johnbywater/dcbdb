@@ -1777,6 +1777,8 @@ dependencies = [
  "crc32fast",
  "criterion",
  "futures",
+ "futures-core",
+ "futures-util",
  "itertools 0.14.0",
  "libc",
  "memmap2",

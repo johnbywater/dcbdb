@@ -109,7 +109,7 @@ impl UmaDbService for UmaDBServer {
         // Convert proto types to API types
         let mut query: Option<Arc<DCBQuery>> = req.query.map(|q| q.into());
         let after = req.after;
-        let limit = req.limit.map(|l| l as usize);
+        let limit = req.limit.map(|l| l);
 
         // Create a channel for streaming responses (deeper buffer to reduce backpressure under concurrency)
         let (tx, rx) = mpsc::channel(2048);
@@ -148,7 +148,7 @@ impl UmaDbService for UmaDBServer {
                 // READ_RESPONSE_SIZE_MAX, ensure >= 1, then don't exceed remaining (if any)
                 let requested_bs = req.batch_size.unwrap_or(READ_RESPONSE_BATCH_SIZE_DEFAULT);
                 let capped_bs = requested_bs.min(READ_RESPONSE_BATCH_SIZE_MAX);
-                let per_iter_limit = Some(remaining.unwrap_or(usize::MAX).min(capped_bs as usize));
+                let per_iter_limit = remaining.unwrap_or(u32::MAX).min(capped_bs);
                 // println!("Per iter limit: {per_iter_limit:?}");
                 // If subscription and remaining exhausted (limit reached), terminate
                 if subscribe
@@ -158,7 +158,7 @@ impl UmaDbService for UmaDBServer {
                     break;
                 }
                 match command_handler
-                    .read(query_clone.clone(), next_after, per_iter_limit)
+                    .read(query_clone.clone(), next_after, Some(per_iter_limit))
                     .await
                 {
                     Ok((events, head)) => {
@@ -217,13 +217,13 @@ impl UmaDbService for UmaDBServer {
                                 let idx = events
                                     .iter()
                                     .position(|e| e.position > h)
-                                    .unwrap_or(events.len());
-                                (0, idx, idx < events.len())
+                                    .unwrap_or(events.len()) as u32;
+                                (0u32, idx, idx < events.len() as u32)
                             } else {
-                                (0, events.len(), false)
+                                (0u32, events.len() as u32, false)
                             }
                         } else {
-                            (0, events.len(), false)
+                            (0u32, events.len() as u32, false)
                         };
 
                         if slice_len == 0 {
@@ -249,8 +249,8 @@ impl UmaDbService for UmaDBServer {
                         } else {
                             head
                         };
-                        let mut ev_out = Vec::with_capacity(slice_len);
-                        for e in events[slice_start..slice_start + slice_len].iter() {
+                        let mut ev_out = Vec::with_capacity(slice_len as usize);
+                        for e in events[slice_start as usize..slice_start as usize + slice_len as usize].iter() {
                             ev_out.push(SequencedEventProto::from(e.clone()));
                         }
                         let response = ReadResponseProto {
@@ -264,7 +264,7 @@ impl UmaDbService for UmaDBServer {
                         sent_any = true;
 
                         // Advance the cursor (use a new reader on the next loop iteration)
-                        next_after = events.get(slice_start + slice_len - 1).map(|e| e.position);
+                        next_after = events.get(slice_start as usize + slice_len as usize - 1).map(|e| e.position);
 
                         // If we reached the captured head boundary on non-subscribe, stop streaming further
                         if reached_end && remaining.is_none() && !subscribe {
@@ -524,7 +524,7 @@ impl RequestHandler {
         &self,
         query: Option<Arc<DCBQuery>>,
         after: Option<u64>,
-        limit: Option<usize>,
+        limit: Option<u32>,
     ) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
         // Offload blocking read to a dedicated threadpool
         let db = self.mvcc.clone();
@@ -707,9 +707,9 @@ impl DCBEventStoreAsync for AsyncUmaDBClient {
         &'a self,
         query: Option<Arc<DCBQuery>>,
         after: Option<u64>,
-        limit: Option<usize>,
+        limit: Option<u32>,
         subscribe: bool,
-        batch_size: Option<usize>,
+        batch_size: Option<u32>,
     ) -> DCBResult<Box<dyn DCBReadResponseAsync + Send>> {
         // Convert API types to proto types
         let query_proto = query.map(|q| QueryProto {
@@ -1107,9 +1107,9 @@ impl DCBEventStoreSync for UmaDBClient {
         &self,
         query: Option<Arc<DCBQuery>>,
         after: Option<u64>,
-        limit: Option<usize>,
+        limit: Option<u32>,
         subscribe: bool,
-        batch_size: Option<usize>,
+        batch_size: Option<u32>,
     ) -> Result<Box<dyn DCBReadResponseSync + '_>, DCBError> {
         let async_read_response = self.handle.block_on(
             self.async_client

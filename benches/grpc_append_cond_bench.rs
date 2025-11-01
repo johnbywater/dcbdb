@@ -157,12 +157,12 @@ pub fn grpc_append_cond_benchmark(c: &mut Criterion) {
 
                             // Build condition: fail if any events with this tag exist after `after`
                             let condition = DCBAppendCondition {
-                                fail_if_events_match: DCBQuery {
+                                fail_if_events_match: Arc::new(DCBQuery {
                                     items: vec![DCBQueryItem {
                                         types: vec![],
                                         tags: vec![tag.clone()],
                                     }],
-                                },
+                                }),
                                 after,
                             };
 

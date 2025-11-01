@@ -480,12 +480,12 @@ impl<'a> EventIterator<'a> {
         }
     }
 
-    pub fn next_batch(&mut self, batch_size: usize) -> DCBResult<Vec<(Position, EventRecord)>> {
-        let mut result: Vec<(Position, EventRecord)> = Vec::with_capacity(batch_size);
+    pub fn next_batch(&mut self, batch_size: u32) -> DCBResult<Vec<(Position, EventRecord)>> {
+        let mut result: Vec<(Position, EventRecord)> = Vec::with_capacity(batch_size as usize);
         if batch_size == 0 {
             return Ok(result);
         }
-        while result.len() < batch_size {
+        while result.len() < batch_size as usize {
             let Some((page_id, idx)) = self.stack.pop() else {
                 break; // traversal finished
             };

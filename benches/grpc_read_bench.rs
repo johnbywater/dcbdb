@@ -41,11 +41,11 @@ fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
 }
 
 pub fn grpc_read_benchmark(c: &mut Criterion) {
-    const TOTAL_EVENTS: usize = 10_000;
-    const READ_BATCH_SIZE: usize = 1000;
+    const TOTAL_EVENTS: u32 = 10_000;
+    const READ_BATCH_SIZE: u32 = 1000;
 
     // Initialize DB and server with some events
-    let (_tmp_dir, db_path) = init_db_with_events(TOTAL_EVENTS);
+    let (_tmp_dir, db_path) = init_db_with_events(TOTAL_EVENTS as usize);
 
     // Find a free localhost port
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind to ephemeral port");
@@ -144,7 +144,7 @@ pub fn grpc_read_benchmark(c: &mut Criterion) {
                                 // }
                             }
                             assert_eq!(
-                                count, TOTAL_EVENTS,
+                                count, TOTAL_EVENTS as usize,
                                 "expected to read all preloaded events"
                             );
                         }

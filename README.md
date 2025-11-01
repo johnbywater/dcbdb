@@ -688,13 +688,13 @@ Fetches events from the store in order, returning them as an event stream.
 
 Arguments:
 
-| Parameter | Type | Description |
-|------------|------|-------------|
+| Parameter | Type               | Description |
+|------------|--------------------|-------------|
 | `query` | `Option<DCBQuery>` | Optional structured query to filter events (by tags, event types, etc). |
-| `after` | `Option<u64>` | Start reading *after* this sequence number. Only events with greater positions are returned. |
-| `limit` | `Option<usize>` | Optional cap on the number of events to retrieve. |
-| `subscribe` | `bool` | If `true`, keeps the stream open to deliver future events as they arrive. |
-| `batch_size` | `Option<usize>` | Optional hint for how many events to buffer per batch from the server. |
+| `after` | `Option<u64>`      | Start reading *after* this sequence number. Only events with greater positions are returned. |
+| `limit` | `Option<u32>`      | Optional cap on the number of events to retrieve. |
+| `subscribe` | `bool`             | If `true`, keeps the stream open to deliver future events as they arrive. |
+| `batch_size` | `Option<u32>`      | Optional hint for how many events to buffer per batch from the server. |
 
 Returns a "read response" instance from which selected events and the "last known position" can be obtained.
 

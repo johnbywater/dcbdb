@@ -115,9 +115,9 @@ impl DCBEventStoreSync for UmaDB {
         &self,
         query: Option<Arc<DCBQuery>>,
         after: Option<u64>,
-        limit: Option<usize>,
+        limit: Option<u32>,
         _subscribe: bool,
-        _batch_size: Option<usize>,
+        _batch_size: Option<u32>,
     ) -> DCBResult<Box<dyn DCBReadResponseSync + '_>> {
         let mvcc = &self.mvcc;
         let reader = mvcc.reader()?;
@@ -260,9 +260,9 @@ pub fn read_conditional(
     tags_tree_root_id: PageID,
     query: Arc<DCBQuery>,
     after: Position,
-    limit: Option<usize>,
+    limit: Option<u32>,
 ) -> DCBResult<Vec<DCBSequencedEvent>> {
-    const SCAN_BATCH_SIZE: usize = 256;
+    const SCAN_BATCH_SIZE: u32 = 256;
     // Special case: explicit zero limit
     if let Some(0) = limit {
         return Ok(Vec::new());
@@ -287,7 +287,7 @@ pub fn read_conditional(
                     },
                 });
                 if let Some(lim) = limit
-                    && out.len() >= lim
+                    && out.len() >= lim as usize
                 {
                     break 'outer_all;
                 }
@@ -332,7 +332,7 @@ pub fn read_conditional(
                         },
                     });
                     if let Some(lim) = limit
-                        && out.len() >= lim
+                        && out.len() >= lim as usize
                     {
                         break 'outer_fallback;
                     }
@@ -503,7 +503,7 @@ pub fn read_conditional(
             },
         });
         if let Some(lim) = limit
-            && out.len() >= lim
+            && out.len() >= lim as usize
         {
             break;
         }
@@ -552,7 +552,7 @@ mod tests {
         tags_tree_root_id: PageID,
         query: DCBQuery,
         after: Position,
-        limit: Option<usize>,
+        limit: Option<u32>,
     ) -> DCBResult<Vec<DCBSequencedEvent>> {
         super::read_conditional(
             mvcc,

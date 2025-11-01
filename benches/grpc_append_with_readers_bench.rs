@@ -44,8 +44,8 @@ fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
 }
 
 pub fn grpc_append_with_readers_benchmark(c: &mut Criterion) {
-    const TOTAL_EVENTS: usize = 10_000; // preloaded events for readers to loop over
-    const READ_BATCH_SIZE: usize = 1000;
+    const TOTAL_EVENTS: u32 = 10_000; // preloaded events for readers to loop over
+    const READ_BATCH_SIZE: u32 = 1000;
     const READER_COUNT: usize = 4; // number of background readers
 
     let mut group = c.benchmark_group("grpc_append_4readers");
@@ -53,7 +53,7 @@ pub fn grpc_append_with_readers_benchmark(c: &mut Criterion) {
 
     for &threads in &[1usize, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024] {
         // Initialize DB and server with some events
-        let (_tmp_dir, db_path) = init_db_with_events(TOTAL_EVENTS);
+        let (_tmp_dir, db_path) = init_db_with_events(TOTAL_EVENTS as usize);
 
         // Find a free localhost port
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind to ephemeral port");

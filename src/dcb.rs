@@ -23,9 +23,9 @@ pub trait DCBEventStoreSync {
         &self,
         query: Option<Arc<DCBQuery>>,
         after: Option<u64>,
-        limit: Option<usize>,
+        limit: Option<u32>,
         subscribe: bool,
-        batch_size: Option<usize>,
+        batch_size: Option<u32>,
     ) -> DCBResult<Box<dyn DCBReadResponseSync + '_>>;
 
     /// Reads events from the store and returns them as a tuple of (Vec<DCBSequencedEvent>, Option<u64>)
@@ -33,7 +33,7 @@ pub trait DCBEventStoreSync {
         &self,
         query: Option<Arc<DCBQuery>>,
         after: Option<u64>,
-        limit: Option<usize>,
+        limit: Option<u32>,
     ) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
         let mut response = self.read(query, after, limit, false, None)?;
         response.collect_with_head()
@@ -78,9 +78,9 @@ pub trait DCBEventStoreAsync: Send + Sync {
         &'a self,
         query: Option<Arc<DCBQuery>>,
         after: Option<u64>,
-        limit: Option<usize>,
+        limit: Option<u32>,
         subscribe: bool,
-        batch_size: Option<usize>,
+        batch_size: Option<u32>,
     ) -> DCBResult<Box<dyn DCBReadResponseAsync + Send>>;
 
     /// Reads events from the store and returns them as a tuple of (Vec<DCBSequencedEvent>, Option<u64>)
@@ -88,7 +88,7 @@ pub trait DCBEventStoreAsync: Send + Sync {
         &'a self,
         query: Option<Arc<DCBQuery>>,
         after: Option<u64>,
-        limit: Option<usize>,
+        limit: Option<u32>,
     ) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
         let mut response = self.read(query, after, limit, false, None).await?;
         response.collect_with_head().await

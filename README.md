@@ -542,9 +542,20 @@ Represents an application-level error returned by the service.
 
 The "rich status" message can be used to extract structured error details.
 
-### Example Usage
+### Summary
 
-In Python code, directly using the client-side gRPC API might look something like this.
+| Category | Message | Description |
+|-----------|----------|-------------|
+| **Event Model** | `EventProto`, `SequencedEventProto` | Core event representation. |
+| **Queries** | `QueryProto`, `QueryItemProto` | Define filters for event selection. |
+| **Conditions** | `AppendConditionProto` | Control write preconditions. |
+| **Read/Write** | `ReadRequestProto`, `ReadResponseProto`, `AppendRequestProto`, `AppendResponseProto` | Reading and appending APIs. |
+| **Meta** | `HeadRequestProto`, `HeadResponseProto` | Retrieve current head position. |
+| **Errors** | `ErrorResponseProto` | Consistent error representation. |
+
+### Example
+
+Assuming the `umadb.proto` file has been compiled, using the gRPC API in Python code might look something like this.
 
 ```python
 from umadb_pb2 import (
@@ -651,19 +662,6 @@ for read_response in subscription_stream:
 
 ```
 
-
-### Summary
-
-| Category | Message | Description |
-|-----------|----------|-------------|
-| **Event Model** | `EventProto`, `SequencedEventProto` | Core event representation. |
-| **Queries** | `QueryProto`, `QueryItemProto` | Define filters for event selection. |
-| **Conditions** | `AppendConditionProto` | Control write preconditions. |
-| **Read/Write** | `ReadRequestProto`, `ReadResponseProto`, `AppendRequestProto`, `AppendResponseProto` | Reading and appending APIs. |
-| **Meta** | `HeadRequestProto`, `HeadResponseProto` | Retrieve current head position. |
-| **Errors** | `ErrorResponseProto` | Consistent error representation. |
-| **Service** | `UmaDBService` | Main gRPC interface. |
-
 ## Rust Clients
 
 The project provides both **asynchronous** and **synchronous** clients for reading and appending events.
@@ -713,7 +711,7 @@ This value can be used to wait for downstream event-processing components in
 a CQRS system to become up-to-date.
 
 
-### Rust Client Example
+### Examples
 
 Here's an example of how to use the synchronous Rust client for UmaDB:
 

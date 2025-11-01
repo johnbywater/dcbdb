@@ -44,7 +44,7 @@ fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
 }
 
 pub fn grpc_append_with_readers_benchmark(c: &mut Criterion) {
-    const TOTAL_EVENTS: usize = 100_000; // preloaded events for readers to loop over
+    const TOTAL_EVENTS: usize = 10_000; // preloaded events for readers to loop over
     const READ_BATCH_SIZE: usize = 1000;
     const READER_COUNT: usize = 4; // number of background readers
 

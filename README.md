@@ -739,7 +739,7 @@ A recorded event with its assigned **sequence position** in the event store.
 
 | Field | Type | Description |
 |--------|------|-------------|
-| `event` | [`DCBEvent`](#dcbevent) | The underlying event. |
+| `event` | `DCBEvent` | The underlying event. |
 | `position` | `u64` | The event’s absolute position in the global sequence. |
 
 ### DCB Event — `DCBEvent`

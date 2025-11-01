@@ -360,6 +360,8 @@ concurrent writers.
 
 The benchmark plots above were produced on an Apple MacBook Pro M4 (10 performance cores and 4 efficiency cores).
 
+----
+
 ## Running the UmaDB Server
 
 Other distribution options are planned, but currently the only way to run UmaDB is to clone the Git repository

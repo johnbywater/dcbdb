@@ -677,7 +677,7 @@ The project provides both **asynchronous** and **synchronous** clients for readi
 The synchronous client functions effectively as a wrapper around the asynchronous client.
 
 The Rust UmaDB clients implement the same traits and types used internally in the UmaDB server, and so
-effectively represent the essential internal server operations remotely, with gRPC used as a transport
+effectively represent remotely the essential internal server operations, with gRPC used as a transport
 layer for inter-process communication (IPC). This project's test suite leverages this fact to validate both
 the server and the clients support the specified DCB read and append logic, using the same tests that
 work only with the abstracted traits and types. This also means it would be possible to use UmaDB as

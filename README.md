@@ -69,8 +69,6 @@ Concurrent append requests are automatically grouped and processed as a nested t
 This approach **significantly improves throughput under concurrent load** by amortizing disk I/O
 across multiple requests, while still ensuring **atomic per-request semantics** and **crash safety**.
 
-
-
 ## Core Concepts
 
 ### Events and Positions
@@ -276,15 +274,13 @@ read both header pages and select the one with the higher TSN as the "newest" he
 
 #### Reader Transactions
 
-A **reader transaction** captures a consistent snapshot of the database at a specific TSN. Readers
+A reader transaction captures a consistent snapshot of the database at a specific TSN. Readers
 do not hold locks and never block writers or other readers.
 
 Each reader holds:
 
-* A snapshot of tree root page IDs from the header at creation time
-* The TSN it observes
-* A unique reader ID for tracking purposes
-* A pointer to an in-memory register of reader TSNs
+* A transaction sequence number
+* A snapshot of the B+ tree root page IDs
 
 When a reader transaction starts, it adds its TSN to the register of reader TSNs.
 And then when a reader transaction ends, it removes its TSN from the register of reader TSNs.
@@ -295,20 +291,16 @@ determines which freed pages can be reused. Pages freed from lower TSNs can be r
 
 #### Writer Transactions
 
-A writer transaction creates a new database version by writing new pages in the B+ trees (copy-on-write)
-and atomically publishing a new header that points to the new tree roots. Only one writer can execute at
-a time. This is enforced by the writer lock mutex, but in practice there is no contention because there
-is only one append request handler thread.
+Only one writer can execute at a time. This is enforced by the writer lock mutex, but in practice
+there is no contention because there is only one append request handler thread.
 
-A writer transaction takes a snapshot of the newest header, increments the TSN, reads the reader TSN register,
-and finds all reusable page IDs from the free lists tree. It executes append requests by running an append
-condition query after a given position, and if no events are found, then appends new events by manipulating
-the events and tags trees.
+A writer transaction takes a snapshot of the newest header, reads the reader TSN register, and finds all reusable
+page IDs from the free lists tree. It executes append requests by first evaluating an append condition to look for
+conflicting events. If no conflicting events are found, it appends new events by manipulating the B+ tree for events
+and tags.
 
 UmaDB writers never modify pages in place. Instead, writers create new page versions, leaving old
-versions accessible to concurrent readers.
-
-When a writer needs to modify a page, it will:
+versions accessible to concurrent readers. When a writer needs to modify a page, it will:
 
 * Allocate a new page ID (either from its reusable list of page IDs or by using a new database page)
 * Clone the page content to the new PageID
@@ -329,7 +321,7 @@ The database file is then again flushed and synced to disk.
 
 ![UmaDB benchmark](UmaDB-writer-sequence-diagram.png)
 
-This design yields crash-safe commits, concurrent readers without blocking, and efficient space reuse.
+This design yields crash-safe commits, allows concurrent readers without blocking, and efficiently reuses space.
 
 ## Benchmarks
 
@@ -362,9 +354,9 @@ concurrent writers.
 
 The benchmark plots above were produced on an Apple MacBook Pro M4 (10 performance cores and 4 efficiency cores).
 
-## Building the Project
+## Running the UmaDB Server
 
-Other distribution options are planned, but current the only way to run UmaDB is to clone the Git repository
+Other distribution options are planned, but currently the only way to run UmaDB is to clone the Git repository
 and build the project.
 
 To build the project, you need to have Rust and Cargo installed. If you don't have them installed, you can get them from [rustup.rs](https://rustup.rs/).
@@ -377,9 +369,7 @@ cargo build --release
 
 This will create the UmaDB server executable `uma` in `target/release/`.
 
-## Running the UmaDB Server
-
-The UmaDB server can be started using the `uma` binary. You can run it directly after building:
+The UmaDB server can be started using the `uma` binary. You can run it directly after installing or building:
 
 ```bash
 ./target/release/uma --path /path/to/event-store --address 127.0.0.1:50051
@@ -610,46 +600,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-### Query as the consistency boundary
-
-You can use a query as the consistency boundary for your write (carried inside an append condition). Two common patterns are:
-- Optimistic concurrency on the global stream by requiring that the append happens after a known head.
-- Guarded writes that fail if conflicting events already exist (based on type and tags).
-
-Notes:
-- The `after` field implements optimistic concurrency by requiring the append to observe no intervening commits.
-- The `fail_if_events_match` query is the consistency boundary: it lets you express a business-level idempotency/uniqueness guard using event type and tags.
-
-## Subscriptions (catch-up and continue)
-
-UmaDB supports catch-up subscriptions over gRPC. A subscription behaves like a normal read until it reaches the end of the currently recorded events, at which point it blocks instead of terminating and then continues delivering newly appended events.
-
-Key semantics:
-- Normal read (subscribe = false):
-  - For unlimited reads (limit = None), the server captures a starting head boundary and will not stream past it. If new events are appended after the read starts, they are not included; the stream ends at the boundary.
-  - For limited reads (limit = Some(n)), the stream ends after n matching events are sent.
-- Subscription read (subscribe = true):
-  - First delivers all existing matching events (respecting after/limit), then blocks when it reaches the current end.
-  - When new matching events are appended, the stream resumes and continues delivering them.
-  - If a limit is provided, the stream terminates after that many events even in subscription mode.
-  - If the client drops the stream or the server shuts down, the stream terminates. The server actively signals shutdown to terminate ongoing subscriptions gracefully.
-- Batch sizing: you can pass an optional batch_size hint; the server will cap it to its configured maximum.
-
-
-Notes:
-- Server shutdown: When the server is asked to shut down, it signals all active subscription tasks so they terminate promptly. Your client’s loop will end when `next()` returns `None`.
-- Performance: You can tune per-message batch size with the optional batch_size argument to client.read(...). The server caps this to a safe maximum.
-
-### Using Other gRPC Clients
-
-You can also use other gRPC clients to interact with the server. The protocol definition is in the `proto/umadb.proto` file.
-
-## Additional Information
-
-- The event store is stored in the directory specified by the `--path` option.
-- The server listens on the address specified by the `--address` option.
-- The server uses the gRPC protocol for communication.
-- The server is implemented in Rust and uses the Tokio runtime for asynchronous I/O.
+Please refer to the method documentation strings for details.
 
 ## License
 

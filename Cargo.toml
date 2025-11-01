@@ -68,7 +68,6 @@ strip = "none"      # requires a sufficiently recent Rust toolchain
 split-debuginfo = "unpacked" # macOS
 
 
-
 [[bench]]
 name = "grpc_read_bench"
 harness = false
@@ -81,7 +80,6 @@ harness = false
 name = "grpc_read_with_writers_bench"
 harness = false
 
-
 [[bench]]
 name = "grpc_append_with_readers_bench"
 harness = false
@@ -89,7 +87,6 @@ harness = false
 [[bench]]
 name = "grpc_append_cond_bench"
 harness = false
-
 
 [[bench]]
 name = "header_node_bench"

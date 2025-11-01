@@ -406,33 +406,33 @@ The protocol provides an interface for appending and reading events, querying by
 
 The main gRPC service for reading and appending events.
 
-| RPC | Request | Response | Description |
-|------|----------|-----------|-------------|
-| `Read` | [`ReadRequestProto`](#readrequestproto) | **stream** [`ReadResponseProto`](#readresponseproto) | Streams events matching the query; may remain open if `subscribe=true`. |
-| `Append` | [`AppendRequestProto`](#appendrequestproto) | [`AppendResponseProto`](#appendresponseproto) | Appends new events atomically, returning the final sequence position. |
-| `Head` | [`HeadRequestProto`](#headrequestproto) | [`HeadResponseProto`](#headresponseproto) | Returns the current head position of the store. |
+| RPC | Request | Response                                                  | Description |
+|------|----------|-----------------------------------------------------------|-------------|
+| `Read` | [`ReadRequestProto`](#readrequestproto) | **stream**&nbsp;[`ReadResponseProto`](#readresponseproto) | Streams events matching the query; may remain open if `subscribe=true`. |
+| `Append` | [`AppendRequestProto`](#appendrequestproto) | [`AppendResponseProto`](#appendresponseproto)             | Appends new events atomically, returning the final sequence position. |
+| `Head` | [`HeadRequestProto`](#headrequestproto) | [`HeadResponseProto`](#headresponseproto)                 | Returns the current head position of the store. |
 
 
 ### Read Request — **`ReadRequestProto`**
 
 Parameters for reading events from the store.
 
-| Field | Type                     | Description |
-|--------|--------------------------|-------------|
-| `query` | **optional** `QueryProto` | Optional filter for selecting specific event types or tags. |
-| `after` | **optional** `uint64`     | Start reading after this sequence number. |
-| `limit` | **optional** `uint32`     | Maximum number of events to return. |
-| `subscribe` | **optional** `bool`       | If true, the stream remains open and continues delivering new events. |
-| `batch_size` | **optional** `uint32`     | Optional batch size hint for streaming responses. |
+| Field | Type                 | Description |
+|--------|----------------------|-------------|
+| `query` | **optional**&nbsp;`QueryProto` | Optional filter for selecting specific event types or tags. |
+| `after` | **optional**&nbsp;`uint64` | Start reading after this sequence number. |
+| `limit` | **optional**&nbsp;`uint32` | Maximum number of events to return. |
+| `subscribe` | **optional**&nbsp;`bool`   | If true, the stream remains open and continues delivering new events. |
+| `batch_size` | **optional**&nbsp;`uint32` | Optional batch size hint for streaming responses. |
 
 ### Read Response — **`ReadResponseProto`**
 
 Returned for each streamed message in response to a `Read` request.
 
-| Field | Type                               | Description |
-|--------|------------------------------------|-------------|
-| `events` | **repeated** `SequencedEventProto` | A batch of events matching the query. |
-| `head` | **optional** `uint64`               | The current head position of the store when this batch was sent. |
+| Field | Type                              | Description |
+|--------|-----------------------------------|-------------|
+| `events` | **repeated**&nbsp;`SequencedEventProto` | A batch of events matching the query. |
+| `head` | **optional**&nbsp;`uint64`              | The current head position of the store when this batch was sent. |
 
 When `subscribe = true`, multiple `ReadResponseProto` messages may be streamed as new events arrive.
 
@@ -445,10 +445,10 @@ otherwise it will be the position of the last selected event.
 
 Request to append new events to the store.
 
-| Field | Type                               | Description |
-|--------|------------------------------------|-------------|
-| `events` | **repeated** `EventProto`          | Events to append, in order. |
-| `condition` | **optional** `AppendConditionProto` | Optional condition to enforce optimistic concurrency or prevent conflicts. |
+| Field | Type                              | Description |
+|--------|-----------------------------------|-------------|
+| `events` | **repeated**&nbsp;`EventProto`          | Events to append, in order. |
+| `condition` | **optional**&nbsp;`AppendConditionProto` | Optional condition to enforce optimistic concurrency or prevent conflicts. |
 
 ### Append Response — **`AppendResponseProto`**
 
@@ -473,7 +473,7 @@ Response containing the current head position.
 
 | Field | Type                 | Description |
 |--------|----------------------|-------------|
-| `position` | **optional** `uint64` | The latest known event position, or `None` if the store is empty. |
+| `position` | **optional**&nbsp;`uint64` | The latest known event position, or `None` if the store is empty. |
 
 ### Sequenced Event — **`SequencedEventProto`**
 
@@ -491,7 +491,7 @@ Represents a single event.
 | Field | Type                 | Description |
 |--------|----------------------|-------------|
 | `event_type` | `string`             | The logical type or name of the event (e.g. `"UserRegistered"`). |
-| `tags` | **repeated** `string` | Tags associated with the event for query matching and indexing. |
+| `tags` | **repeated**&nbsp;`string` | Tags associated with the event for query matching and indexing. |
 | `data` | `bytes`              | Serialized event data (e.g. JSON, CBOR, or binary payload). |
 
 ### Query — **`QueryProto`**
@@ -500,7 +500,7 @@ Encapsulates one or more [`QueryItemProto`](#queryitemproto) entries.
 
 | Field | Type                         | Description |
 |--------|------------------------------|-------------|
-| `items` | **repeated** `QueryItemProto` | A list of query clauses (logical OR). |
+| `items` | **repeated**&nbsp;`QueryItemProto` | A list of query clauses (logical OR). |
 
 ### Query Item — **`QueryItemProto`**
 
@@ -508,18 +508,18 @@ Represents a **query clause** that matches a subset of events.
 
 | Field | Type                 | Description                       |
 |--------|----------------------|-----------------------------------|
-| `types` | **repeated** `string` | List of event types (logical OR). |
-| `tags` | **repeated** `string` | List of tags (logical AND).       |
+| `types` | **repeated**&nbsp;`string` | List of event types (logical OR). |
+| `tags` | **repeated**&nbsp;`string` | List of tags (logical AND).       |
 
 
 ### Append Condition  — **`AppendConditionProto`**
 
 Optional conditions used to control whether an append should proceed.
 
-| Field | Type                     | Description                                                     |
-|--------|--------------------------|-----------------------------------------------------------------|
-| `fail_if_events_match` | **optional** `QueryProto` | Prevents append if any events matching the query already exist. |
-| `after` | **optional** `uint64`     | Only match events sequenced after this position.                |
+| Field | Type                    | Description                                                     |
+|--------|-------------------------|-----------------------------------------------------------------|
+| `fail_if_events_match` | **optional**&nbsp;`QueryProto` | Prevents append if any events matching the query already exist. |
+| `after` | **optional**&nbsp;`uint64`    | Only match events sequenced after this position.                |
 
 ### Error Response — **`ErrorResponseProto`**
 

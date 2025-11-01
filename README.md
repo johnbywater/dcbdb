@@ -561,7 +561,7 @@ The "rich status" message can be used to extract structured error details.
 
 ### Example
 
-Assuming the `umadb.proto` file has been compiled, using the gRPC API in Python code might look something like this.
+Using the gRPC API directly in Python code might look something like this.
 
 ```python
 from umadb_pb2 import (

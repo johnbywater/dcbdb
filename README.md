@@ -668,6 +668,8 @@ for read_response in subscription_stream:
 
 ```
 
+An actual Python client for UmaDB is forthcoming.
+
 ----
 
 ## Rust Clients
@@ -683,7 +685,7 @@ the server and the clients support the specified DCB read and append logic, usin
 work only with the abstracted traits and types. This also means it would be possible to use UmaDB as
 an embedded database.
 
-The client methods and DCB object types are described below, followed by examples of using the Rust clients for UmaDB.
+The client methods and DCB object types are described below, followed by some examples.
 
 ### Retrieve Events from UmaDB  — `read()`
 

@@ -2,12 +2,18 @@
 
 # What is UmaDB
 
-**UmaDB** is a next-generation event store built for **dynamic consistency boundaries**. It empowers
-event-driven architectures where consistency rules can adapt dynamically to business needs,
-rather than being hardwired into the database.
+**UmaDB** is a next-generation event store built for **dynamic consistency boundaries**.
+UmaDB empowers event-driven architectures where consistency rules can adapt dynamically to
+business needs, rather than being hardwired into the database.
+
+UmaDB follows ideas first put forward by Sara Pellegrini, and directly implements the
+[independent specification](https://dcb.events/specification/) for
+[Dynamic Consistency Boundaries](https://dcb.events) created by Bastian Waidelich, Sara Pellegrini, and Paul Grimshaw.
 
 Events are stored in an append-only sequence, indexed by monotonically increasing gapless positions,
-and can be tagged for fast, precise filtering. UmaDB offers:
+and can be tagged for fast, precise filtering.
+
+UmaDB offers:
 
 * **High-performance concurrency**: non-blocking reads and writes via MVCC
 * **Optimistic concurrency control** to prevent simultaneous write conflicts
@@ -17,6 +23,7 @@ and can be tagged for fast, precise filtering. UmaDB offers:
 Consistency boundaries are expressed as queries over event tags and types, allowing
 applications to define constraints dynamically per write operation.
 
+----
 
 ## Key Features
 
@@ -68,6 +75,8 @@ Concurrent append requests are automatically grouped and processed as a nested t
 
 This approach **significantly improves throughput under concurrent load** by amortizing disk I/O
 across multiple requests, while still ensuring **atomic per-request semantics** and **crash safety**.
+
+----
 
 ## Core Concepts
 
@@ -121,6 +130,8 @@ optimistic concurrent control over consistency boundaries).
 In short, a DCB query defines what part of the event history matters for building a decision model and for
 deciding whether a write is allowed. It’s flexible enough to express many business rules, such as uniqueness checks,
 idempotency, or workflow coordination, all without hardcoding fixed entity or aggregate boundaries in the database.
+
+----
 
 ## Architecture
 
@@ -319,9 +330,11 @@ Then, all dirty pages are written to the database file, and the database file is
 Then, the "oldest" header is overwritten with the writer's new TSN and the new page IDs of the B+ tree roots.
 The database file is then again flushed and synced to disk.
 
-![UmaDB benchmark](UmaDB-writer-sequence-diagram.png)
+![UmaDB sequence diagram](UmaDB-writer-sequence-diagram.png)
 
 This design yields crash-safe commits, allows concurrent readers without blocking, and efficiently reuses space.
+
+----
 
 ## Benchmarks
 
@@ -390,7 +403,9 @@ The `uma` executable accepts the following command-line options:
 - `-h, --help`: Print help information
 - `-V, --version`: Print version information
 
-## UmaDB gRPC API
+----
+
+## gRPC API
 
 This section documents the **UmaDB gRPC protocol** defined in `umadb.proto`.
 
@@ -662,9 +677,13 @@ for read_response in subscription_stream:
 
 ```
 
+----
+
 ## Rust Clients
 
 The project provides both **asynchronous** and **synchronous** clients for reading and appending events.
+
+The synchronous client functions effectively as a wrapper around the asynchronous client.
 
 ### Retrieve Events from UmaDB  — `read()`
 
@@ -709,7 +728,6 @@ Returns the **sequence number** (`u64`) of the last successfully appended event.
 
 This value can be used to wait for downstream event-processing components in
 a CQRS system to become up-to-date.
-
 
 ### Examples
 
@@ -910,7 +928,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-The synchronous client functions effectively as a wrapper around the asynchronous client.
+----
 
 ## License
 

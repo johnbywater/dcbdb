@@ -406,11 +406,11 @@ The protocol provides an interface for appending and reading events, querying by
 
 The main gRPC service for reading and appending events.
 
-| RPC | Request | Response                                                  | Description |
-|------|----------|-----------------------------------------------------------|-------------|
-| `Read` | [`ReadRequestProto`](#readrequestproto) | **stream**&nbsp;[`ReadResponseProto`](#readresponseproto) | Streams events matching the query; may remain open if `subscribe=true`. |
-| `Append` | [`AppendRequestProto`](#appendrequestproto) | [`AppendResponseProto`](#appendresponseproto)             | Appends new events atomically, returning the final sequence position. |
-| `Head` | [`HeadRequestProto`](#headrequestproto) | [`HeadResponseProto`](#headresponseproto)                 | Returns the current head position of the store. |
+| RPC | Request | Response                                            | Description |
+|------|----------|-----------------------------------------------------|-------------|
+| `Read` | `ReadRequestProto` | **stream**&nbsp;`ReadResponseProto` | Streams events matching the query; may remain open if `subscribe=true`. |
+| `Append` | `AppendRequestProto` | `AppendResponseProto`            | Appends new events atomically, returning the final sequence position. |
+| `Head` | `HeadRequestProto` | `HeadResponseProto`              | Returns the current head position of the store. |
 
 
 ### Read Request — **`ReadRequestProto`**
@@ -482,7 +482,7 @@ Represents an event along with its assigned sequence number.
 | Field | Type | Description |
 |--------|------|-------------|
 | `position` | `uint64` | Monotonically increasing event position in the global log. |
-| `event` | [`EventProto`](#eventproto) | The underlying event payload. |
+| `event` | `EventProto` | The underlying event payload. |
 
 ### Event — **`EventProto`**
 
@@ -496,7 +496,7 @@ Represents a single event.
 
 ### Query — **`QueryProto`**
 
-Encapsulates one or more [`QueryItemProto`](#queryitemproto) entries.
+Encapsulates one or more `QueryItemProto`ueryitemproto) entries.
 
 | Field | Type                         | Description |
 |--------|------------------------------|-------------|
@@ -688,8 +688,8 @@ Returns a "read response" instance from which selected events and the "last know
 
 | Interface | Response Type | Description |
 |------------|----------------|-------------|
-| **Async** | [`AsyncReadResponse`](#asyncreadresponse) | An asynchronous stream of events that can be awaited or iterated via `.next().await`. |
-| **Sync** | [`SyncReadResponse`](#syncreadresponse) | A blocking iterator-style wrapper that uses the async client internally. |
+| **Async** | `AsyncReadResponse` | An asynchronous stream of events that can be awaited or iterated via `.next().await`. |
+| **Sync** | `SyncReadResponse` | A blocking iterator-style wrapper that uses the async client internally. |
 
 This method can be used both for constructing decision models in a domain layer, and for projecting events into
 materialized views in CQRS.

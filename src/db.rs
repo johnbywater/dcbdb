@@ -1,8 +1,5 @@
 use std::path::Path;
 
-use itertools::Itertools;
-use std::collections::{HashMap, HashSet};
-
 use crate::common::{PageID, Position};
 use crate::dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreSync, DCBQuery, DCBReadResponseSync,
@@ -14,6 +11,9 @@ use crate::mvcc::{Mvcc, Writer};
 use crate::page::Page;
 use crate::tags_tree::{TagsTreeIterator, tags_tree_insert};
 use crate::tags_tree_nodes::TagHash;
+use itertools::Itertools;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 pub static DEFAULT_PAGE_SIZE: usize = 4096;
 
@@ -113,7 +113,7 @@ impl UmaDB {
 impl DCBEventStoreSync for UmaDB {
     fn read(
         &self,
-        query: Option<DCBQuery>,
+        query: Option<Arc<DCBQuery>>,
         after: Option<u64>,
         limit: Option<usize>,
         _subscribe: bool,
@@ -126,7 +126,7 @@ impl DCBEventStoreSync for UmaDB {
         let last_committed_position = reader.next_position.0.saturating_sub(1);
 
         // Build query and after
-        let q = query.unwrap_or(DCBQuery { items: vec![] });
+        let q = query.unwrap_or(Arc::new(DCBQuery { items: vec![] }));
         let after_pos = Position(after.unwrap_or(0));
 
         // Delegate to read_conditional
@@ -258,7 +258,7 @@ pub fn read_conditional(
     dirty: &HashMap<PageID, Page>,
     events_tree_root_id: PageID,
     tags_tree_root_id: PageID,
-    query: DCBQuery,
+    query: Arc<DCBQuery>,
     after: Position,
     limit: Option<usize>,
 ) -> DCBResult<Vec<DCBSequencedEvent>> {
@@ -559,7 +559,7 @@ mod tests {
             &HashMap::<PageID, Page>::new(),
             events_tree_root_id,
             tags_tree_root_id,
-            query,
+            Arc::new(query),
             after,
             limit,
         )
@@ -1041,12 +1041,12 @@ mod tests {
         assert_eq!(head_lim1, Some(only_one[0].position));
 
         // Tag-filtered read ("foo")
-        let query = DCBQuery {
+        let query = Arc::new(DCBQuery {
             items: vec![DCBQueryItem {
                 types: vec![],
                 tags: vec!["foo".to_string()],
             }],
-        };
+        });
         let mut resp2 = store.read(Some(query), None, None, false, None).unwrap();
         let out2 = resp2.next_batch().unwrap();
         assert_eq!(out2.len(), 2);
@@ -1063,12 +1063,12 @@ mod tests {
 
         // Append with a condition that should PASS: query matches existing 'foo' but after = last
         let cond_pass = DCBAppendCondition {
-            fail_if_events_match: DCBQuery {
+            fail_if_events_match: Arc::new(DCBQuery {
                 items: vec![DCBQueryItem {
                     types: vec![],
                     tags: vec!["foo".to_string()],
                 }],
-            },
+            }),
             after: Some(last),
         };
         let ok_last = store
@@ -1086,12 +1086,12 @@ mod tests {
 
         // Append with a condition that should FAIL: same query but after = 0
         let cond_fail = DCBAppendCondition {
-            fail_if_events_match: DCBQuery {
+            fail_if_events_match: Arc::new(DCBQuery {
                 items: vec![DCBQueryItem {
                     types: vec![],
                     tags: vec!["foo".to_string()],
                 }],
-            },
+            }),
             after: Some(0),
         };
         let before_head = store.head().unwrap();
@@ -1138,14 +1138,14 @@ mod tests {
             (
                 vec![e2.clone()],
                 Some(DCBAppendCondition {
-                    fail_if_events_match: DCBQuery::default(),
+                    fail_if_events_match: Arc::new(DCBQuery::default()),
                     after: None,
                 }),
             ),
             (
                 vec![e3.clone()],
                 Some(DCBAppendCondition {
-                    fail_if_events_match: DCBQuery::default(),
+                    fail_if_events_match: Arc::new(DCBQuery::default()),
                     after: Some(10),
                 }),
             ),
@@ -1200,12 +1200,12 @@ mod tests {
             tags: vec!["z".into()],
         };
 
-        let query_tag_x = DCBQuery {
+        let query_tag_x = Arc::new(DCBQuery {
             items: vec![DCBQueryItem {
                 types: vec![],
                 tags: vec!["x".into()],
             }],
-        };
+        });
 
         let items = vec![
             // 1) Append e1 (tag x)
@@ -1294,18 +1294,18 @@ mod tests {
         };
 
         // Queries by type only (no tags) to force fallback path over events tree (which reads from dirty pages)
-        let q_type_s = DCBQuery {
+        let q_type_s = Arc::new(DCBQuery {
             items: vec![DCBQueryItem {
                 types: vec!["S".into()],
                 tags: vec![],
             }],
-        };
-        let q_type_b = DCBQuery {
+        });
+        let q_type_b = Arc::new(DCBQuery {
             items: vec![DCBQueryItem {
                 types: vec!["B".into()],
                 tags: vec![],
             }],
-        };
+        });
 
         let items = vec![
             // 1) Append small S
@@ -1421,18 +1421,18 @@ mod tests {
         };
 
         // Conditions combining tags and types so the tags index is used and the type filter applies after lookup
-        let q_s_and_x = DCBQuery {
+        let q_s_and_x = Arc::new(DCBQuery {
             items: vec![DCBQueryItem {
                 types: vec!["S".into()],
                 tags: vec!["x".into()],
             }],
-        };
-        let q_b_and_y = DCBQuery {
+        });
+        let q_b_and_y = Arc::new(DCBQuery {
             items: vec![DCBQueryItem {
                 types: vec!["B".into()],
                 tags: vec!["y".into()],
             }],
-        };
+        });
 
         let items = vec![
             // 1) Append small S@x

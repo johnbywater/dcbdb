@@ -4,6 +4,7 @@ use futures::ready;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::thread;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -106,7 +107,7 @@ impl UmaDbService for UmaDBServer {
         let req = request.into_inner();
 
         // Convert proto types to API types
-        let mut query: Option<DCBQuery> = req.query.map(|q| q.into());
+        let mut query: Option<Arc<DCBQuery>> = req.query.map(|q| q.into());
         let after = req.after;
         let limit = req.limit.map(|l| l as usize);
 
@@ -521,7 +522,7 @@ impl RequestHandler {
 
     async fn read(
         &self,
-        query: Option<DCBQuery>,
+        query: Option<Arc<DCBQuery>>,
         after: Option<u64>,
         limit: Option<usize>,
     ) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
@@ -532,7 +533,7 @@ impl RequestHandler {
                 let reader = db.reader()?;
                 let last_committed_position = reader.next_position.0.saturating_sub(1);
 
-                let q = query.unwrap_or(DCBQuery { items: vec![] });
+                let q = query.unwrap_or(Arc::new(DCBQuery { items: vec![] }));
                 let after_pos = crate::common::Position(after.unwrap_or(0));
                 let events = read_conditional(
                     &db,
@@ -704,7 +705,7 @@ impl DCBEventStoreAsync for AsyncUmaDBClient {
     // Async inherent methods: use the gRPC client directly (no trait required)
     async fn read<'a>(
         &'a self,
-        query: Option<crate::dcb::DCBQuery>,
+        query: Option<Arc<DCBQuery>>,
         after: Option<u64>,
         limit: Option<usize>,
         subscribe: bool,
@@ -712,8 +713,7 @@ impl DCBEventStoreAsync for AsyncUmaDBClient {
     ) -> DCBResult<Box<dyn DCBReadResponseAsync + Send>> {
         // Convert API types to proto types
         let query_proto = query.map(|q| QueryProto {
-            items: q
-                .items
+            items: <Vec<DCBQueryItem> as Clone>::clone(&q.items)
                 .into_iter()
                 .map(|item| QueryItemProto {
                     types: item.types,
@@ -761,9 +761,7 @@ impl DCBEventStoreAsync for AsyncUmaDBClient {
 
         let condition_proto = condition.map(|c| AppendConditionProto {
             fail_if_events_match: Some(QueryProto {
-                items: c
-                    .fail_if_events_match
-                    .items
+                items: <Vec<DCBQueryItem> as Clone>::clone(&c.fail_if_events_match.items)
                     .into_iter()
                     .map(|item| QueryItemProto {
                         types: item.types,
@@ -971,12 +969,22 @@ impl From<QueryProto> for DCBQuery {
     }
 }
 
+impl From<QueryProto> for Arc<DCBQuery> {
+    fn from(proto: QueryProto) -> Self {
+        Arc::new(DCBQuery {
+            items: proto.items.into_iter().map(|item| item.into()).collect(),
+        })
+    }
+}
+
 impl From<AppendConditionProto> for DCBAppendCondition {
     fn from(proto: AppendConditionProto) -> Self {
         DCBAppendCondition {
-            fail_if_events_match: proto
-                .fail_if_events_match
-                .map_or_else(DCBQuery::default, |q| q.into()),
+            fail_if_events_match: Arc::new(
+                proto
+                    .fail_if_events_match
+                    .map_or_else(DCBQuery::default, |q| q.into()),
+            ),
             after: proto.after,
         }
     }
@@ -1097,7 +1105,7 @@ impl UmaDBClient {
 impl DCBEventStoreSync for UmaDBClient {
     fn read(
         &self,
-        query: Option<DCBQuery>,
+        query: Option<Arc<DCBQuery>>,
         after: Option<u64>,
         limit: Option<usize>,
         subscribe: bool,

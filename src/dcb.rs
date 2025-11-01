@@ -7,6 +7,7 @@ use crate::common::PageID;
 use async_trait::async_trait;
 use futures_core::Stream;
 use std::iter::Iterator;
+use std::sync::Arc;
 use thiserror::Error;
 
 /// Non-async Rust interface for recording and retrieving events
@@ -20,7 +21,7 @@ pub trait DCBEventStoreSync {
     /// there are no item types, and if all the item tags are in the event tags.
     fn read(
         &self,
-        query: Option<DCBQuery>,
+        query: Option<Arc<DCBQuery>>,
         after: Option<u64>,
         limit: Option<usize>,
         subscribe: bool,
@@ -30,7 +31,7 @@ pub trait DCBEventStoreSync {
     /// Reads events from the store and returns them as a tuple of (Vec<DCBSequencedEvent>, Option<u64>)
     fn read_with_head(
         &self,
-        query: Option<DCBQuery>,
+        query: Option<Arc<DCBQuery>>,
         after: Option<u64>,
         limit: Option<usize>,
     ) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
@@ -75,7 +76,7 @@ pub trait DCBEventStoreAsync: Send + Sync {
     /// there are no item types, and if all the item tags are in the event tags.
     async fn read<'a>(
         &'a self,
-        query: Option<DCBQuery>,
+        query: Option<Arc<DCBQuery>>,
         after: Option<u64>,
         limit: Option<usize>,
         subscribe: bool,
@@ -85,7 +86,7 @@ pub trait DCBEventStoreAsync: Send + Sync {
     /// Reads events from the store and returns them as a tuple of (Vec<DCBSequencedEvent>, Option<u64>)
     async fn read_with_head<'a>(
         &'a self,
-        query: Option<DCBQuery>,
+        query: Option<Arc<DCBQuery>>,
         after: Option<u64>,
         limit: Option<usize>,
     ) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
@@ -148,7 +149,7 @@ pub struct DCBQuery {
 #[derive(Debug, Clone, Default)]
 pub struct DCBAppendCondition {
     /// Query that, if matching any events, will cause the append to fail
-    pub fail_if_events_match: DCBQuery,
+    pub fail_if_events_match: Arc<DCBQuery>,
     /// Position after which to append; if None, append at the end
     pub after: Option<u64>,
 }

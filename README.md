@@ -416,6 +416,7 @@ This project provides async and non-async Rust clients that you can use to inter
 Here's an example of how to use the non-async Rust client:
 
 ```rust
+use std::sync::Arc;
 use umadb::dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreSync, DCBQuery, DCBQueryItem,
 };
@@ -426,12 +427,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = UmaDBClient::connect("http://127.0.0.1:50051")?;
 
     // Define a consistency boundary
-    let cb = DCBQuery {
+    let cb = Arc::new(DCBQuery {
         items: vec![DCBQueryItem {
             types: vec!["example".to_string()],
             tags: vec!["tag1".to_string(), "tag2".to_string()],
         }],
-    };
+    });
 
     // Read events for a decision model
     let mut read_response = client.read(Some(cb.clone()), None, None, false, None)?;
@@ -511,6 +512,7 @@ Here's an example of how to use the async Rust client:
 
 ```rust
 use futures::StreamExt;
+use std::sync::Arc;
 use umadb::dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreAsync, DCBQuery, DCBQueryItem,
 };
@@ -522,12 +524,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = AsyncUmaDBClient::connect("http://127.0.0.1:50051").await?;
 
     // Define a consistency boundary
-    let cb = DCBQuery {
+    let cb = Arc::new(DCBQuery {
         items: vec![DCBQueryItem {
             types: vec!["example".to_string()],
             tags: vec!["tag1".to_string(), "tag2".to_string()],
         }],
-    };
+    });
 
     // Read events for a decision model
     let mut read_response = client
@@ -549,7 +551,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Remember the last-known position
     let last_known_position = read_response.head().await?;
-    
     println!("Last known position is: {:?}", last_known_position);
 
     // Produce new event
@@ -569,7 +570,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }),
         )
         .await?;
-    
     println!("Appended event at position: {}", commit_position);
 
     // Append conflicting event - expect an error

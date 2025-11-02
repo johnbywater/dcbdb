@@ -2,6 +2,7 @@ use crate::common::PageID;
 use crate::common::Position;
 use crate::dcb::DCBError;
 use crate::dcb::DCBResult;
+use bitflags::bitflags;
 use byteorder::{ByteOrder, LittleEndian};
 use uuid::Uuid;
 
@@ -50,6 +51,14 @@ impl PartialEq<EventRecord> for EventValue {
     }
 }
 
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct EventValueFlags: u8 {
+        const OVERFLOW      = 0b0000_0001; // event payload in overflow node
+        const HAS_UUID      = 0b0000_0010; // event includes UUID field
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EventLeafNode {
     pub keys: Vec<Position>,
@@ -79,6 +88,9 @@ impl EventLeafNode {
                     // For each tag: 2 bytes for length + bytes for the string
                     for tag in &rec.tags {
                         total_size += 2 + tag.len();
+                    }
+                    if rec.uuid.is_some() {
+                        total_size += 16;
                     }
                 }
                 EventValue::Overflow {
@@ -125,10 +137,13 @@ impl EventLeafNode {
         }
         // values
         for value in &self.values {
+            let mut flags = EventValueFlags::empty();
             match value {
                 EventValue::Inline(rec) => {
-                    // Todo: flags for UUID
-                    buf[i] = 0u8;
+                    if rec.uuid.is_some() {
+                        flags |= EventValueFlags::HAS_UUID;
+                    }
+                    buf[i] = flags.bits();
                     i += 1;
                     let et_len = rec.event_type.len() as u16;
                     buf[i..i + 2].copy_from_slice(&et_len.to_le_bytes());
@@ -165,8 +180,11 @@ impl EventLeafNode {
                     root_id,
                     uuid,
                 } => {
-                    // Todo: flags for UUID
-                    buf[i] = 1u8;
+                    flags |= EventValueFlags::OVERFLOW;
+                    if uuid.is_some() {
+                        flags |= EventValueFlags::HAS_UUID;
+                    }
+                    buf[i] = flags.bits();
                     i += 1;
                     let et_len = event_type.len() as u16;
                     buf[i..i + 2].copy_from_slice(&et_len.to_le_bytes());
@@ -240,7 +258,9 @@ impl EventLeafNode {
                     "Unexpected end of data while reading value kind".to_string(),
                 ));
             }
-            let kind = slice[offset];
+
+            let flags = EventValueFlags::from_bits(slice[offset])
+                .ok_or(DCBError::DeserializationError("unknown flag bits set".to_string()))? ;
             offset += 1;
 
             // Extract event_type length (2 bytes)
@@ -266,130 +286,173 @@ impl EventLeafNode {
             };
             offset += event_type_len;
 
-            match kind {
-                0 => {
-                    // Inline: data_len u16 + data bytes
-                    if offset + 2 > slice.len() {
-                        return Err(DCBError::DeserializationError(
-                            "Unexpected end of data while reading data length".to_string(),
-                        ));
-                    }
-                    let data_len = LittleEndian::read_u16(&slice[offset..offset + 2]) as usize;
-                    offset += 2;
-                    if offset + data_len > slice.len() {
-                        return Err(DCBError::DeserializationError(
-                            "Unexpected end of data while reading data".to_string(),
-                        ));
-                    }
-                    let data = slice[offset..offset + data_len].to_vec();
-                    offset += data_len;
+            let overflow = flags.contains(EventValueFlags::OVERFLOW);
+            let has_uuid = flags.contains(EventValueFlags::HAS_UUID);
 
-                    // num tags
-                    if offset + 2 > slice.len() {
-                        return Err(DCBError::DeserializationError(
-                            "Unexpected end of data while reading number of tags".to_string(),
-                        ));
-                    }
-                    let num_tags = LittleEndian::read_u16(&slice[offset..offset + 2]) as usize;
-                    offset += 2;
-                    let mut tags = Vec::with_capacity(num_tags);
-                    for _ in 0..num_tags {
-                        if offset + 2 > slice.len() {
-                            return Err(DCBError::DeserializationError(
-                                "Unexpected end of data while reading tag length".to_string(),
-                            ));
-                        }
-                        let tag_len =
-                            LittleEndian::read_u16(&slice[offset..offset + 2]) as usize;
-                        offset += 2;
-                        if offset + tag_len > slice.len() {
-                            return Err(DCBError::DeserializationError(
-                                "Unexpected end of data while reading tag".to_string(),
-                            ));
-                        }
-                        let tag = match std::str::from_utf8(&slice[offset..offset + tag_len]) {
-                            Ok(s) => s.to_string(),
-                            Err(_) => {
-                                return Err(DCBError::DeserializationError(
-                                    "Invalid UTF-8 sequence in tag".to_string(),
-                                ));
-                            }
-                        };
-                        offset += tag_len;
-                        tags.push(tag);
-                    }
-
-                    values.push(EventValue::Inline(EventRecord {
-                        event_type,
-                        data,
-                        tags,
-                        uuid: None,
-                    }));
-                }
-                1 => {
-                    // Overflow: data_len u64 + tags + root_id
-                    if offset + 8 > slice.len() {
-                        return Err(DCBError::DeserializationError(
-                            "Unexpected end of data while reading overflow data_len".to_string(),
-                        ));
-                    }
-                    let data_len = LittleEndian::read_u64(&slice[offset..offset + 8]);
-                    offset += 8;
-
-                    if offset + 2 > slice.len() {
-                        return Err(DCBError::DeserializationError(
-                            "Unexpected end of data while reading number of tags".to_string(),
-                        ));
-                    }
-                    let num_tags = LittleEndian::read_u16(&slice[offset..offset + 2]) as usize;
-                    offset += 2;
-                    let mut tags = Vec::with_capacity(num_tags);
-                    for _ in 0..num_tags {
-                        if offset + 2 > slice.len() {
-                            return Err(DCBError::DeserializationError(
-                                "Unexpected end of data while reading tag length".to_string(),
-                            ));
-                        }
-                        let tag_len =
-                            LittleEndian::read_u16(&slice[offset..offset + 2]) as usize;
-                        offset += 2;
-                        if offset + tag_len > slice.len() {
-                            return Err(DCBError::DeserializationError(
-                                "Unexpected end of data while reading tag".to_string(),
-                            ));
-                        }
-                        let tag = match std::str::from_utf8(&slice[offset..offset + tag_len]) {
-                            Ok(s) => s.to_string(),
-                            Err(_) => {
-                                return Err(DCBError::DeserializationError(
-                                    "Invalid UTF-8 sequence in tag".to_string(),
-                                ));
-                            }
-                        };
-                        offset += tag_len;
-                        tags.push(tag);
-                    }
-                    if offset + 8 > slice.len() {
-                        return Err(DCBError::DeserializationError(
-                            "Unexpected end of data while reading overflow root_id".to_string(),
-                        ));
-                    }
-                    let root_id = PageID(LittleEndian::read_u64(&slice[offset..offset + 8]));
-                    offset += 8;
-
-                    values.push(EventValue::Overflow {
-                        event_type,
-                        data_len,
-                        tags,
-                        root_id,
-                        uuid: None,
-                    });
-                }
-                _ => {
+            if !overflow {
+                // Inline: data_len u16 + data bytes
+                if offset + 2 > slice.len() {
                     return Err(DCBError::DeserializationError(
-                        "Invalid event value kind".to_string(),
+                        "Unexpected end of data while reading data length".to_string(),
                     ));
                 }
+                let data_len = LittleEndian::read_u16(&slice[offset..offset + 2]) as usize;
+                offset += 2;
+                if offset + data_len > slice.len() {
+                    return Err(DCBError::DeserializationError(
+                        "Unexpected end of data while reading data".to_string(),
+                    ));
+                }
+                let data = slice[offset..offset + data_len].to_vec();
+                offset += data_len;
+
+                // num tags
+                if offset + 2 > slice.len() {
+                    return Err(DCBError::DeserializationError(
+                        "Unexpected end of data while reading number of tags".to_string(),
+                    ));
+                }
+                let num_tags = LittleEndian::read_u16(&slice[offset..offset + 2]) as usize;
+                offset += 2;
+                let mut tags = Vec::with_capacity(num_tags);
+                for _ in 0..num_tags {
+                    if offset + 2 > slice.len() {
+                        return Err(DCBError::DeserializationError(
+                            "Unexpected end of data while reading tag length".to_string(),
+                        ));
+                    }
+                    let tag_len =
+                        LittleEndian::read_u16(&slice[offset..offset + 2]) as usize;
+                    offset += 2;
+                    if offset + tag_len > slice.len() {
+                        return Err(DCBError::DeserializationError(
+                            "Unexpected end of data while reading tag".to_string(),
+                        ));
+                    }
+                    let tag = match std::str::from_utf8(&slice[offset..offset + tag_len]) {
+                        Ok(s) => s.to_string(),
+                        Err(_) => {
+                            return Err(DCBError::DeserializationError(
+                                "Invalid UTF-8 sequence in tag".to_string(),
+                            ));
+                        }
+                    };
+                    offset += tag_len;
+                    tags.push(tag);
+                }
+
+                let uuid = {
+                    if has_uuid {
+                        if offset + 16 > slice.len() {
+                            return Err(DCBError::DeserializationError(
+                                "Unexpected end of data while reading UUID".to_string(),
+                            ));
+                        }
+
+                        match Uuid::from_slice(&slice[offset..offset + 16]) {
+                            Ok(uuid) => {
+                                offset += 16;
+                                Some(uuid)
+                            },
+                            Err(err) => {
+                                return Err(DCBError::DeserializationError(
+                                    format!("Invalid UUID sequence: {err} ").to_string(),
+                                ));
+                            }
+                        }
+                    } else {
+                        None
+                    }
+                };
+
+                values.push(EventValue::Inline(EventRecord {
+                    event_type,
+                    data,
+                    tags,
+                    uuid,
+                }));
+            } else {
+                // Overflow: data_len u64 + tags + root_id
+                if offset + 8 > slice.len() {
+                    return Err(DCBError::DeserializationError(
+                        "Unexpected end of data while reading overflow data_len".to_string(),
+                    ));
+                }
+                let data_len = LittleEndian::read_u64(&slice[offset..offset + 8]);
+                offset += 8;
+
+                if offset + 2 > slice.len() {
+                    return Err(DCBError::DeserializationError(
+                        "Unexpected end of data while reading number of tags".to_string(),
+                    ));
+                }
+                let num_tags = LittleEndian::read_u16(&slice[offset..offset + 2]) as usize;
+                offset += 2;
+                let mut tags = Vec::with_capacity(num_tags);
+                for _ in 0..num_tags {
+                    if offset + 2 > slice.len() {
+                        return Err(DCBError::DeserializationError(
+                            "Unexpected end of data while reading tag length".to_string(),
+                        ));
+                    }
+                    let tag_len =
+                        LittleEndian::read_u16(&slice[offset..offset + 2]) as usize;
+                    offset += 2;
+                    if offset + tag_len > slice.len() {
+                        return Err(DCBError::DeserializationError(
+                            "Unexpected end of data while reading tag".to_string(),
+                        ));
+                    }
+                    let tag = match std::str::from_utf8(&slice[offset..offset + tag_len]) {
+                        Ok(s) => s.to_string(),
+                        Err(_) => {
+                            return Err(DCBError::DeserializationError(
+                                "Invalid UTF-8 sequence in tag".to_string(),
+                            ));
+                        }
+                    };
+                    offset += tag_len;
+                    tags.push(tag);
+                }
+                if offset + 8 > slice.len() {
+                    return Err(DCBError::DeserializationError(
+                        "Unexpected end of data while reading overflow root_id".to_string(),
+                    ));
+                }
+                let root_id = PageID(LittleEndian::read_u64(&slice[offset..offset + 8]));
+                offset += 8;
+
+                let uuid = {
+                    if has_uuid {
+                        if offset + 16 > slice.len() {
+                            return Err(DCBError::DeserializationError(
+                                "Unexpected end of data while reading UUID".to_string(),
+                            ));
+                        }
+
+                        match Uuid::from_slice(&slice[offset..offset + 16]) {
+                            Ok(uuid) => {
+                                offset += 16;
+                                Some(uuid)
+                            },
+                            Err(err) => {
+                                return Err(DCBError::DeserializationError(
+                                    format!("Invalid UUID sequence: {err} ").to_string(),
+                                ));
+                            }
+                        }
+                    } else {
+                        None
+                    }
+                };
+
+                values.push(EventValue::Overflow {
+                    event_type,
+                    data_len,
+                    tags,
+                    root_id,
+                    uuid,
+                });
             }
         }
 
@@ -603,7 +666,7 @@ mod tests {
     }
 
     #[test]
-    fn test_event_leaf_serialize() {
+    fn test_event_leaf_serialize_without_uuid() {
         // Create an EventLeafNode with known values
         let leaf_node = EventLeafNode {
             keys: vec![Position(1000), Position(2000), Position(3000)],
@@ -703,7 +766,110 @@ mod tests {
     }
 
     #[test]
-    fn test_event_leaf_serialize_with_overflow_single() {
+    fn test_event_leaf_serialize_with_uuid() {
+        // Create an EventLeafNode with known values
+        let uuid1 = Uuid::new_v4();
+        let uuid2 = Uuid::new_v4();
+        let uuid3 = Uuid::new_v4();
+        let leaf_node = EventLeafNode {
+            keys: vec![Position(1000), Position(2000), Position(3000)],
+            values: vec![
+                EventValue::Inline(EventRecord {
+                    event_type: "event_type_1".to_string(),
+                    data: vec![1, 0, 0, 0], // 100 as little-endian bytes
+                    tags: vec!["tag1".to_string(), "tag2".to_string(), "tag3".to_string()],
+                    uuid: Some(uuid1),
+                }),
+                EventValue::Inline(EventRecord {
+                    event_type: "event_type_2".to_string(),
+                    data: vec![2, 0, 0, 0], // 200 as little-endian bytes
+                    tags: vec![
+                        "tag4".to_string(),
+                        "tag5".to_string(),
+                        "tag6".to_string(),
+                        "tag7".to_string(),
+                    ],
+                    uuid: Some(uuid2),
+                }),
+                EventValue::Inline(EventRecord {
+                    event_type: "event_type_3".to_string(),
+                    data: vec![3, 0, 0, 0], // 300 as little-endian bytes
+                    tags: vec!["tag8".to_string(), "tag9".to_string()],
+                    uuid: Some(uuid3),
+                }),
+            ],
+        };
+
+        // Serialize the EventLeafNode
+        let mut serialized = vec![0u8; leaf_node.calc_serialized_size()];
+        leaf_node.serialize_into(&mut serialized);
+
+        // Verify the serialized output is not empty
+        assert!(!serialized.is_empty());
+
+        // Deserialize back to an EventLeafNode
+        let deserialized =
+            EventLeafNode::from_slice(&serialized).expect("Failed to deserialize EventLeafNode");
+
+        // Verify that the deserialized node matches the original
+        assert_eq!(leaf_node, deserialized);
+
+        // Verify specific properties
+        assert_eq!(3, deserialized.keys.len());
+        assert_eq!(3, deserialized.values.len());
+
+        // Check keys
+        assert_eq!(Position(1000), deserialized.keys[0]);
+        assert_eq!(Position(2000), deserialized.keys[1]);
+        assert_eq!(Position(3000), deserialized.keys[2]);
+
+        // Check first value
+        match &deserialized.values[0] {
+            EventValue::Inline(v) => {
+                assert_eq!("event_type_1", v.event_type);
+                assert_eq!(vec![1, 0, 0, 0], v.data);
+                assert_eq!(
+                    vec!["tag1".to_string(), "tag2".to_string(), "tag3".to_string()],
+                    v.tags
+                );
+                assert_eq!(Some(uuid1), v.uuid);
+            }
+            _ => panic!("Expected Inline for first value"),
+        }
+
+        // Check second value
+        match &deserialized.values[1] {
+            EventValue::Inline(v) => {
+                assert_eq!("event_type_2", v.event_type);
+                assert_eq!(vec![2, 0, 0, 0], v.data);
+                assert_eq!(
+                    vec![
+                        "tag4".to_string(),
+                        "tag5".to_string(),
+                        "tag6".to_string(),
+                        "tag7".to_string()
+                    ],
+                    v.tags
+                );
+                assert_eq!(Some(uuid2), v.uuid);
+            }
+            _ => panic!("Expected Inline for second value"),
+        }
+
+        // Check third value
+        match &deserialized.values[2] {
+            EventValue::Inline(v) => {
+                assert_eq!("event_type_3", v.event_type);
+                assert_eq!(vec![3, 0, 0, 0], v.data);
+                assert_eq!(vec!["tag8".to_string(), "tag9".to_string()], v.tags);
+                assert_eq!(Some(uuid3), v.uuid);
+            }
+            _ => panic!("Expected Inline for third value"),
+        }
+    }
+
+    #[test]
+    fn test_event_leaf_serialize_with_overflow_single_without_uuid() {
         let leaf_node = EventLeafNode {
             keys: vec![Position(111)],
             values: vec![EventValue::Overflow {
@@ -733,12 +899,57 @@ mod tests {
                 data_len,
                 tags,
                 root_id,
-                uuid: None,
+                uuid,
             } => {
                 assert_eq!("over_evt", event_type);
                 assert_eq!(1234567, *data_len);
                 assert_eq!(vec!["a".to_string(), "b".to_string()], *tags);
                 assert_eq!(PageID(123), *root_id);
+                assert_eq!(None, *uuid);
+            }
+            _ => panic!("Expected Overflow variant"),
+        }
+    }
+
+    #[test]
+    fn test_event_leaf_serialize_with_overflow_single_with_uuid() {
+        let uuid1 = Uuid::new_v4();
+        let leaf_node = EventLeafNode {
+            keys: vec![Position(111)],
+            values: vec![EventValue::Overflow {
+                event_type: "over_evt".to_string(),
+                data_len: 1234567,
+                tags: vec!["a".to_string(), "b".to_string()],
+                root_id: PageID(123),
+                uuid: Some(uuid1),
+            }],
+        };
+        // Serialize
+        let mut serialized = vec![0u8; leaf_node.calc_serialized_size()];
+        leaf_node.serialize_into(&mut serialized);
+        assert!(!serialized.is_empty());
+        // Deserialize
+        let deserialized = EventLeafNode::from_slice(&serialized)
+            .expect("Failed to deserialize EventLeafNode with overflow");
+        assert_eq!(leaf_node, deserialized);
+
+        // Check specific fields
+        assert_eq!(1, deserialized.keys.len());
+        assert_eq!(Position(111), deserialized.keys[0]);
+        assert_eq!(1, deserialized.values.len());
+        match &deserialized.values[0] {
+            EventValue::Overflow {
+                event_type,
+                data_len,
+                tags,
+                root_id,
+                uuid,
+            } => {
+                assert_eq!("over_evt", event_type);
+                assert_eq!(1234567, *data_len);
+                assert_eq!(vec!["a".to_string(), "b".to_string()], *tags);
+                assert_eq!(PageID(123), *root_id);
+                assert_eq!(Some(uuid1), *uuid);
             }
             _ => panic!("Expected Overflow variant"),
         }

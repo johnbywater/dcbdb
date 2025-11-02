@@ -424,33 +424,33 @@ The following sections detail the protocol defined in `umadb.proto`.
 
 The main gRPC service for reading and appending events.
 
-| RPC | Request | Response                                            | Description                                                                        |
-|------|----------|-----------------------------------------------------|------------------------------------------------------------------------------------|
-| `Read` | `ReadRequestProto` | **stream**&nbsp;`ReadResponseProto` | Streams batches of events matching the query; may remain open if `subscribe=true`. |
-| `Append` | `AppendRequestProto` | `AppendResponseProto`            | Appends new events atomically, returning the final sequence position.              |
-| `Head` | `HeadRequestProto` | `HeadResponseProto`              | Returns the current head position of the store.                                    |
+| RPC      | Request              | Response                            | Description                                                                        |
+|----------|----------------------|-------------------------------------|------------------------------------------------------------------------------------|
+| `Read`   | `ReadRequestProto`   | **stream**&nbsp;`ReadResponseProto` | Streams batches of events matching the query; may remain open if `subscribe=true`. |
+| `Append` | `AppendRequestProto` | `AppendResponseProto`               | Appends new events atomically, returning the final sequence position.              |
+| `Head`   | `HeadRequestProto`   | `HeadResponseProto`                 | Returns the current head position of the store.                                    |
 
 
 ### Read Request — **`ReadRequestProto`**
 
 Request to read events from the event store.
 
-| Field | Type                 | Description |
-|--------|----------------------|-------------|
-| `query` | **optional**&nbsp;`QueryProto` | Optional filter for selecting specific event types or tags. |
-| `after` | **optional**&nbsp;`uint64` | Start reading after this sequence number. |
-| `limit` | **optional**&nbsp;`uint32` | Maximum number of events to return. |
-| `subscribe` | **optional**&nbsp;`bool`   | If true, the stream remains open and continues delivering new events. |
-| `batch_size` | **optional**&nbsp;`uint32` | Optional batch size hint for streaming responses. |
+| Field        | Type                           | Description                                                           |
+|--------------|--------------------------------|-----------------------------------------------------------------------|
+| `query`      | **optional**&nbsp;`QueryProto` | Optional filter for selecting specific event types or tags.           |
+| `after`      | **optional**&nbsp;`uint64`     | Start reading after this sequence number.                             |
+| `limit`      | **optional**&nbsp;`uint32`     | Maximum number of events to return.                                   |
+| `subscribe`  | **optional**&nbsp;`bool`       | If true, the stream remains open and continues delivering new events. |
+| `batch_size` | **optional**&nbsp;`uint32`     | Optional batch size hint for streaming responses.                     |
 
 ### Read Response — **`ReadResponseProto`**
 
 Returned for each streamed batch of messages in response to a `Read` request.
 
-| Field | Type                              | Description |
-|--------|-----------------------------------|-------------|
-| `events` | **repeated**&nbsp;`SequencedEventProto` | A batch of events matching the query. |
-| `head` | **optional**&nbsp;`uint64`              | The current head position of the store when this batch was sent. |
+| Field    | Type                                    | Description                                                      |
+|----------|-----------------------------------------|------------------------------------------------------------------|
+| `events` | **repeated**&nbsp;`SequencedEventProto` | A batch of events matching the query.                            |
+| `head`   | **optional**&nbsp;`uint64`              | The current head position of the store when this batch was sent. |
 
 When `subscribe = true`, multiple `ReadResponseProto` messages may be streamed as new events arrive.
 
@@ -463,17 +463,17 @@ otherwise it will be the position of the last selected event.
 
 Request to append new events to the store.
 
-| Field | Type                              | Description |
-|--------|-----------------------------------|-------------|
-| `events` | **repeated**&nbsp;`EventProto`          | Events to append, in order. |
+| Field       | Type                                     | Description                                                                |
+|-------------|------------------------------------------|----------------------------------------------------------------------------|
+| `events`    | **repeated**&nbsp;`EventProto`           | Events to append, in order.                                                |
 | `condition` | **optional**&nbsp;`AppendConditionProto` | Optional condition to enforce optimistic concurrency or prevent conflicts. |
 
 ### Append Response — **`AppendResponseProto`**
 
 Response after successfully appending events.
 
-| Field | Type | Description |
-|--------|------|-------------|
+| Field      | Type     | Description                                   |
+|------------|----------|-----------------------------------------------|
 | `position` | `uint64` | Sequence position of the last appended event. |
 
 With CQRS-style eventually consistent projections, clients can use the returned position to wait until downstream
@@ -489,87 +489,88 @@ _No fields._
 
 Response containing the current head position.
 
-| Field | Type                 | Description |
-|--------|----------------------|-------------|
+| Field      | Type                       | Description                                                       |
+|------------|----------------------------|-------------------------------------------------------------------|
 | `position` | **optional**&nbsp;`uint64` | The latest known event position, or `None` if the store is empty. |
 
 ### Sequenced Event — **`SequencedEventProto`**
 
 Represents an event along with its assigned sequence number.
 
-| Field | Type | Description |
-|--------|------|-------------|
-| `position` | `uint64` | Monotonically increasing event position in the global log. |
-| `event` | `EventProto` | The underlying event payload. |
+| Field      | Type         | Description                                                |
+|------------|--------------|------------------------------------------------------------|
+| `position` | `uint64`     | Monotonically increasing event position in the global log. |
+| `event`    | `EventProto` | The underlying event payload.                              |
 
 ### Event — **`EventProto`**
 
 Represents a single event.
 
-| Field | Type                 | Description |
-|--------|----------------------|-------------|
-| `event_type` | `string`             | The logical type or name of the event (e.g. `"UserRegistered"`). |
-| `tags` | **repeated**&nbsp;`string` | Tags associated with the event for query matching and indexing. |
-| `data` | `bytes`              | Serialized event data (e.g. JSON, CBOR, or binary payload). |
+| Field        | Type                       | Description                                                      |
+|--------------|----------------------------|------------------------------------------------------------------|
+| `event_type` | `string`                   | The logical type or name of the event (e.g. `"UserRegistered"`). |
+| `tags`       | **repeated**&nbsp;`string` | Tags associated with the event for query matching and indexing.  |
+| `data`       | `bytes`                    | Serialized event data (e.g. JSON, CBOR, or binary payload).      |
+| `uuid`       | `string`                   | Serialized event UUID (e.g. A version 4 UUIDv4).                 |
 
 ### Query — **`QueryProto`**
 
 Encapsulates one or more `QueryItemProto`ueryitemproto) entries.
 
-| Field | Type                         | Description |
-|--------|------------------------------|-------------|
+| Field   | Type                               | Description                           |
+|---------|------------------------------------|---------------------------------------|
 | `items` | **repeated**&nbsp;`QueryItemProto` | A list of query clauses (logical OR). |
 
 ### Query Item — **`QueryItemProto`**
 
 Represents a **query clause** that matches a subset of events.
 
-| Field | Type                 | Description                       |
-|--------|----------------------|-----------------------------------|
+| Field   | Type                       | Description                       |
+|---------|----------------------------|-----------------------------------|
 | `types` | **repeated**&nbsp;`string` | List of event types (logical OR). |
-| `tags` | **repeated**&nbsp;`string` | List of tags (logical AND).       |
+| `tags`  | **repeated**&nbsp;`string` | List of tags (logical AND).       |
 
 
 ### Append Condition  — **`AppendConditionProto`**
 
 Optional conditions used to control whether an append should proceed.
 
-| Field | Type                    | Description                                                     |
-|--------|-------------------------|-----------------------------------------------------------------|
+| Field                  | Type                           | Description                                                     |
+|------------------------|--------------------------------|-----------------------------------------------------------------|
 | `fail_if_events_match` | **optional**&nbsp;`QueryProto` | Prevents append if any events matching the query already exist. |
-| `after` | **optional**&nbsp;`uint64`    | Only match events sequenced after this position.                |
+| `after`                | **optional**&nbsp;`uint64`     | Only match events sequenced after this position.                |
 
 ### Error Response — **`ErrorResponseProto`**
 
 Represents an application-level error returned by the service.
 
-| Field | Type | Description |
-|--------|------|-------------|
-| `message` | `string` | Human-readable description of the error. |
-| `error_type` | `ErrorType` | Classification of the error. |
+| Field        | Type        | Description                              |
+|--------------|-------------|------------------------------------------|
+| `message`    | `string`    | Human-readable description of the error. |
+| `error_type` | `ErrorType` | Classification of the error.             |
 
 ### Error Type — **ErrorType**
 
-| Value | Name | Description |
-|--------|------|-------------|
-| `0` | `IO` | Input/output error (e.g. storage or filesystem). |
-| `1` | `SERIALIZATION` | Serialization or deserialization failure. |
-| `2` | `INTEGRITY` | Logical integrity violation (e.g. condition failed). |
-| `3` | `CORRUPTION` | Corrupted or invalid data detected. |
-| `4` | `INTERNAL` | Internal server or database error. |
+| Value | Name            | Description                                          |
+|-------|-----------------|------------------------------------------------------|
+| `0`   | `IO`            | Input/output error (e.g. storage or filesystem).     |
+| `1`   | `SERIALIZATION` | Serialization or deserialization failure.            |
+| `2`   | `INTEGRITY`     | Logical integrity violation (e.g. condition failed). |
+| `3`   | `CORRUPTION`    | Corrupted or invalid data detected.                  |
+| `4`   | `INTERNAL`      | Internal server or database error.                   |
 
 The "rich status" message can be used to extract structured error details.
 
 ### Summary
 
-| Category | Message | Description |
-|-----------|----------|-------------|
-| **Event Model** | `EventProto`, `SequencedEventProto` | Core event representation. |
-| **Queries** | `QueryProto`, `QueryItemProto` | Define filters for event selection. |
-| **Conditions** | `AppendConditionProto` | Control write preconditions. |
-| **Read/Write** | `ReadRequestProto`, `ReadResponseProto`, `AppendRequestProto`, `AppendResponseProto` | Reading and appending APIs. |
-| **Meta** | `HeadRequestProto`, `HeadResponseProto` | Retrieve current head position. |
-| **Errors** | `ErrorResponseProto` | Consistent error representation. |
+| Category        | Message                                                                              | Description                         |
+|-----------------|--------------------------------------------------------------------------------------|-------------------------------------|
+| **Event Model** | `EventProto`, `SequencedEventProto`                                                  | Core event representation.          |
+| **Queries**     | `QueryProto`, `QueryItemProto`                                                       | Define filters for event selection. |
+| **Conditions**  | `AppendConditionProto`                                                               | Control write preconditions.        |
+| **Read/Write**  | `ReadRequestProto`, `ReadResponseProto`, `AppendRequestProto`, `AppendResponseProto` | Reading and appending APIs.         |
+| **Meta**        | `HeadRequestProto`, `HeadResponseProto`                                              | Retrieve current head position.     |
+| **Errors**      | `ErrorResponseProto`                                                                 | Consistent error representation.    |
 
 ### Example
 
@@ -707,20 +708,20 @@ Fetches events from the store in order, returning them as an event stream.
 
 Arguments:
 
-| Parameter | Type               | Description |
-|------------|--------------------|-------------|
-| `query` | `Option<DCBQuery>` | Optional structured query to filter events (by tags, event types, etc). |
-| `after` | `Option<u64>`      | Start reading *after* this sequence number. Only events with greater positions are returned. |
-| `limit` | `Option<u32>`      | Optional cap on the number of events to retrieve. |
-| `subscribe` | `bool`             | If `true`, keeps the stream open to deliver future events as they arrive. |
-| `batch_size` | `Option<u32>`      | Optional hint for how many events to buffer per batch from the server. |
+| Parameter    | Type               | Description                                                                                  |
+|--------------|--------------------|----------------------------------------------------------------------------------------------|
+| `query`      | `Option<DCBQuery>` | Optional structured query to filter events (by tags, event types, etc).                      |
+| `after`      | `Option<u64>`      | Start reading *after* this sequence number. Only events with greater positions are returned. |
+| `limit`      | `Option<u32>`      | Optional cap on the number of events to retrieve.                                            |
+| `subscribe`  | `bool`             | If `true`, keeps the stream open to deliver future events as they arrive.                    |
+| `batch_size` | `Option<u32>`      | Optional hint for how many events to buffer per batch from the server.                       |
 
 Returns a "read response" instance from which selected events and the "last known position" can be obtained.
 
-| Interface | Response Type | Description |
-|------------|----------------|-------------|
+| Interface | Response Type       | Description                                                                           |
+|-----------|---------------------|---------------------------------------------------------------------------------------|
 | **Async** | `AsyncReadResponse` | An asynchronous stream of events that can be awaited or iterated via `.next().await`. |
-| **Sync** | `SyncReadResponse` | A blocking iterator-style wrapper that uses the async client internally. |
+| **Sync**  | `SyncReadResponse`  | A blocking iterator-style wrapper that uses the async client internally.              |
 
 This method can be used both for constructing decision models in a domain layer, and for projecting events into
 materialized views in CQRS.
@@ -729,13 +730,13 @@ materialized views in CQRS.
 
 Appends new events to the store atomically, with optional optimistic concurrency conditions.
 
-Writes one or more events to the event log in order.
+Writes one or more events to the event log in order. This method is idempotent for events that have UUIDs.
 
 Arguments:
 
-| Parameter | Type | Description |
-|------------|------|-------------|
-| `events` | `Vec<DCBEvent>` | The list of events to append. Each includes an event type, tags, and data payload. |
+| Parameter   | Type                         | Description                                                                          |
+|-------------|------------------------------|--------------------------------------------------------------------------------------|
+| `events`    | `Vec<DCBEvent>`              | The list of events to append. Each includes an event type, tags, and data payload.   |
 | `condition` | `Option<DCBAppendCondition>` | Optional append condition (e.g. `After(u64)`) to ensure no conflicting writes occur. |
 
 Returns the **sequence number** (`u64`) of the last successfully appended event from this operation.
@@ -751,66 +752,69 @@ Returns the **sequence number** (`u64`) of the very last successfully appended e
 
 A recorded event with its assigned **sequence position** in the event store.
 
-| Field | Type | Description |
-|--------|------|-------------|
-| `event` | `DCBEvent` | The underlying event. |
-| `position` | `u64` | The event’s absolute position in the global sequence. |
+| Field      | Type       | Description                                           |
+|------------|------------|-------------------------------------------------------|
+| `event`    | `DCBEvent` | The underlying event.                                 |
+| `position` | `u64`      | The event’s absolute position in the global sequence. |
 
 ### DCB Event — `DCBEvent`
 
 Represents a single event either to be appended or already stored in the event log.
 
-| Field | Type | Description |
-|--------|------|-------------|
-| `event_type` | `String` | The event’s logical type or name. |
-| `data` | `Vec<u8>` | Binary payload associated with the event. |
-| `tags` | `Vec<String>` | Tags assigned to the event (used for filtering and indexing). |
+| Field        | Type           | Description                                                   |
+|--------------|----------------|---------------------------------------------------------------|
+| `event_type` | `String`       | The event’s logical type or name.                             |
+| `data`       | `Vec<u8>`      | Binary payload associated with the event.                     |
+| `tags`       | `Vec<String>`  | Tags assigned to the event (used for filtering and indexing). |
+| `uuid`       | `Option<Uuid>` | Unique event ID.                                              |
+
+Giving events UUIDs activates idempotent support for append operations. 
 
 ### DCB Query — `DCBQuery`
 
 A query composed of one or more `DCBQueryItem` filters.  
 An event matches the query if it matches **any** of the query items.
 
-| Field | Type | Description |
-|--------|------|-------------|
+| Field   | Type                | Description                                                                            |
+|---------|---------------------|----------------------------------------------------------------------------------------|
 | `items` | `Vec<DCBQueryItem>` | A list of query items. Events matching **any** of these items are included in results. |
 
 ### DCB Query Item — `DCBQueryItem`
 
 Represents a single **query clause** for filtering events.
 
-| Field | Type | Description |
-|--------|------|-------------|
+| Field   | Type          | Description                                                     |
+|---------|---------------|-----------------------------------------------------------------|
 | `types` | `Vec<String>` | Event types to match. If empty, all event types are considered. |
-| `tags` | `Vec<String>` | Tags that must **all** be present in the event for it to match. |
+| `tags`  | `Vec<String>` | Tags that must **all** be present in the event for it to match. |
 
 ### DCB Append Condition — `DCBAppendCondition`
 
 Conditions that must be satisfied before an append operation succeeds.
 
-| Field | Type | Description |
-|--------|------|-------------|
-| `fail_if_events_match` | `Arc<DCBQuery>` | If this query matches **any** existing events, the append operation will fail. |
-| `after` | `Option<u64>` | Optional position constraint. If set, the append will only succeed if no events exist **after** this position. |
+| Field                  | Type            | Description                                                                                                    |
+|------------------------|-----------------|----------------------------------------------------------------------------------------------------------------|
+| `fail_if_events_match` | `Arc<DCBQuery>` | If this query matches **any** existing events, the append operation will fail.                                 |
+| `after`                | `Option<u64>`   | Optional position constraint. If set, the append will only succeed if no events exist **after** this position. |
 
 ### DCB Error — `DCBError`
 
 Represents all errors that can occur in UmaDB.
 
-| Variant | Description |
-|----------|-------------|
-| `Io(error)` | I/O or filesystem error. |
-| `IntegrityError(message)` | Append condition failed or data integrity violated. |
-| `Corruption(message)` | Corruption detected in stored data. |
-| `PageNotFound(page_id)` | Referenced page not found in storage. |
-| `DirtyPageNotFound(page_id)` | Dirty page expected in cache not found. |
-| `RootIDMismatch(old_id, new_id)` | Mismatch between stored and computed root page IDs. |
-| `DatabaseCorrupted(message)` | Database file corrupted or invalid. |
-| `InternalError(message)` | Unexpected internal logic error. |
-| `SerializationError(message)` | Failure to serialize data to bytes. |
-| `DeserializationError(message)` | Failure to parse serialized data. |
-| `PageAlreadyFreed(page_id)` | Attempted to free a page that was already freed. |
-| `PageAlreadyDirty(page_id)` | Attempted to mark a page dirty that was already dirty. |
+| Variant                          | Description                                            |
+|----------------------------------|--------------------------------------------------------|
+| `Io(error)`                      | I/O or filesystem error.                               |
+| `IntegrityError(message)`        | Append condition failed or data integrity violated.    |
+| `Corruption(message)`            | Corruption detected in stored data.                    |
+| `PageNotFound(page_id)`          | Referenced page not found in storage.                  |
+| `DirtyPageNotFound(page_id)`     | Dirty page expected in cache not found.                |
+| `RootIDMismatch(old_id, new_id)` | Mismatch between stored and computed root page IDs.    |
+| `DatabaseCorrupted(message)`     | Database file corrupted or invalid.                    |
+| `InternalError(message)`         | Unexpected internal logic error.                       |
+| `SerializationError(message)`    | Failure to serialize data to bytes.                    |
+| `DeserializationError(message)`  | Failure to parse serialized data.                      |
+| `PageAlreadyFreed(page_id)`      | Attempted to free a page that was already freed.       |
+| `PageAlreadyDirty(page_id)`      | Attempted to mark a page dirty that was already dirty. |
 
 ### DCB Result — `DCBResult<T>`
 

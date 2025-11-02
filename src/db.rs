@@ -14,6 +14,7 @@ use crate::tags_tree_nodes::TagHash;
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use uuid::Uuid;
 
 pub static DEFAULT_PAGE_SIZE: usize = 4096;
 
@@ -63,7 +64,7 @@ impl UmaDB {
             // Check condition using read_conditional (limit 1), starting after the provided position
             if let Some(cond) = condition {
                 let after = Position(cond.after.unwrap_or(0));
-                let found = read_conditional(
+                let read_result1 = read_conditional(
                     mvcc,
                     &writer.dirty,
                     writer.events_tree_root_id,
@@ -72,17 +73,40 @@ impl UmaDB {
                     after,
                     Some(1),
                 );
-                match found {
+                match read_result1 {
                     Ok(found_vec) => {
+                        // Read didn't error...
                         if let Some(matched) = found_vec.first() {
-                            let msg =
-                                format!("condition: {:?} matched: {:?}, ", cond.clone(), matched,);
-                            results.push(Err(DCBError::IntegrityError(msg)));
-                            continue;
+                            // Found one event... consider if the request is idempotent...
+                            match is_request_idempotent(
+                                mvcc,
+                                &writer.dirty,
+                                writer.events_tree_root_id,
+                                writer.tags_tree_root_id,
+                                &events,
+                                cond.fail_if_events_match.clone(),
+                                after,
+                            ) {
+                                Ok(Some(last_recorded_position)) => {
+                                    results.push(Ok(last_recorded_position));
+                                }
+                                Ok(None) => {
+                                    // Propagate an integrity error for this item but continue with others
+                                    let msg =
+                                        format!("condition: {:?} matched: {:?}, ", cond.clone(), matched,);
+                                    results.push(Err(DCBError::IntegrityError(msg)));
+
+                                }
+                                Err(err) => {
+                                    // Propagate the error for this item but continue with others
+                                    results.push(Err(err));
+                                }
+                            }
+                            continue
                         }
                     }
                     Err(e) => {
-                        // Propagate read error for this item but continue with others
+                        // Propagate the read error for this item but continue with others
                         results.push(Err(e));
                         continue;
                     }
@@ -238,7 +262,7 @@ pub fn unconditional_append(
             event_type: ev.event_type,
             data: ev.data,
             tags: ev.tags,
-            uuid: None,
+            uuid: ev.uuid,
         };
         // Clone tags so we can index them after moving record into event_tree_append
         let tags = record.tags.clone();
@@ -538,6 +562,65 @@ pub fn tag_to_hash(tag: &str) -> TagHash {
     value.to_le_bytes()
 }
 
+pub fn is_request_idempotent(
+    mvcc: &Arc<Mvcc>,
+    dirty: &HashMap<PageID, Page>,
+    events_tree_root_id: PageID,
+    tags_tree_root_id: PageID,
+    events: &Vec<DCBEvent>,
+    fail_if_events_match: Arc<DCBQuery>,
+    after: Position,
+) -> DCBResult<Option<u64>> {
+    // Check events for event IDs. If all have events IDs then
+    // call read_conditional again with limit=event.len() and then
+    // see if all events have matching UUIDs.
+    let submitted_events_len = events.len();
+    let mut submitted_event_ids: Vec<Option<Uuid>> = vec![];
+    for submitted_event in events {
+        if submitted_event.uuid.is_some() {
+            submitted_event_ids.push(submitted_event.uuid);
+        }
+    }
+    if submitted_events_len == submitted_event_ids.len() && submitted_events_len as u64 <= u32::MAX as u64 {
+        // All events have UUIDs and there are less than the max size of limit.
+        let read_result = read_conditional(
+            mvcc,
+            dirty,
+            events_tree_root_id,
+            tags_tree_root_id,
+            fail_if_events_match,
+            after,
+            Some(submitted_events_len as u32),
+        );
+        match read_result {
+            Ok(found_events) => {
+                let mut found_event_ids: Vec<Option<Uuid>> = vec![];
+                let found_events_len = found_events.len();
+                if found_events_len == submitted_events_len {
+                    let last_found_event = &found_events[found_events_len - 1];
+                    let last_found_event_position = last_found_event.position;
+                    for found_event in found_events {
+                        found_event_ids.push(found_event.event.uuid);
+                    }
+                    if found_event_ids == submitted_event_ids {
+                        // It's an idempotent request.
+                        return Ok(Some(last_found_event_position));
+                        // results.push(Ok(last_found_event_position));
+                        // return true
+                    }
+                }
+            }
+            Err(e) => {
+                // Propagate read error for this item but continue with others
+                return Err(e);
+                // results.push(Err(e));
+                // return true;
+            }
+        }
+    }
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -548,6 +631,7 @@ mod tests {
     use serial_test::serial;
     use std::collections::HashMap;
     use tempfile::tempdir;
+    use uuid::Uuid;
 
     // Backward-compatible wrapper for tests: call new read_conditional with an empty dirty map
     fn read_conditional(
@@ -1540,5 +1624,89 @@ mod tests {
         assert!(big_combined[0].event.tags.iter().any(|t| t == "y"));
         assert_eq!(big_combined[0].event.data.len(), big_data_len);
         assert!(big_combined[0].event.data.iter().all(|&b| b == 0xCD));
+    }
+
+    #[test]
+    fn test_append_event_with_uuid_is_maintained_and_activated_append_idempotency() {
+        let temp_dir = tempdir().unwrap();
+        let store = UmaDB::new(temp_dir.path()).unwrap();
+
+        let condition1 = Some(DCBAppendCondition {
+            fail_if_events_match: Arc::new(DCBQuery {items: vec![]}),
+            after: None,
+        });
+
+        let event1 = DCBEvent {
+            event_type: "type1".to_string(),
+            data: b"data1".to_vec(),
+            tags: vec!["tag1".to_string()],
+            uuid: Some(Uuid::new_v4()),
+        };
+
+        let mut commit_position1 = store.append(vec![event1.clone()], condition1.clone()).unwrap();
+        assert_eq!(1, commit_position1);
+
+        let (result, head) = store.read_with_head(None, None, None).unwrap();
+        assert_eq!(1, result.len());
+        assert_eq!(Some(1), head);
+        assert_eq!(event1.uuid, result[0].event.uuid);
+
+        // Test idempotency - retry the same append operation.
+        commit_position1 = store.append(vec![event1.clone()], condition1.clone()).unwrap();
+
+        // Check the response is the same as before.
+        assert_eq!(1, commit_position1);
+
+        // Check we still have only one sequenced event.
+        let (result, head) = store.read_with_head(None, None, None).unwrap();
+        assert_eq!(1, result.len());
+        assert_eq!(Some(1), head);
+        assert_eq!(event1.uuid, result[0].event.uuid);
+
+        // Append another event.
+        let event2 = DCBEvent {
+            event_type: "type2".to_string(),
+            data: b"data2".to_vec(),
+            tags: vec!["tag2".to_string()],
+            uuid: Some(Uuid::new_v4()),
+        };
+
+        let mut commit_position2 = store.append(vec![event2.clone()], None).unwrap();
+        assert_eq!(2, commit_position2);
+
+        // Check we have two sequenced events.
+        let (result, head) = store.read_with_head(None, None, None).unwrap();
+        assert_eq!(2, result.len());
+        assert_eq!(Some(2), head);
+        assert_eq!(event1.uuid, result[0].event.uuid);
+        assert_eq!(event2.uuid, result[1].event.uuid);
+
+        // Test idempotency - retry the same append operation.
+        commit_position1 = store.append(vec![event1.clone()], condition1.clone()).unwrap();
+
+        // Check the response is the same as before.
+        assert_eq!(1, commit_position1);
+
+        // Test idempotency - try an operation with event1 and event2.
+        commit_position2 = store.append(vec![event1.clone(), event2.clone()], condition1.clone()).unwrap();
+
+        // Check the response is the same as before.
+        assert_eq!(2, commit_position2);
+
+        // Check we still have two sequenced events.
+        let (result, head) = store.read_with_head(None, None, None).unwrap();
+        assert_eq!(2, result.len());
+        assert_eq!(Some(2), head);
+        assert_eq!(event1.uuid, result[0].event.uuid);
+        assert_eq!(event2.uuid, result[1].event.uuid);
+
+        // Try with event2 and condition1 - should get an error.
+        let result = store.append(vec![event2.clone()], condition1.clone());
+        assert!(matches!(result, Err(DCBError::IntegrityError(_))));
+
+        // Try with two events in different order - should get an error.
+        let result = store.append(vec![event2.clone(), event1.clone()], condition1.clone());
+        assert!(matches!(result, Err(DCBError::IntegrityError(_))));
+
     }
 }

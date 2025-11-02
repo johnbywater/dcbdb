@@ -42,6 +42,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     let (result, head) = event_store.read_with_head(None, None, None).unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event1.data, result[0].event.data);
+    assert_eq!(event1.uuid, result[0].event.uuid);
     assert_eq!(Some(1), head);
 
     // Read all after 1, expect no events.
@@ -837,6 +838,86 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     // Final test of head() method after all operations
     let head_position = event_store.head().unwrap();
     assert_eq!(Some(13), head_position);
+
+    // Test UUID attribute is maintained.
+    let event5 = DCBEvent {
+        event_type: "type5".to_string(),
+        data: b"data5".to_vec(),
+        tags: vec!["tag5".to_string()],
+        uuid: Some(Uuid::new_v4()),
+    };
+
+    let commit_position5 = event_store
+        .append(
+            vec![event5.clone()],
+            Some(DCBAppendCondition {
+                fail_if_events_match: Arc::new(DCBQuery {
+                    items: vec![
+                        DCBQueryItem{
+                            types: vec![],
+                            tags: event5.tags.clone(),
+                        },
+                    ],
+                }),
+                after: Some(13),
+            }),
+        )
+        .unwrap();
+
+    let (result, head) = event_store
+        .read_with_head(
+            Some(Arc::new(DCBQuery {
+                items: vec![DCBQueryItem {
+                    types: vec![],
+                    tags: event5.tags.clone(),
+                }],
+            })),
+            Some(13),
+            None,
+        )
+        .unwrap();
+    assert_eq!(1, result.len());
+    assert_eq!(Some(14), head);
+    assert_eq!(event5.data, result[0].event.data);
+    assert_eq!(event5.uuid, result[0].event.uuid);
+
+    // Check UUID activates idempotency.
+    let commit_position6 = event_store
+        .append(
+            vec![event5.clone()],
+            Some(DCBAppendCondition {
+                fail_if_events_match: Arc::new(DCBQuery {
+                    items: vec![
+                        DCBQueryItem{
+                            types: vec![],
+                            tags: event5.tags.clone(),
+                        },
+                    ],
+                }),
+                after: Some(13),
+            }),
+        )
+        .unwrap();
+
+    assert_eq!(commit_position5, commit_position6);
+
+    let (result, head) = event_store
+        .read_with_head(
+            Some(Arc::new(DCBQuery {
+                items: vec![DCBQueryItem {
+                    types: vec![],
+                    tags: event5.tags.clone(),
+                }],
+            })),
+            Some(13),
+            None,
+        )
+        .unwrap();
+    assert_eq!(1, result.len());
+    assert_eq!(Some(14), head);
+    assert_eq!(event5.data, result[0].event.data);
+    assert_eq!(event5.uuid, result[0].event.uuid);
+
 }
 
 #[test]

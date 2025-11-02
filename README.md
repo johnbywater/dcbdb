@@ -828,6 +828,7 @@ Here's an example of how to use the synchronous Rust client for UmaDB:
 
 ```rust
 use std::sync::Arc;
+use uuid::Uuid;
 use umadb::dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreSync, DCBQuery, DCBQueryItem,
 };
@@ -870,32 +871,58 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         event_type: "example".to_string(),
         tags: vec!["tag1".to_string(), "tag2".to_string()],
         data: b"Hello, world!".to_vec(),
+        uuid: Some(Uuid::new_v4()),
     };
 
     // Append event in consistency boundary
-    let commit_position = client.append(
+    let commit_position1 = client.append(
         vec![event.clone()],
         Some(DCBAppendCondition {
             fail_if_events_match: cb.clone(),
             after: last_known_position,
         }),
     )?;
-    println!("Appended event at position: {}", commit_position);
+
+    println!("Appended event at position: {}", commit_position1);
 
     // Append conflicting event - expect an error
+    let conflicting_event = DCBEvent {
+        event_type: "example".to_string(),
+        tags: vec!["tag1".to_string(), "tag2".to_string()],
+        data: b"Hello, world!".to_vec(),
+        uuid: Some(Uuid::new_v4()),  // different UUID
+    };
+
     let conflicting_result = client.append(
-        vec![event.clone()],
+        vec![conflicting_event],
         Some(DCBAppendCondition {
             fail_if_events_match: cb.clone(),
             after: last_known_position,
         }),
     );
 
+    // Expect an integrity error
     match conflicting_result {
         Err(DCBError::IntegrityError(integrity_error)) => {
-            println!("Error appending conflicting event: {:?}", integrity_error);
+            println!("Conflicting event was rejected: {:?}", integrity_error);
         }
         other => panic!("Expected IntegrityError, got {:?}", other),
+    }
+
+    // Appending with identical event IDs and append condition is idempotent.
+    println!("Retrying to append event at position: {:?}", last_known_position);
+    let commit_position2 = client.append(
+        vec![event.clone()],
+        Some(DCBAppendCondition {
+            fail_if_events_match: cb.clone(),
+            after: last_known_position,
+        }),
+    )?;
+
+    if commit_position1 == commit_position2 {
+        println!("Append method returned same commit position: {}", commit_position2);
+    } else {
+        panic!("Expected idempotent retry!")
     }
 
     // Subscribe to all events for a projection
@@ -906,7 +933,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         match result {
             Ok(ev) => {
                 println!("Processing event at {}: {:?}", ev.position, ev.event);
-                if ev.position == commit_position {
+                if ev.position == commit_position2 {
                     println!("Projection has processed new event!");
                     break;
                 }
@@ -924,6 +951,7 @@ Here's an example of how to use the asynchronous Rust client for UmaDB:
 ```rust
 use futures::StreamExt;
 use std::sync::Arc;
+use uuid::Uuid;
 use umadb::dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreAsync, DCBQuery, DCBQueryItem,
 };
@@ -969,10 +997,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         event_type: "example".to_string(),
         tags: vec!["tag1".to_string(), "tag2".to_string()],
         data: b"Hello, world!".to_vec(),
+        uuid: Some(Uuid::new_v4()),
     };
 
     // Append event in consistency boundary
-    let commit_position = client
+    let commit_position1 = client
         .append(
             vec![event.clone()],
             Some(DCBAppendCondition {
@@ -981,12 +1010,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }),
         )
         .await?;
-    println!("Appended event at position: {}", commit_position);
+    
+    println!("Appended event at position: {}", commit_position1);
 
     // Append conflicting event - expect an error
+    let conflicting_event = DCBEvent {
+        event_type: "example".to_string(),
+        tags: vec!["tag1".to_string(), "tag2".to_string()],
+        data: b"Hello, world!".to_vec(),
+        uuid: Some(Uuid::new_v4()),  // different UUID
+    };
+
     let conflicting_result = client
         .append(
-            vec![event.clone()],
+            vec![conflicting_event.clone()],
             Some(DCBAppendCondition {
                 fail_if_events_match: cb.clone(),
                 after: last_known_position,
@@ -994,11 +1031,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .await;
 
+    // Expect an integrity error
     match conflicting_result {
         Err(DCBError::IntegrityError(integrity_error)) => {
-            println!("Error appending conflicting event: {:?}", integrity_error);
+            println!("Conflicting event was rejected: {:?}", integrity_error);
         }
         other => panic!("Expected IntegrityError, got {:?}", other),
+    }
+
+    // Appending with identical events IDs and append conditions is idempotent.
+    println!("Retrying to append event at position: {:?}", last_known_position);
+    let commit_position2 = client
+        .append(
+            vec![event.clone()],
+            Some(DCBAppendCondition {
+                fail_if_events_match: cb.clone(),
+                after: last_known_position,
+            }),
+        )
+        .await?;
+    
+    if commit_position1 == commit_position2 {
+        println!("Append method returned same commit position: {}", commit_position2);
+    } else {
+        panic!("Expected idempotent retry!")
     }
 
     // Subscribe to all events for a projection
@@ -1009,7 +1065,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         match result {
             Ok(ev) => {
                 println!("Processing event at {}: {:?}", ev.position, ev.event);
-                if ev.position == commit_position {
+                if ev.position == commit_position2 {
                     println!("Projection has processed new event!");
                     break;
                 }

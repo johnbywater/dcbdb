@@ -11,7 +11,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Code, Request, Response, Status, transport::Server};
 
-use crate::db::{DEFAULT_PAGE_SIZE, UmaDB, read_conditional};
+use crate::db::{DEFAULT_PAGE_SIZE, UmaDB, read_conditional, is_request_idempotent};
 use crate::dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreAsync, DCBEventStoreSync, DCBQuery,
     DCBQueryItem, DCBReadResponseAsync, DCBReadResponseSync, DCBResult, DCBSequencedEvent,
@@ -348,9 +348,9 @@ enum WriterRequest {
     Shutdown,
 }
 
-// Thread-safe client request handler
+// Thread-safe request handler
 struct RequestHandler {
-    mvcc: std::sync::Arc<Mvcc>,
+    mvcc: Arc<Mvcc>,
     head_tx: watch::Sender<Option<u64>>,
     request_tx: mpsc::Sender<WriterRequest>,
 }
@@ -582,72 +582,111 @@ impl RequestHandler {
         .await
         .map_err(|e| DCBError::Io(std::io::Error::other(format!("Join error: {e}"))))?
     }
-
-    async fn append(
+    pub async fn append(
         &self,
         events: Vec<DCBEvent>,
         condition: Option<DCBAppendCondition>,
     ) -> DCBResult<u64> {
         // Concurrent pre-check of condition using a read-only view in a blocking thread.
-        let adjusted_condition = if let Some(cond_in) = condition {
+        let pre_append_decision = if let Some(condition_binding) = condition {
             let mvcc = self.mvcc.clone();
-            tokio::task::spawn_blocking(move || -> DCBResult<Option<DCBAppendCondition>> {
-                let mut cond = cond_in;
+            let events_clone = events.clone(); // move-safe copy for the blocking thread
+
+            tokio::task::spawn_blocking(move || -> DCBResult<PreAppendDecision> {
+                let mut given_condition = condition_binding;
                 let reader = mvcc.reader()?;
                 let current_head = {
                     let last = reader.next_position.0.saturating_sub(1);
                     if last == 0 { None } else { Some(last) }
                 };
 
-                // Perform conditional read on the snapshot (limit 1) starting after the provided position
-                let after_pos = crate::common::Position(cond.after.unwrap_or(0));
+                // Perform conditional read on the snapshot (limit 1) starting after the given position
+                let after = crate::common::Position(given_condition.after.unwrap_or(0));
+                let empty_dirty = std::collections::HashMap::new();
                 let found = read_conditional(
                     &mvcc,
-                    &std::collections::HashMap::new(),
+                    &empty_dirty,
                     reader.events_tree_root_id,
                     reader.tags_tree_root_id,
-                    cond.fail_if_events_match.clone(),
-                    after_pos,
+                    given_condition.fail_if_events_match.clone(),
+                    after,
                     Some(1),
-                )
-                .map_err(|e| DCBError::Corruption(format!("{e}")))?;
+                )?;
 
                 if let Some(matched) = found.first() {
-                    let msg = format!("condition: {:?} matched: {:?} ", cond.clone(), matched,);
-                    return Err(DCBError::IntegrityError(msg));
+                    // Found one event — consider if the request is idempotent...
+                    match is_request_idempotent(
+                        &mvcc,
+                        &empty_dirty,
+                        reader.events_tree_root_id,
+                        reader.tags_tree_root_id,
+                        &events_clone,
+                        given_condition.fail_if_events_match.clone(),
+                        after,
+                    ) {
+                        Ok(Some(last_recorded_position)) => {
+                            // Request is idempotent; skip actual append
+                            return Ok(PreAppendDecision::AlreadyAppended(last_recorded_position));
+                        }
+                        Ok(None) => {
+                            // Integrity violation
+                            let msg = format!(
+                                "condition: {:?} matched: {:?}",
+                                given_condition.clone(),
+                                matched,
+                            );
+                            return Err(DCBError::IntegrityError(msg));
+                        }
+                        Err(err) => {
+                            // Propagate underlying read error
+                            return Err(err);
+                        }
+                    }
                 }
 
-                // Advance 'after' to at least the current head observed by this reader
-                let new_after = std::cmp::max(cond.after.unwrap_or(0), current_head.unwrap_or(0));
-                cond.after = Some(new_after);
-                Ok(Some(cond))
+                // No match found: we can advance 'after' to the current head observed by this reader
+                let new_after = std::cmp::max(given_condition.after.unwrap_or(0), current_head.unwrap_or(0));
+                given_condition.after = Some(new_after);
+
+                Ok(PreAppendDecision::UseCondition(Some(given_condition)))
             })
-            .await
-            .map_err(|e| DCBError::Io(std::io::Error::other(format!("Join error: {e}"))))??
+                .await
+                .map_err(|e| DCBError::Io(std::io::Error::other(format!("Join error: {e}"))))??
         } else {
-            None
+            // No condition provided at all
+            PreAppendDecision::UseCondition(None)
         };
 
-        let (response_tx, response_rx) = oneshot::channel();
+        // Handle the pre-check decision
+        match pre_append_decision {
+            PreAppendDecision::AlreadyAppended(pos) => {
+                // ✅ Request was idempotent — just return existing position
+                Ok(pos)
+            }
+            PreAppendDecision::UseCondition(adjusted_condition) => {
+                // ✅ Proceed with append via EventStore thread
+                let (response_tx, response_rx) = tokio::sync::oneshot::channel();
 
-        self.request_tx
-            .send(WriterRequest::Append {
-                events,
-                condition: adjusted_condition,
-                response_tx,
-            })
-            .await
-            .map_err(|_| {
-                DCBError::Io(std::io::Error::other(
-                    "Failed to send append request to EventStore thread",
-                ))
-            })?;
+                self.request_tx
+                    .send(WriterRequest::Append {
+                        events,
+                        condition: adjusted_condition,
+                        response_tx,
+                    })
+                    .await
+                    .map_err(|_| {
+                        DCBError::Io(std::io::Error::other(
+                            "Failed to send append request to EventStore thread",
+                        ))
+                    })?;
 
-        response_rx.await.map_err(|_| {
-            DCBError::Io(std::io::Error::other(
-                "Failed to receive append response from EventStore thread",
-            ))
-        })?
+                response_rx.await.map_err(|_| {
+                    DCBError::Io(std::io::Error::other(
+                        "Failed to receive append response from EventStore thread",
+                    ))
+                })?
+            }
+        }
     }
 
     fn watch_head(&self) -> watch::Receiver<Option<u64>> {
@@ -669,6 +708,14 @@ impl Clone for RequestHandler {
             request_tx: self.request_tx.clone(),
         }
     }
+}
+
+#[derive(Debug)]
+enum PreAppendDecision {
+    /// Proceed with this (possibly adjusted) condition
+    UseCondition(Option<DCBAppendCondition>),
+    /// Skip append because the request was idempotent; return last recorded position
+    AlreadyAppended(u64),
 }
 
 // Async client implementation

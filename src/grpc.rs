@@ -735,7 +735,7 @@ pub struct AsyncUmaDBClient {
 impl AsyncUmaDBClient {
     pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
     where
-        D: std::convert::TryInto<tonic::transport::Endpoint>,
+        D: TryInto<tonic::transport::Endpoint>,
         D::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
         let client = umadb::uma_db_service_client::UmaDbServiceClient::connect(dst).await?;

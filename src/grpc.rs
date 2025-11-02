@@ -110,7 +110,7 @@ impl UmaDbService for UmaDBServer {
         // Convert proto types to API types
         let mut query: Option<Arc<DCBQuery>> = req.query.map(|q| q.into());
         let after = req.after;
-        let limit = req.limit.map(|l| l);
+        let limit = req.limit;
 
         // Create a channel for streaming responses (deeper buffer to reduce backpressure under concurrency)
         let (tx, rx) = mpsc::channel(2048);
@@ -783,13 +783,12 @@ impl DCBEventStoreAsync for AsyncUmaDBClient {
                 })
                 .collect(),
         });
-        let limit_proto = limit.map(|l| l as u32);
         let request = ReadRequestProto {
             query: query_proto,
             after,
-            limit: limit_proto,
+            limit,
             subscribe: Some(subscribe),
-            batch_size: batch_size.map(|b| b as u32),
+            batch_size,
         };
 
         let mut client = self.client.clone();
@@ -813,7 +812,7 @@ impl DCBEventStoreAsync for AsyncUmaDBClient {
         condition: Option<DCBAppendCondition>,
     ) -> DCBResult<u64> {
         let events_proto: Vec<EventProto> =
-            events.into_iter().map(|e| EventProto::from(e)).collect();
+            events.into_iter().map(EventProto::from).collect();
 
         let condition_proto = condition.map(|c| AppendConditionProto {
             fail_if_events_match: Some(QueryProto {
@@ -954,7 +953,7 @@ impl Stream for AsyncReadResponse {
                             // propagate conversion error using DCBResult
                             let event = match DCBEvent::try_from(ev) {
                                 Ok(event) => event,
-                                Err(err) => return Poll::Ready(Some(Err(err.into()))),
+                                Err(err) => return Poll::Ready(Some(Err(err))),
                             };
                             buffered.push(DCBSequencedEvent {
                                 position: e.position,
@@ -1258,7 +1257,7 @@ impl<'a> DCBReadResponseSync for SyncClientReadResponse<'a> {
 
     fn collect_with_head(&mut self) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
         let mut out = Vec::new();
-        while let Some(result) = self.next() {
+        for result in self.by_ref() {
             out.push(result?);
         }
         Ok((out, self.head()?))

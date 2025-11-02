@@ -103,7 +103,7 @@ fn materialize_event_value(
                 event_type: event_type.clone(),
                 data,
                 tags: tags.clone(),
-                uuid: uuid.clone(),
+                uuid: *uuid,
             })
         }
     }

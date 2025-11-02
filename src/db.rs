@@ -92,17 +92,19 @@ impl UmaDB {
                                 }
                                 Ok(None) => {
                                     // Propagate an integrity error for this item but continue with others
-                                    let msg =
-                                        format!("condition: {:?} matched: {:?}, ", cond.clone(), matched,);
+                                    let msg = format!(
+                                        "condition: {:?} matched: {:?}, ",
+                                        cond.clone(),
+                                        matched,
+                                    );
                                     results.push(Err(DCBError::IntegrityError(msg)));
-
                                 }
                                 Err(err) => {
                                     // Propagate the error for this item but continue with others
                                     results.push(Err(err));
                                 }
                             }
-                            continue
+                            continue;
                         }
                     }
                     Err(e) => {
@@ -581,7 +583,9 @@ pub fn is_request_idempotent(
             submitted_event_ids.push(submitted_event.uuid);
         }
     }
-    if submitted_events_len == submitted_event_ids.len() && submitted_events_len as u64 <= u32::MAX as u64 {
+    if submitted_events_len == submitted_event_ids.len()
+        && submitted_events_len as u64 <= u32::MAX as u64
+    {
         // All events have UUIDs and there are less than the max size of limit.
         let read_result = read_conditional(
             mvcc,
@@ -1632,7 +1636,7 @@ mod tests {
         let store = UmaDB::new(temp_dir.path()).unwrap();
 
         let condition1 = Some(DCBAppendCondition {
-            fail_if_events_match: Arc::new(DCBQuery {items: vec![]}),
+            fail_if_events_match: Arc::new(DCBQuery { items: vec![] }),
             after: None,
         });
 
@@ -1643,7 +1647,9 @@ mod tests {
             uuid: Some(Uuid::new_v4()),
         };
 
-        let mut commit_position1 = store.append(vec![event1.clone()], condition1.clone()).unwrap();
+        let mut commit_position1 = store
+            .append(vec![event1.clone()], condition1.clone())
+            .unwrap();
         assert_eq!(1, commit_position1);
 
         let (result, head) = store.read_with_head(None, None, None).unwrap();
@@ -1652,7 +1658,9 @@ mod tests {
         assert_eq!(event1.uuid, result[0].event.uuid);
 
         // Test idempotency - retry the same append operation.
-        commit_position1 = store.append(vec![event1.clone()], condition1.clone()).unwrap();
+        commit_position1 = store
+            .append(vec![event1.clone()], condition1.clone())
+            .unwrap();
 
         // Check the response is the same as before.
         assert_eq!(1, commit_position1);
@@ -1682,13 +1690,17 @@ mod tests {
         assert_eq!(event2.uuid, result[1].event.uuid);
 
         // Test idempotency - retry the same append operation.
-        commit_position1 = store.append(vec![event1.clone()], condition1.clone()).unwrap();
+        commit_position1 = store
+            .append(vec![event1.clone()], condition1.clone())
+            .unwrap();
 
         // Check the response is the same as before.
         assert_eq!(1, commit_position1);
 
         // Test idempotency - try an operation with event1 and event2.
-        commit_position2 = store.append(vec![event1.clone(), event2.clone()], condition1.clone()).unwrap();
+        commit_position2 = store
+            .append(vec![event1.clone(), event2.clone()], condition1.clone())
+            .unwrap();
 
         // Check the response is the same as before.
         assert_eq!(2, commit_position2);
@@ -1707,6 +1719,5 @@ mod tests {
         // Try with two events in different order - should get an error.
         let result = store.append(vec![event2.clone(), event1.clone()], condition1.clone());
         assert!(matches!(result, Err(DCBError::IntegrityError(_))));
-
     }
 }

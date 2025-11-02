@@ -171,7 +171,6 @@ impl EventLeafNode {
                         buf[i..i + 16].copy_from_slice(uuid.as_bytes());
                         i += 16;
                     }
-
                 }
                 EventValue::Overflow {
                     event_type,
@@ -259,8 +258,9 @@ impl EventLeafNode {
                 ));
             }
 
-            let flags = EventValueFlags::from_bits(slice[offset])
-                .ok_or(DCBError::DeserializationError("unknown flag bits set".to_string()))? ;
+            let flags = EventValueFlags::from_bits(slice[offset]).ok_or(
+                DCBError::DeserializationError("unknown flag bits set".to_string()),
+            )?;
             offset += 1;
 
             // Extract event_type length (2 bytes)
@@ -321,8 +321,7 @@ impl EventLeafNode {
                             "Unexpected end of data while reading tag length".to_string(),
                         ));
                     }
-                    let tag_len =
-                        LittleEndian::read_u16(&slice[offset..offset + 2]) as usize;
+                    let tag_len = LittleEndian::read_u16(&slice[offset..offset + 2]) as usize;
                     offset += 2;
                     if offset + tag_len > slice.len() {
                         return Err(DCBError::DeserializationError(
@@ -353,7 +352,7 @@ impl EventLeafNode {
                             Ok(uuid) => {
                                 offset += 16;
                                 Some(uuid)
-                            },
+                            }
                             Err(err) => {
                                 return Err(DCBError::DeserializationError(
                                     format!("Invalid UUID sequence: {err} ").to_string(),
@@ -395,8 +394,7 @@ impl EventLeafNode {
                             "Unexpected end of data while reading tag length".to_string(),
                         ));
                     }
-                    let tag_len =
-                        LittleEndian::read_u16(&slice[offset..offset + 2]) as usize;
+                    let tag_len = LittleEndian::read_u16(&slice[offset..offset + 2]) as usize;
                     offset += 2;
                     if offset + tag_len > slice.len() {
                         return Err(DCBError::DeserializationError(
@@ -434,7 +432,7 @@ impl EventLeafNode {
                             Ok(uuid) => {
                                 offset += 16;
                                 Some(uuid)
-                            },
+                            }
                             Err(err) => {
                                 return Err(DCBError::DeserializationError(
                                     format!("Invalid UUID sequence: {err} ").to_string(),

@@ -11,7 +11,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Code, Request, Response, Status, transport::Server};
 
-use crate::db::{DEFAULT_PAGE_SIZE, UmaDB, read_conditional, is_request_idempotent};
+use crate::db::{DEFAULT_PAGE_SIZE, UmaDB, is_request_idempotent, read_conditional};
 use crate::dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreAsync, DCBEventStoreSync, DCBQuery,
     DCBQueryItem, DCBReadResponseAsync, DCBReadResponseSync, DCBResult, DCBSequencedEvent,
@@ -26,13 +26,13 @@ pub mod umadb {
 use prost::Message;
 use prost::bytes::Bytes;
 use tokio::runtime::{Handle, Runtime};
-use uuid::Uuid;
 use umadb::{
     AppendConditionProto, AppendRequestProto, AppendResponseProto, ErrorResponseProto, EventProto,
     HeadRequestProto, HeadResponseProto, QueryItemProto, QueryProto, ReadRequestProto,
     ReadResponseProto, SequencedEventProto,
     uma_db_service_server::{UmaDbService, UmaDbServiceServer},
 };
+use uuid::Uuid;
 
 const APPEND_BATCH_MAX_EVENTS: usize = 2000;
 const READ_RESPONSE_BATCH_SIZE_DEFAULT: u32 = 100;
@@ -218,7 +218,8 @@ impl UmaDbService for UmaDBServer {
                                 let idx = events
                                     .iter()
                                     .position(|e| e.position > h)
-                                    .unwrap_or(events.len()) as u32;
+                                    .unwrap_or(events.len())
+                                    as u32;
                                 (0u32, idx, idx < events.len() as u32)
                             } else {
                                 (0u32, events.len() as u32, false)
@@ -251,7 +252,10 @@ impl UmaDbService for UmaDBServer {
                             head
                         };
                         let mut ev_out = Vec::with_capacity(slice_len as usize);
-                        for e in events[slice_start as usize..slice_start as usize + slice_len as usize].iter() {
+                        for e in events
+                            [slice_start as usize..slice_start as usize + slice_len as usize]
+                            .iter()
+                        {
                             ev_out.push(SequencedEventProto::from(e.clone()));
                         }
                         let response = ReadResponseProto {
@@ -265,7 +269,9 @@ impl UmaDbService for UmaDBServer {
                         sent_any = true;
 
                         // Advance the cursor (use a new reader on the next loop iteration)
-                        next_after = events.get(slice_start as usize + slice_len as usize - 1).map(|e| e.position);
+                        next_after = events
+                            .get(slice_start as usize + slice_len as usize - 1)
+                            .map(|e| e.position);
 
                         // If we reached the captured head boundary on non-subscribe, stop streaming further
                         if reached_end && remaining.is_none() && !subscribe {
@@ -645,13 +651,16 @@ impl RequestHandler {
                 }
 
                 // No match found: we can advance 'after' to the current head observed by this reader
-                let new_after = std::cmp::max(given_condition.after.unwrap_or(0), current_head.unwrap_or(0));
+                let new_after = std::cmp::max(
+                    given_condition.after.unwrap_or(0),
+                    current_head.unwrap_or(0),
+                );
                 given_condition.after = Some(new_after);
 
                 Ok(PreAppendDecision::UseCondition(Some(given_condition)))
             })
-                .await
-                .map_err(|e| DCBError::Io(std::io::Error::other(format!("Join error: {e}"))))??
+            .await
+            .map_err(|e| DCBError::Io(std::io::Error::other(format!("Join error: {e}"))))??
         } else {
             // No condition provided at all
             PreAppendDecision::UseCondition(None)
@@ -803,10 +812,8 @@ impl DCBEventStoreAsync for AsyncUmaDBClient {
         events: Vec<DCBEvent>,
         condition: Option<DCBAppendCondition>,
     ) -> DCBResult<u64> {
-        let events_proto: Vec<EventProto> = events
-            .into_iter()
-            .map(|e| EventProto::from(e))
-            .collect();
+        let events_proto: Vec<EventProto> =
+            events.into_iter().map(|e| EventProto::from(e)).collect();
 
         let condition_proto = condition.map(|c| AppendConditionProto {
             fail_if_events_match: Some(QueryProto {
@@ -982,7 +989,6 @@ impl Stream for AsyncReadResponse {
     }
 }
 
-
 // Conversion functions between proto and API types
 impl TryFrom<EventProto> for DCBEvent {
     type Error = DCBError;
@@ -994,7 +1000,9 @@ impl TryFrom<EventProto> for DCBEvent {
             match Uuid::parse_str(&proto.uuid) {
                 Ok(uuid) => Some(uuid),
                 Err(_) => {
-                    return Err(DCBError::DeserializationError("Invalid UUID in EventProto".to_string()));
+                    return Err(DCBError::DeserializationError(
+                        "Invalid UUID in EventProto".to_string(),
+                    ));
                 }
             }
         };

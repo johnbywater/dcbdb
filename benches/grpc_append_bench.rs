@@ -3,7 +3,7 @@ use futures::future::join_all;
 use std::net::TcpListener;
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration};
+use std::time::Duration;
 use tempfile::tempdir;
 use tokio::runtime::Builder as RtBuilder;
 use tokio::sync::oneshot;

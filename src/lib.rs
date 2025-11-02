@@ -82,9 +82,16 @@ pub mod bench_api {
                 }));
             }
             let keys_vec: Vec<Position> = (0..keys).map(|i| Position(i as u64)).collect();
-            let node = EventLeafNode { keys: keys_vec, values };
+            let node = EventLeafNode {
+                keys: keys_vec,
+                values,
+            };
             let cap = node.calc_serialized_size();
-            BenchEventLeafInline { node, buf: vec![0u8; cap], last_size: 0 }
+            BenchEventLeafInline {
+                node,
+                buf: vec![0u8; cap],
+                last_size: 0,
+            }
         }
 
         pub fn serialize(&mut self) -> usize {
@@ -124,9 +131,16 @@ pub mod bench_api {
                 });
             }
             let keys_vec: Vec<Position> = (0..keys).map(|i| Position(i as u64)).collect();
-            let node = EventLeafNode { keys: keys_vec, values };
+            let node = EventLeafNode {
+                keys: keys_vec,
+                values,
+            };
             let cap = node.calc_serialized_size();
-            BenchEventLeafOverflow { node, buf: vec![0u8; cap], last_size: 0 }
+            BenchEventLeafOverflow {
+                node,
+                buf: vec![0u8; cap],
+                last_size: 0,
+            }
         }
 
         pub fn serialize(&mut self) -> usize {

@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput, black_box};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use umadb::bench_api::{BenchEventLeafInline, BenchEventLeafOverflow};
 
 pub fn event_leaf_node_benchmark(c: &mut Criterion) {

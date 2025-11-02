@@ -852,12 +852,10 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
             vec![event5.clone()],
             Some(DCBAppendCondition {
                 fail_if_events_match: Arc::new(DCBQuery {
-                    items: vec![
-                        DCBQueryItem{
-                            types: vec![],
-                            tags: event5.tags.clone(),
-                        },
-                    ],
+                    items: vec![DCBQueryItem {
+                        types: vec![],
+                        tags: event5.tags.clone(),
+                    }],
                 }),
                 after: Some(13),
             }),
@@ -887,12 +885,10 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
             vec![event5.clone()],
             Some(DCBAppendCondition {
                 fail_if_events_match: Arc::new(DCBQuery {
-                    items: vec![
-                        DCBQueryItem{
-                            types: vec![],
-                            tags: event5.tags.clone(),
-                        },
-                    ],
+                    items: vec![DCBQueryItem {
+                        types: vec![],
+                        tags: event5.tags.clone(),
+                    }],
                 }),
                 after: Some(13),
             }),
@@ -917,7 +913,6 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(Some(14), head);
     assert_eq!(event5.data, result[0].event.data);
     assert_eq!(event5.uuid, result[0].event.uuid);
-
 }
 
 #[test]

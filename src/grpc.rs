@@ -26,6 +26,7 @@ pub mod umadb {
 use prost::Message;
 use prost::bytes::Bytes;
 use tokio::runtime::{Handle, Runtime};
+use uuid::Uuid;
 use umadb::{
     AppendConditionProto, AppendRequestProto, AppendResponseProto, ErrorResponseProto, EventProto,
     HeadRequestProto, HeadResponseProto, QueryItemProto, QueryProto, ReadRequestProto,
@@ -307,7 +308,12 @@ impl UmaDbService for UmaDBServer {
         let req = request.into_inner();
 
         // Convert proto types to API types
-        let events: Vec<DCBEvent> = req.events.into_iter().map(|e| e.into()).collect();
+        let events: Vec<DCBEvent> = match req.events.into_iter().map(|e| e.try_into()).collect() {
+            Ok(events) => events,
+            Err(e) => {
+                return Err(status_from_dcb_error(&e));
+            }
+        };
         let condition = req.condition.map(|c| c.into());
 
         // Call the event store append method
@@ -752,11 +758,7 @@ impl DCBEventStoreAsync for AsyncUmaDBClient {
     ) -> DCBResult<u64> {
         let events_proto: Vec<EventProto> = events
             .into_iter()
-            .map(|e| EventProto {
-                event_type: e.event_type,
-                tags: e.tags,
-                data: e.data,
-            })
+            .map(|e| EventProto::from(e))
             .collect();
 
         let condition_proto = condition.map(|c| AppendConditionProto {
@@ -813,20 +815,19 @@ impl AsyncReadResponse {
         match self.stream.message().await {
             Ok(Some(resp)) => {
                 self.last_head = Some(resp.head);
-                self.buffered = resp
-                    .events
-                    .into_iter()
-                    .filter_map(|e| {
-                        e.event.map(|ev| DCBSequencedEvent {
+
+                let mut buffered = Vec::with_capacity(resp.events.len());
+                for e in resp.events {
+                    if let Some(ev) = e.event {
+                        let event = DCBEvent::try_from(ev)?; // propagate error
+                        buffered.push(DCBSequencedEvent {
                             position: e.position,
-                            event: DCBEvent {
-                                event_type: ev.event_type,
-                                tags: ev.tags,
-                                data: ev.data,
-                            },
-                        })
-                    })
-                    .collect();
+                            event,
+                        });
+                    }
+                }
+
+                self.buffered = buffered;
                 self.buf_idx = 0;
                 Ok(())
             }
@@ -892,20 +893,23 @@ impl Stream for AsyncReadResponse {
             match ready!(Pin::new(&mut this.stream).poll_next(cx)) {
                 Some(Ok(resp)) => {
                     this.last_head = Some(resp.head);
-                    this.buffered = resp
-                        .events
-                        .into_iter()
-                        .filter_map(|e| {
-                            e.event.map(|ev| DCBSequencedEvent {
+
+                    let mut buffered = Vec::with_capacity(resp.events.len());
+                    for e in resp.events {
+                        if let Some(ev) = e.event {
+                            // propagate conversion error using DCBResult
+                            let event = match DCBEvent::try_from(ev) {
+                                Ok(event) => event,
+                                Err(err) => return Poll::Ready(Some(Err(err.into()))),
+                            };
+                            buffered.push(DCBSequencedEvent {
                                 position: e.position,
-                                event: DCBEvent {
-                                    event_type: ev.event_type,
-                                    tags: ev.tags,
-                                    data: ev.data,
-                                },
-                            })
-                        })
-                        .collect();
+                                event,
+                            });
+                        }
+                    }
+
+                    this.buffered = buffered;
                     this.buf_idx = 0;
 
                     // If the batch is empty, loop again to poll the next message
@@ -931,14 +935,29 @@ impl Stream for AsyncReadResponse {
     }
 }
 
+
 // Conversion functions between proto and API types
-impl From<EventProto> for DCBEvent {
-    fn from(proto: EventProto) -> Self {
-        DCBEvent {
-            event_type: proto.event_type,
-            tags: proto.tags,
-            data: proto.data,
-        }
+impl TryFrom<EventProto> for DCBEvent {
+    type Error = DCBError;
+
+    fn try_from(proto: EventProto) -> DCBResult<Self> {
+        let uuid = if proto.uuid.is_empty() {
+            None
+        } else {
+            match Uuid::parse_str(&proto.uuid) {
+                Ok(uuid) => Some(uuid),
+                Err(_) => {
+                    return Err(DCBError::DeserializationError("Invalid UUID in EventProto".to_string()));
+                }
+            }
+        };
+
+        Ok(DCBEvent {
+            event_type: proto.event_type.clone(),
+            tags: proto.tags.clone(),
+            data: proto.data.clone(),
+            uuid,
+        })
     }
 }
 
@@ -948,6 +967,7 @@ impl From<DCBEvent> for EventProto {
             event_type: event.event_type,
             tags: event.tags,
             data: event.data,
+            uuid: event.uuid.map(|u| u.to_string()).unwrap_or_default(),
         }
     }
 }

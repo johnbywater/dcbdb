@@ -77,6 +77,7 @@ fn profile_event_store_append() {
                 event_type: format!("Type{}", idx % 16),
                 data: payload.clone(),
                 tags,
+                uuid: None,
             };
             events.push(event);
         }

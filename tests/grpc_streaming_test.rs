@@ -26,6 +26,7 @@ async fn grpc_async_streams_large_reads_total_count() {
             event_type: "TestEvent".to_string(),
             data: format!("data-{i}").into_bytes(),
             tags: vec!["grpc-test".to_string()],
+            uuid: None,
         })
         .collect();
     let last_pos = client
@@ -79,6 +80,7 @@ async fn grpc_async_does_not_stream_past_starting_head() {
             event_type: "TestEvent".to_string(),
             data: format!("data-{i}").into_bytes(),
             tags: vec!["grpc-boundary".to_string()],
+            uuid: None,
         })
         .collect();
     let _ = client
@@ -98,6 +100,7 @@ async fn grpc_async_does_not_stream_past_starting_head() {
             event_type: "TestEvent2".to_string(),
             data: format!("new-{i}").into_bytes(),
             tags: vec!["grpc-boundary".to_string()],
+            uuid: None,
         })
         .collect();
     let _ = client
@@ -146,6 +149,7 @@ async fn grpc_async_subscription_catch_up_and_continue() {
             event_type: "SubTestEvent".to_string(),
             data: format!("init-{i}").into_bytes(),
             tags: vec!["grpc-sub".to_string()],
+            uuid: None,
         })
         .collect();
     let _ = client
@@ -185,6 +189,7 @@ async fn grpc_async_subscription_catch_up_and_continue() {
             event_type: "SubTestEvent2".to_string(),
             data: format!("new-{i}").into_bytes(),
             tags: vec!["grpc-sub".to_string()],
+            uuid: None,
         })
         .collect();
     let _ = client
@@ -239,6 +244,7 @@ async fn grpc_async_stream_catch_up_and_continue() {
             event_type: "AsyncEvent".to_string(),
             data: format!("init-{i}").into_bytes(),
             tags: vec!["grpc-async".to_string()],
+            uuid: None,
         })
         .collect();
     let _ = client
@@ -273,6 +279,7 @@ async fn grpc_async_stream_catch_up_and_continue() {
             event_type: "AsyncEvent2".to_string(),
             data: format!("new-{i}").into_bytes(),
             tags: vec!["grpc-async".to_string()],
+            uuid: None,
         })
         .collect();
     let _ = client

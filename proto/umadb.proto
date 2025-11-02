@@ -7,6 +7,7 @@ message EventProto {
   string event_type = 1;
   repeated string tags = 2;
   bytes data = 3;
+  string uuid = 4;
 }
 
 // Sequenced Event message

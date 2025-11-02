@@ -27,6 +27,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         event_type: "type1".to_string(),
         data: b"data1".to_vec(),
         tags: vec!["tagX".to_string()],
+        uuid: None,
     };
     let position = event_store.append(vec![event1.clone()], None).unwrap();
 
@@ -157,11 +158,13 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         event_type: "type2".to_string(),
         data: b"data2".to_vec(),
         tags: vec!["tagA".to_string(), "tagB".to_string()],
+        uuid: None,
     };
     let event3 = DCBEvent {
         event_type: "type3".to_string(),
         data: b"data3".to_vec(),
         tags: vec!["tagA".to_string(), "tagC".to_string()],
+        uuid: None,
     };
     let position = event_store
         .append(vec![event2.clone(), event3.clone()], None)
@@ -374,6 +377,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         event_type: "type4".to_string(),
         data: b"data4".to_vec(),
         tags: vec![],
+        uuid: None,
     };
 
     // Fail because condition matches all.
@@ -579,6 +583,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         event_type: "StudentRegistered".to_string(),
         data: format!(r#"{{"name": "Student1", "max_courses": 10}}"#).into_bytes(),
         tags: vec![student_id.clone()],
+        uuid: None,
     };
 
     let course_id = format!("course1-{}", Uuid::new_v4());
@@ -586,6 +591,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         event_type: "CourseRegistered".to_string(),
         data: format!(r#"{{"name": "Course1", "places": 10}}"#).into_bytes(),
         tags: vec![course_id.clone()],
+        uuid: None,
     };
 
     let student_joined_course = DCBEvent {
@@ -596,6 +602,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         )
         .into_bytes(),
         tags: vec![course_id.clone(), student_id.clone()],
+        uuid: None,
     };
 
     let _position = event_store
@@ -854,11 +861,13 @@ fn test_tag_hash_collision() {
         event_type: "StudentEvent".to_string(),
         data: b"student-data".to_vec(),
         tags: vec![student_tag.clone()],
+        uuid: None,
     };
     let ev_course = DCBEvent {
         event_type: "CourseEvent".to_string(),
         data: b"course-data".to_vec(),
         tags: vec![course_tag.clone()],
+        uuid: None,
     };
 
     let _ = store.append(vec![ev_student.clone()], None).unwrap();

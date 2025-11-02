@@ -285,6 +285,7 @@ pub fn read_conditional(
                         event_type: rec.event_type,
                         data: rec.data,
                         tags: rec.tags,
+                        uuid: rec.uuid,
                     },
                 });
                 if let Some(lim) = limit
@@ -330,6 +331,7 @@ pub fn read_conditional(
                             event_type: rec.event_type,
                             data: rec.data,
                             tags: rec.tags,
+                            uuid: rec.uuid,
                         },
                     });
                     if let Some(lim) = limit
@@ -501,6 +503,7 @@ pub fn read_conditional(
                 event_type: rec.event_type,
                 data: rec.data,
                 tags: rec.tags,
+                uuid: rec.uuid,
             },
         });
         if let Some(lim) = limit
@@ -585,6 +588,7 @@ mod tests {
                 event_type: format!("Type{}", i),
                 data: vec![i, i + 1, i + 2],
                 tags: vec![t1, t2],
+                uuid: None,
             });
         }
         input
@@ -887,16 +891,19 @@ mod tests {
                 event_type: "TypeA".to_string(),
                 data: vec![1],
                 tags: vec!["x".to_string()],
+                uuid: None,
             },
             DCBEvent {
                 event_type: "TypeB".to_string(),
                 data: vec![2],
                 tags: vec!["y".to_string()],
+                uuid: None,
             },
             DCBEvent {
                 event_type: "TypeA".to_string(),
                 data: vec![3],
                 tags: vec!["z".to_string()],
+                uuid: None,
             },
         ];
         let mut writer = db.writer().unwrap();
@@ -1015,11 +1022,13 @@ mod tests {
                 event_type: "TypeA".to_string(),
                 data: vec![1],
                 tags: vec!["foo".to_string()],
+                uuid: None,
             },
             DCBEvent {
                 event_type: "TypeB".to_string(),
                 data: vec![2],
                 tags: vec!["bar".to_string(), "foo".to_string()],
+                uuid: None,
             },
         ];
         let last = store.append(events.clone(), None).unwrap();
@@ -1078,6 +1087,7 @@ mod tests {
                     event_type: "TypeC".to_string(),
                     data: vec![3],
                     tags: vec!["baz".to_string()],
+                    uuid: None,
                 }],
                 Some(cond_pass),
             )
@@ -1101,6 +1111,7 @@ mod tests {
                 event_type: "TypeD".to_string(),
                 data: vec![4],
                 tags: vec!["qux".to_string()],
+                uuid: None,
             }],
             Some(cond_fail),
         );
@@ -1121,16 +1132,19 @@ mod tests {
             event_type: "A".into(),
             data: b"1".to_vec(),
             tags: vec!["t1".into()],
+            uuid: None,
         };
         let e2 = DCBEvent {
             event_type: "B".into(),
             data: b"2".to_vec(),
             tags: vec!["t2".into()],
+            uuid: None,
         };
         let e3 = DCBEvent {
             event_type: "C".into(),
             data: b"3".to_vec(),
             tags: vec!["t3".into()],
+            uuid: None,
         };
 
         // Batch: first succeeds, second fails due to condition matching any event, third succeeds (after high position)
@@ -1189,16 +1203,19 @@ mod tests {
             event_type: "T".into(),
             data: b"one".to_vec(),
             tags: vec!["x".into()],
+            uuid: None,
         };
         let e2 = DCBEvent {
             event_type: "T".into(),
             data: b"two".to_vec(),
             tags: vec!["y".into()],
+            uuid: None,
         };
         let e3 = DCBEvent {
             event_type: "T".into(),
             data: b"three".to_vec(),
             tags: vec!["z".into()],
+            uuid: None,
         };
 
         let query_tag_x = Arc::new(DCBQuery {
@@ -1270,6 +1287,7 @@ mod tests {
             event_type: "S".into(),
             data: b"sm".to_vec(),
             tags: vec!["tS".into()],
+            uuid: None,
         };
         // Large data to ensure it spills into event overflow pages
         let big_data_len = super::DEFAULT_PAGE_SIZE * 3; // 3 pages worth to be safe
@@ -1277,21 +1295,25 @@ mod tests {
             event_type: "B".into(),
             data: vec![0xAB; big_data_len],
             tags: vec!["tB".into()],
+            uuid: None,
         };
         let filler1 = DCBEvent {
             event_type: "X".into(),
             data: b"x".to_vec(),
             tags: vec![],
+            uuid: None,
         };
         let filler2 = DCBEvent {
             event_type: "Y".into(),
             data: b"y".to_vec(),
             tags: vec![],
+            uuid: None,
         };
         let final_ok = DCBEvent {
             event_type: "C".into(),
             data: b"c".to_vec(),
             tags: vec![],
+            uuid: None,
         };
 
         // Queries by type only (no tags) to force fallback path over events tree (which reads from dirty pages)
@@ -1396,6 +1418,7 @@ mod tests {
             event_type: "S".into(),
             data: b"sm".to_vec(),
             tags: vec!["x".into()],
+            uuid: None,
         };
         // Big overflow event: type "B" with tag "y" and large payload to exercise overflow pages
         let big_data_len = super::DEFAULT_PAGE_SIZE * 3; // ensure multiple overflow pages
@@ -1403,22 +1426,26 @@ mod tests {
             event_type: "B".into(),
             data: vec![0xCD; big_data_len],
             tags: vec!["y".into()],
+            uuid: None,
         };
         // Fillers that will be conditioned out
         let filler1 = DCBEvent {
             event_type: "X".into(),
             data: b"x".to_vec(),
             tags: vec![],
+            uuid: None,
         };
         let filler2 = DCBEvent {
             event_type: "Y".into(),
             data: b"y".to_vec(),
             tags: vec![],
+            uuid: None,
         };
         let final_ok = DCBEvent {
             event_type: "C".into(),
             data: b"c".to_vec(),
             tags: vec![],
+            uuid: None,
         };
 
         // Conditions combining tags and types so the tags index is used and the type filter applies after lookup

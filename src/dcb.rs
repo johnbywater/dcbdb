@@ -9,6 +9,7 @@ use futures_core::Stream;
 use std::iter::Iterator;
 use std::sync::Arc;
 use thiserror::Error;
+use uuid::Uuid;
 
 /// Non-async Rust interface for recording and retrieving events
 pub trait DCBEventStoreSync {
@@ -163,6 +164,8 @@ pub struct DCBEvent {
     pub data: Vec<u8>,
     /// Tags associated with the event
     pub tags: Vec<String>,
+    /// Unique event ID
+    pub uuid: Option<Uuid>,
 }
 
 /// An event with its position in the event sequence
@@ -275,12 +278,14 @@ mod tests {
             event_type: "test_event".to_string(),
             data: vec![1, 2, 3],
             tags: vec!["tag1".to_string(), "tag2".to_string()],
+            uuid: None,
         };
 
         let event2 = DCBEvent {
             event_type: "another_event".to_string(),
             data: vec![4, 5, 6],
             tags: vec!["tag2".to_string(), "tag3".to_string()],
+            uuid: None,
         };
 
         let seq_event1 = DCBSequencedEvent {

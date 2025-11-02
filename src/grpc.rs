@@ -42,7 +42,7 @@ const READ_RESPONSE_BATCH_SIZE_MAX: u32 = 5000;
 pub async fn start_server<P: AsRef<Path> + Send + 'static>(
     path: P,
     addr: &str,
-    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+    shutdown_rx: oneshot::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let addr = addr.parse()?;
     // Create a shutdown broadcast channel for terminating ongoing subscriptions
@@ -62,7 +62,7 @@ pub async fn start_server<P: AsRef<Path> + Send + 'static>(
     server_builder
         .add_service(server.into_service())
         .serve_with_shutdown(addr, async move {
-            // Wait for external shutdown trigger
+            // Wait for an external shutdown trigger
             let _ = shutdown_rx.await;
             // Broadcast shutdown to all subscription tasks
             let _ = srv_shutdown_tx.send(true);
@@ -75,8 +75,8 @@ pub async fn start_server<P: AsRef<Path> + Send + 'static>(
 
 // gRPC server implementation
 pub struct UmaDBServer {
-    command_handler: RequestHandler,
-    shutdown_rx: watch::Receiver<bool>,
+    request_handler: RequestHandler,
+    shutdown_watch_rx: watch::Receiver<bool>,
 }
 
 impl UmaDBServer {
@@ -86,8 +86,8 @@ impl UmaDBServer {
     ) -> std::io::Result<Self> {
         let command_handler = RequestHandler::new(path)?;
         Ok(Self {
-            command_handler,
-            shutdown_rx,
+            request_handler: command_handler,
+            shutdown_watch_rx: shutdown_rx,
         })
     }
 
@@ -105,17 +105,22 @@ impl UmaDbService for UmaDBServer {
         &self,
         request: Request<ReadRequestProto>,
     ) -> Result<Response<Self::ReadStream>, Status> {
-        let req = request.into_inner();
+        let read_request = request.into_inner();
 
-        // Convert proto types to API types
-        let mut query: Option<Arc<DCBQuery>> = req.query.map(|q| q.into());
-        let after = req.after;
-        let limit = req.limit;
+        // Convert protobuf query to DCB types
+        let mut query: Option<Arc<DCBQuery>> = read_request.query.map(|q| q.into());
+        let after = read_request.after;
+        let limit = read_request.limit;
+        // Cap requested batch size.
+        let capped_batch_size = read_request.batch_size.unwrap_or(READ_RESPONSE_BATCH_SIZE_DEFAULT).max(1).min(READ_RESPONSE_BATCH_SIZE_MAX);
+        let subscribe = read_request.subscribe.unwrap_or(false);
 
         // Create a channel for streaming responses (deeper buffer to reduce backpressure under concurrency)
         let (tx, rx) = mpsc::channel(2048);
-        let command_handler = self.command_handler.clone();
-        let mut shutdown_rx = self.shutdown_rx.clone();
+        // Clone the request handler.
+        let request_handler = self.request_handler.clone();
+        // Clone the shutdown watch receiver.
+        let mut shutdown_watch_rx = self.shutdown_watch_rx.clone();
 
         // Spawn a task to handle the read operation and stream multiple batches
         tokio::spawn(async move {
@@ -124,33 +129,28 @@ impl UmaDbService for UmaDBServer {
             let mut next_after = after;
             let mut sent_any = false;
             let mut remaining = limit;
-            let subscribe = req.subscribe.unwrap_or(false);
             // Create a watch receiver for head updates (for subscriptions)
-            let mut head_rx = command_handler.watch_head();
+            // TODO: Make this optional.
+            let mut head_rx = request_handler.watch_head();
             // If overall read is unlimited, compute global head once to preserve semantics
             let global_head = if remaining.is_none() && !subscribe {
-                command_handler.head().await.unwrap_or(None)
+                request_handler.head().await.unwrap_or(None)
             } else {
                 None
             };
-            // Server-side batch cap to ensure streaming in multiple messages
-            // Keep this modest so tests expecting multiple batches (e.g., 300 items) will split.
             loop {
-                // If this is a subscription, exit if client has gone away or server is shutting down
+                // If this is a subscription, exit if the client
+                // has gone away or the server is shutting down.
                 if subscribe {
                     if tx.is_closed() {
                         break;
                     }
-                    if *shutdown_rx.borrow() {
+                    if *shutdown_watch_rx.borrow() {
                         break;
                     }
                 }
-                // Determine per-iteration limit: take requested batch size (if any), cap to
-                // READ_RESPONSE_SIZE_MAX, ensure >= 1, then don't exceed remaining (if any)
-                let requested_bs = req.batch_size.unwrap_or(READ_RESPONSE_BATCH_SIZE_DEFAULT);
-                let capped_bs = requested_bs.min(READ_RESPONSE_BATCH_SIZE_MAX);
-                let per_iter_limit = remaining.unwrap_or(u32::MAX).min(capped_bs);
-                // println!("Per iter limit: {per_iter_limit:?}");
+                // Determine per-iteration limit.
+                let per_iter_limit = remaining.unwrap_or(u32::MAX).min(capped_batch_size);
                 // If subscription and remaining exhausted (limit reached), terminate
                 if subscribe
                     && let Some(rem) = remaining
@@ -158,7 +158,7 @@ impl UmaDbService for UmaDBServer {
                 {
                     break;
                 }
-                match command_handler
+                match request_handler
                     .read(query_clone.clone(), next_after, Some(per_iter_limit))
                     .await
                 {
@@ -182,7 +182,7 @@ impl UmaDbService for UmaDBServer {
                             if subscribe {
                                 // Wait while head <= next_after (or None)
                                 loop {
-                                    // If channel closed, stop
+                                    // Stop if the channel is closed.
                                     if tx.is_closed() {
                                         break;
                                     }
@@ -196,10 +196,10 @@ impl UmaDbService for UmaDBServer {
                                         res = head_rx.changed() => {
                                             if res.is_err() { break; }
                                         }
-                                        res2 = shutdown_rx.changed() => {
+                                        res2 = shutdown_watch_rx.changed() => {
                                             if res2.is_ok() {
-                                                // If shutdown flag set to true, exit
-                                                if *shutdown_rx.borrow() { break; }
+                                                // Exit if shutting down.
+                                                if *shutdown_watch_rx.borrow() { break; }
                                             } else {
                                                 break; // sender dropped
                                             }
@@ -273,12 +273,13 @@ impl UmaDbService for UmaDBServer {
                             .get(slice_start as usize + slice_len as usize - 1)
                             .map(|e| e.position);
 
-                        // If we reached the captured head boundary on non-subscribe, stop streaming further
+                        // Stop streaming further If we reached the
+                        // captured head boundary (non-subscriber only).
                         if reached_end && remaining.is_none() && !subscribe {
                             break;
                         }
 
-                        // Decrease remaining overall limit if any, and stop if reached
+                        // Decrease the remaining overall limit if any, and stop if reached
                         if let Some(rem) = remaining.as_mut() {
                             if *rem <= slice_len {
                                 *rem = 0;
@@ -313,7 +314,7 @@ impl UmaDbService for UmaDBServer {
     ) -> Result<Response<AppendResponseProto>, Status> {
         let req = request.into_inner();
 
-        // Convert proto types to API types
+        // Convert protobuf types to API types
         let events: Vec<DCBEvent> = match req.events.into_iter().map(|e| e.try_into()).collect() {
             Ok(events) => events,
             Err(e) => {
@@ -323,7 +324,7 @@ impl UmaDbService for UmaDBServer {
         let condition = req.condition.map(|c| c.into());
 
         // Call the event store append method
-        match self.command_handler.append(events, condition).await {
+        match self.request_handler.append(events, condition).await {
             Ok(position) => Ok(Response::new(AppendResponseProto { position })),
             Err(e) => Err(status_from_dcb_error(&e)),
         }
@@ -334,7 +335,7 @@ impl UmaDbService for UmaDBServer {
         _request: Request<HeadRequestProto>,
     ) -> Result<Response<HeadResponseProto>, Status> {
         // Call the event store head method
-        match self.command_handler.head().await {
+        match self.request_handler.head().await {
             Ok(position) => {
                 // Return the position as a response
                 Ok(Response::new(HeadResponseProto { position }))
@@ -357,8 +358,8 @@ enum WriterRequest {
 // Thread-safe request handler
 struct RequestHandler {
     mvcc: Arc<Mvcc>,
-    head_tx: watch::Sender<Option<u64>>,
-    request_tx: mpsc::Sender<WriterRequest>,
+    head_watch_tx: watch::Sender<Option<u64>>,
+    writer_request_tx: mpsc::Sender<WriterRequest>,
 }
 
 impl RequestHandler {
@@ -373,12 +374,12 @@ impl RequestHandler {
         } else {
             p.to_path_buf()
         };
-        let mvcc = std::sync::Arc::new(
+        let mvcc = Arc::new(
             Mvcc::new(&file_path, DEFAULT_PAGE_SIZE, false)
                 .map_err(|e| std::io::Error::other(format!("Failed to init LMDB: {e:?}")))?,
         );
 
-        // Initialize head watch channel with current head
+        // Initialize the head watch channel with the current head.
         let init_head = {
             let (_, header) = mvcc
                 .get_latest_header()
@@ -395,7 +396,7 @@ impl RequestHandler {
             let db = UmaDB::from_arc(mvcc_for_writer);
 
             // Create a runtime for processing writer requests.
-            let rt = tokio::runtime::Runtime::new().unwrap();
+            let rt = Runtime::new().unwrap();
 
             // Process writer requests.
             rt.block_on(async {
@@ -435,8 +436,10 @@ impl RequestHandler {
                                         total_events += ev_len;
                                     }
                                     Ok(WriterRequest::Shutdown) => {
-                                        // Push back the shutdown signal by breaking and letting outer loop handle after batch.
-                                        // We'll process current batch first, then break outer loop on next iteration when channel is empty.
+                                        // Push back the shutdown signal by breaking and letting
+                                        // outer loop handle after batch. We'll process the
+                                        // current batch first, then break the outer loop on
+                                        // the next iteration when the channel is empty.
                                         break;
                                     }
                                     Err(mpsc::error::TryRecvError::Empty) => break,
@@ -444,7 +447,7 @@ impl RequestHandler {
                                 }
                             }
                             // println!("Total events: {total_events}");
-                            // Execute a single batched append
+                            // Execute a single batched append operation.
                             let batch_result = db.append_batch(items);
                             match batch_result {
                                 Ok(results) => {
@@ -458,7 +461,7 @@ impl RequestHandler {
                                         }
                                         let _ = tx.send(res);
                                     }
-                                    // After successful batch commit, publish updated head if there were successful appends
+                                    // After a successful batch commit, publish the updated head.
                                     if let Some(h) = max_ok {
                                         let _ = head_tx_writer.send(Some(h));
                                     }
@@ -527,8 +530,8 @@ impl RequestHandler {
 
         Ok(Self {
             mvcc,
-            head_tx,
-            request_tx,
+            head_watch_tx: head_tx,
+            writer_request_tx: request_tx,
         })
     }
 
@@ -593,7 +596,7 @@ impl RequestHandler {
         events: Vec<DCBEvent>,
         condition: Option<DCBAppendCondition>,
     ) -> DCBResult<u64> {
-        // Concurrent pre-check of condition using a read-only view in a blocking thread.
+        // Concurrent pre-check of the given condition using a reader in a blocking thread.
         let pre_append_decision = if let Some(condition_binding) = condition {
             let mvcc = self.mvcc.clone();
             let events_clone = events.clone(); // move-safe copy for the blocking thread
@@ -621,7 +624,7 @@ impl RequestHandler {
 
                 if let Some(matched) = found.first() {
                     // Found one event — consider if the request is idempotent...
-                    match is_request_idempotent(
+                    return match is_request_idempotent(
                         &mvcc,
                         &empty_dirty,
                         reader.events_tree_root_id,
@@ -632,7 +635,7 @@ impl RequestHandler {
                     ) {
                         Ok(Some(last_recorded_position)) => {
                             // Request is idempotent; skip actual append
-                            return Ok(PreAppendDecision::AlreadyAppended(last_recorded_position));
+                            Ok(PreAppendDecision::AlreadyAppended(last_recorded_position))
                         }
                         Ok(None) => {
                             // Integrity violation
@@ -641,11 +644,11 @@ impl RequestHandler {
                                 given_condition.clone(),
                                 matched,
                             );
-                            return Err(DCBError::IntegrityError(msg));
+                            Err(DCBError::IntegrityError(msg))
                         }
                         Err(err) => {
                             // Propagate underlying read error
-                            return Err(err);
+                            Err(err)
                         }
                     }
                 }
@@ -668,15 +671,15 @@ impl RequestHandler {
 
         // Handle the pre-check decision
         match pre_append_decision {
-            PreAppendDecision::AlreadyAppended(pos) => {
-                // ✅ Request was idempotent — just return existing position
-                Ok(pos)
+            PreAppendDecision::AlreadyAppended(last_found_position) => {
+                // ✅ Request was idempotent — just return the existing position.
+                Ok(last_found_position)
             }
             PreAppendDecision::UseCondition(adjusted_condition) => {
-                // ✅ Proceed with append via EventStore thread
-                let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+                // ✅ Proceed with append operation on the writer thread.
+                let (response_tx, response_rx) = oneshot::channel();
 
-                self.request_tx
+                self.writer_request_tx
                     .send(WriterRequest::Append {
                         events,
                         condition: adjusted_condition,
@@ -699,12 +702,12 @@ impl RequestHandler {
     }
 
     fn watch_head(&self) -> watch::Receiver<Option<u64>> {
-        self.head_tx.subscribe()
+        self.head_watch_tx.subscribe()
     }
 
     #[allow(dead_code)]
     async fn shutdown(&self) {
-        let _ = self.request_tx.send(WriterRequest::Shutdown).await;
+        let _ = self.writer_request_tx.send(WriterRequest::Shutdown).await;
     }
 }
 
@@ -713,8 +716,8 @@ impl Clone for RequestHandler {
     fn clone(&self) -> Self {
         Self {
             mvcc: self.mvcc.clone(),
-            head_tx: self.head_tx.clone(),
-            request_tx: self.request_tx.clone(),
+            head_watch_tx: self.head_watch_tx.clone(),
+            writer_request_tx: self.writer_request_tx.clone(),
         }
     }
 }
@@ -723,7 +726,7 @@ impl Clone for RequestHandler {
 enum PreAppendDecision {
     /// Proceed with this (possibly adjusted) condition
     UseCondition(Option<DCBAppendCondition>),
-    /// Skip append because the request was idempotent; return last recorded position
+    /// Skip append operation because the request was idempotent; return last recorded position
     AlreadyAppended(u64),
 }
 
@@ -773,7 +776,7 @@ impl DCBEventStoreAsync for AsyncUmaDBClient {
         subscribe: bool,
         batch_size: Option<u32>,
     ) -> DCBResult<Box<dyn DCBReadResponseAsync + Send>> {
-        // Convert API types to proto types
+        // Convert API types to protobuf types
         let query_proto = query.map(|q| QueryProto {
             items: <Vec<DCBQueryItem> as Clone>::clone(&q.items)
                 .into_iter()
@@ -937,20 +940,20 @@ impl Stream for AsyncReadResponse {
                 return Poll::Ready(Some(Ok(ev)));
             }
 
-            // If stream ended, stop
+            // Stop if the stream ended.
             if this.ended {
                 return Poll::Ready(None);
             }
 
             // Poll the underlying tonic::Streaming
-            match ready!(Pin::new(&mut this.stream).poll_next(cx)) {
+            return match ready!(Pin::new(&mut this.stream).poll_next(cx)) {
                 Some(Ok(resp)) => {
                     this.last_head = Some(resp.head);
 
                     let mut buffered = Vec::with_capacity(resp.events.len());
                     for e in resp.events {
                         if let Some(ev) = e.event {
-                            // propagate conversion error using DCBResult
+                            // Propagate any conversion error using DCBResult.
                             let event = match DCBEvent::try_from(ev) {
                                 Ok(event) => event,
                                 Err(err) => return Poll::Ready(Some(Err(err))),
@@ -973,15 +976,15 @@ impl Stream for AsyncReadResponse {
                     // Otherwise, return the first event
                     let ev = this.buffered[this.buf_idx].clone();
                     this.buf_idx += 1;
-                    return Poll::Ready(Some(Ok(ev)));
+                    Poll::Ready(Some(Ok(ev)))
                 }
                 Some(Err(status)) => {
                     this.ended = true;
-                    return Poll::Ready(Some(Err(dcb_error_from_status(status))));
+                    Poll::Ready(Some(Err(dcb_error_from_status(status))))
                 }
                 None => {
                     this.ended = true;
-                    return Poll::Ready(None);
+                    Poll::Ready(None)
                 }
             }
         }
@@ -1239,7 +1242,7 @@ impl<'a> Iterator for SyncClientReadResponse<'a> {
     type Item = Result<DCBSequencedEvent, DCBError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // Fetch the next batch if buffer is empty
+        // Fetch the next batch if the buffer is empty.
         while self.buffer.is_empty() && !self.finished {
             if let Err(e) = self.fetch_next_batch() {
                 return Some(Err(e));

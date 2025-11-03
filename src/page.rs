@@ -1,3 +1,4 @@
+use std::ops::Range;
 use crate::common::PageID;
 use crate::dcb::{DCBError, DCBResult};
 use crate::node::Node;
@@ -11,6 +12,9 @@ pub struct Page {
 
 // Page header format: type(1) + crc(4) + len(4)
 pub const PAGE_HEADER_SIZE: usize = 9;
+const HEADER_LAYOUT_NODE_TYPE_BYTE: usize = 0;
+const HEADER_LAYOUT_CRC_BYTES: Range<usize> = 1..5;
+const HEADER_LAYOUT_BODY_LEN_BYTES: Range<usize> = 5..9;
 
 // Implementation for Page
 impl Page {
@@ -26,26 +30,7 @@ impl Page {
 
     /// Serialized page (header + body + zero padding) into `buf`.
     pub fn serialize_into(&self, buf: &mut [u8]) -> DCBResult<()> {
-        // Serialize body into the front of the body region using the space after header
-        let body_len = {
-            let body_slice = &mut buf[PAGE_HEADER_SIZE..];
-            self.node.serialize_into(body_slice)?
-        };
-
-        // Zero-fill the remainder of the page after the serialized body
-        let tail_start = PAGE_HEADER_SIZE + body_len;
-        if tail_start < buf.len() {
-            buf[tail_start..].fill(0);
-        }
-
-        // Compute CRC over the actual body bytes
-        let crc = calc_crc(&buf[PAGE_HEADER_SIZE..PAGE_HEADER_SIZE + body_len]);
-
-        // Fill page header
-        buf[0] = self.node.get_type_byte();
-        buf[1..5].copy_from_slice(&crc.to_le_bytes());
-        buf[5..9].copy_from_slice(&(body_len as u32).to_le_bytes());
-
+        serialize_page_into(buf, &self.node)?;
         Ok(())
     }
 
@@ -59,9 +44,9 @@ impl Page {
 
         // Extract header information with minimal bounds checks
         let header = &page_data[..PAGE_HEADER_SIZE];
-        let node_type = header[0];
-        let crc = u32::from_le_bytes(header[1..5].try_into().unwrap());
-        let data_len = u32::from_le_bytes(header[5..9].try_into().unwrap()) as usize;
+        let node_type = header[HEADER_LAYOUT_NODE_TYPE_BYTE];
+        let crc = u32::from_le_bytes(header[HEADER_LAYOUT_CRC_BYTES].try_into().unwrap());
+        let data_len = u32::from_le_bytes(header[HEADER_LAYOUT_BODY_LEN_BYTES].try_into().unwrap()) as usize;
 
         if PAGE_HEADER_SIZE + data_len > page_data.len() {
             return Err(DCBError::DatabaseCorrupted(
@@ -86,6 +71,39 @@ impl Page {
 
         Ok(Self { page_id, node })
     }
+}
+
+pub fn serialize_page_into(buf: &mut [u8], node_ref: &Node) -> Result<(), DCBError> {
+    let body_len = serialize_page_node_into(buf, node_ref)?;
+    serialize_page_header_into(buf, body_len, node_ref.get_type_byte());
+    Ok(())
+}
+
+#[inline(always)]
+fn serialize_page_node_into(buf: &mut [u8], node_ref: &Node) -> Result<usize, DCBError> {
+    // Serialize body into the front of the body region using the space after header
+    let body_len = {
+        let body_slice = &mut buf[PAGE_HEADER_SIZE..];
+        node_ref.serialize_into(body_slice)?
+    };
+
+    // Zero-fill the remainder of the page after the serialized body
+    let tail_start = PAGE_HEADER_SIZE + body_len;
+    if tail_start < buf.len() {
+        buf[tail_start..].fill(0);
+    }
+    Ok(body_len)
+}
+
+#[inline(always)]
+fn serialize_page_header_into(buf: &mut [u8], body_len: usize, node_type_byte: u8) {
+    // Compute CRC over the actual body bytes
+    let crc = calc_crc(&buf[PAGE_HEADER_SIZE..PAGE_HEADER_SIZE + body_len]);
+
+    // Fill page header
+    buf[HEADER_LAYOUT_NODE_TYPE_BYTE] = node_type_byte;
+    buf[HEADER_LAYOUT_CRC_BYTES].copy_from_slice(&crc.to_le_bytes());
+    buf[HEADER_LAYOUT_BODY_LEN_BYTES].copy_from_slice(&(body_len as u32).to_le_bytes());
 }
 
 /// Calculate CRC32 checksum for data

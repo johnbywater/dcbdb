@@ -7,7 +7,7 @@ use crate::free_lists_tree_nodes::{
 };
 use crate::header_node::HeaderNode;
 use crate::node::Node;
-use crate::page::Page;
+use crate::page::{serialize_page_into, Page, PAGE_HEADER_SIZE};
 use crate::pager::Pager;
 use crate::tags_tree_nodes::TagsLeafNode;
 use std::collections::HashMap;
@@ -19,6 +19,8 @@ use std::time::Duration;
 
 const GET_LATEST_HEADER_RETRIES: usize = 5;
 const GET_LATEST_HEADER_DELAY: Duration = Duration::from_millis(10);
+const HEADER_PAGE_ID_0: PageID = PageID(0);
+const HEADER_PAGE_ID_1: PageID = PageID(1);
 
 // Main MVCC structure
 pub struct Mvcc {
@@ -27,14 +29,11 @@ pub struct Mvcc {
     pub writer_lock: Mutex<()>,
     pub page_size: usize,
     pub max_node_size: usize,
-    pub header_page_id0: PageID,
-    pub header_page_id1: PageID,
-    // Owned header node instances for pages 0 and 1 to avoid reallocation/reconstruction
-    pub header0: Mutex<HeaderNode>,
-    pub header1: Mutex<HeaderNode>,
-    // Reusable, preallocated page-sized buffer for header serialization (zero-padded)
+    // Owned header node instances for pages 0 and 1
+    pub headers: Mutex<Vec<Page>>,
+    // Reusable buffer for header serialization
     pub header_page_buf: Mutex<Vec<u8>>,
-    // Reusable buffer for general page serialization to avoid per-page allocations
+    // Reusable buffer for general page serialization
     pub page_buf: Mutex<Vec<u8>>,
     reader_id_counter: Mutex<usize>,
     pub verbose: bool,
@@ -43,33 +42,25 @@ pub struct Mvcc {
 impl Mvcc {
     pub fn new(path: &Path, page_size: usize, verbose: bool) -> DCBResult<Self> {
         let pager = Pager::new(path, page_size)?;
-        let header_page_id0 = PageID(0);
-        let header_page_id1 = PageID(1);
 
         let mvcc = Self {
             pager,
             reader_tsns: Mutex::new(HashMap::new()),
             writer_lock: Mutex::new(()),
             page_size,
-            max_node_size: page_size - crate::page::PAGE_HEADER_SIZE,
-            header_page_id0,
-            header_page_id1,
-            header0: Mutex::new(HeaderNode {
-                tsn: Tsn(0),
-                next_page_id: PageID(0),
-                free_lists_tree_root_id: PageID(0),
-                events_tree_root_id: PageID(0),
-                tags_tree_root_id: PageID(0),
-                next_position: Position(0),
-            }),
-            header1: Mutex::new(HeaderNode {
-                tsn: Tsn(0),
-                next_page_id: PageID(0),
-                free_lists_tree_root_id: PageID(0),
-                events_tree_root_id: PageID(0),
-                tags_tree_root_id: PageID(0),
-                next_position: Position(0),
-            }),
+            max_node_size: page_size - PAGE_HEADER_SIZE,
+            headers: Mutex::new(
+                vec![
+                    Page{
+                        page_id: PageID(0),
+                        node: Node::Header(HeaderNode::default()),
+                    },
+                    Page{
+                        page_id: PageID(1),
+                        node: Node::Header(HeaderNode::default()),
+                    },
+                ]
+            ),
             header_page_buf: Mutex::new(vec![0u8; page_size]),
             page_buf: Mutex::new(vec![0u8; page_size]),
             reader_id_counter: Mutex::new(0),
@@ -78,103 +69,79 @@ impl Mvcc {
 
         if mvcc.pager.is_file_new {
             // Initialize new database
-            let freetree_root_id = PageID(2);
-            let position_root_id = PageID(3);
-            let tags_root_id = PageID(4);
-            let next_page_id = PageID(5);
+            let initial_tsn = Tsn(0);
+            let initial_free_lists_tree_root_id = PageID(2);
+            let initial_events_tree_root_id = PageID(3);
+            let initial_tags_tree_root_id = PageID(4);
+            let initial_next_page_id = PageID(5);
+            let initial_next_position = Position(1);
+            mvcc.update_header(
+                HEADER_PAGE_ID_0,
+                initial_tsn,
+                initial_free_lists_tree_root_id,
+                initial_events_tree_root_id,
+                initial_tags_tree_root_id,
+                initial_next_page_id,
+                initial_next_position,
+            )?;
+            mvcc.update_header(
+                HEADER_PAGE_ID_1,
+                initial_tsn,
+                initial_free_lists_tree_root_id,
+                initial_events_tree_root_id,
+                initial_tags_tree_root_id,
+                initial_next_page_id,
+                initial_next_position,
+            )?;
 
-            // Create initial header node and keep owned copies
-            let header_node0 = HeaderNode {
-                tsn: Tsn(0),
-                next_page_id,
-                free_lists_tree_root_id: freetree_root_id,
-                events_tree_root_id: position_root_id,
-                tags_tree_root_id: tags_root_id,
-                next_position: Position(1),
-            };
-            {
-                let mut h0 = mvcc.header0.lock().unwrap();
-                *h0 = header_node0.clone();
-                let mut h1 = mvcc.header1.lock().unwrap();
-                *h1 = header_node0.clone();
-            }
-
-            // Write header pages using preallocated buffer
-            mvcc.write_header_using_buf(header_page_id0, &header_node0)?;
-            mvcc.write_header_using_buf(header_page_id1, &header_node0)?;
-
-            // Create and write an empty free list root page
+            // Create and write an empty free lists tree root page.
             let free_list_leaf = FreeListLeafNode {
                 keys: Vec::new(),
                 values: Vec::new(),
             };
-            let free_list_page = Page::new(freetree_root_id, Node::FreeListLeaf(free_list_leaf));
+            let free_list_page = Page::new(initial_free_lists_tree_root_id, Node::FreeListLeaf(free_list_leaf));
 
-            // Create and write an empty position index root page
+            // Create and write an empty events tree root page.
             let event_leaf = EventLeafNode {
                 keys: Vec::new(),
                 values: Vec::new(),
             };
-            let position_page = Page::new(position_root_id, Node::EventLeaf(event_leaf));
+            let position_page = Page::new(initial_events_tree_root_id, Node::EventLeaf(event_leaf));
 
-            // Create and write an empty tags index root page
+            // Create and write an empty tags tree root page.
             let tags_leaf = TagsLeafNode {
                 keys: Vec::new(),
                 values: Vec::new(),
             };
-            let tags_page = Page::new(tags_root_id, Node::TagsLeaf(tags_leaf));
+            let tags_page = Page::new(initial_tags_tree_root_id, Node::TagsLeaf(tags_leaf));
 
             // Write all three initial root pages using the shared write_pages helper
             let _ = mvcc.write_pages([&free_list_page, &position_page, &tags_page].into_iter())?;
 
             mvcc.flush()?;
-        } else {
-            // Existing database: read headers into owned instances
-            if let Ok(h0) = mvcc.read_header(header_page_id0) {
-                *mvcc.header0.lock().unwrap() = h0;
-            }
-            if let Ok(h1) = mvcc.read_header(header_page_id1) {
-                *mvcc.header1.lock().unwrap() = h1;
-            }
         }
 
         Ok(mvcc)
     }
 
-    fn write_header_using_buf(&self, page_id: PageID, header: &HeaderNode) -> DCBResult<()> {
-        // Ensure buffer exists and has correct size
-        let mut buf = self.header_page_buf.lock().unwrap();
-        // Serialize header body into bytes after header; capture length
-        let body_len = header.serialize_into(&mut buf[9..]);
-        // Compute CRC over body
-        let crc = crate::page::calc_crc(&buf[9..9 + body_len]);
-        // Compose 9-byte page header
-        buf[0] = b'1';
-        buf[1..5].copy_from_slice(&crc.to_le_bytes());
-        buf[5..9].copy_from_slice(&((body_len as u32).to_le_bytes()));
-        // Write full page buffer (already zero-padded)
-        self.pager.write_page(page_id, &buf)?;
-        Ok(())
-    }
-
     pub fn get_latest_header(&self) -> DCBResult<(PageID, HeaderNode)> {
         for attempt in 0..GET_LATEST_HEADER_RETRIES {
-            let h0 = self.read_header(self.header_page_id0);
-            let h1 = self.read_header(self.header_page_id1);
+            let h0 = self.read_header(HEADER_PAGE_ID_0);
+            let h1 = self.read_header(HEADER_PAGE_ID_1);
 
             match (h0, h1) {
                 (Ok(header0), Ok(header1)) => {
                     if header1.tsn > header0.tsn {
-                        return Ok((self.header_page_id1, header1));
+                        return Ok((HEADER_PAGE_ID_1, header1));
                     } else {
-                        return Ok((self.header_page_id0, header0));
+                        return Ok((HEADER_PAGE_ID_0, header0));
                     }
                 }
                 (Ok(header0), Err(_)) => {
-                    return Ok((self.header_page_id0, header0));
+                    return Ok((HEADER_PAGE_ID_0, header0));
                 }
                 (Err(_), Ok(header1)) => {
-                    return Ok((self.header_page_id1, header1));
+                    return Ok((HEADER_PAGE_ID_1, header1));
                 }
                 (Err(e0), Err(e1)) => {
                     if attempt + 1 < GET_LATEST_HEADER_RETRIES {
@@ -204,16 +171,55 @@ impl Mvcc {
     }
 
     pub fn read_header(&self, page_id: PageID) -> DCBResult<HeaderNode> {
-        let header = self.read_page(page_id)?;
-        let header_node = match header.node {
-            Node::Header(node) => node,
+        let page = self.read_page(page_id)?;
+        match page.node {
+            Node::Header(node) => Ok(node),
             _ => {
-                return Err(DCBError::DatabaseCorrupted(
+                Err(DCBError::DatabaseCorrupted(
                     "Invalid header node type".to_string(),
-                ));
+                ))
+            }
+        }
+    }
+
+    fn update_header(
+        &self,
+        page_id: PageID,
+        tsn: Tsn,
+        free_lists_tree_root_id: PageID,
+        events_tree_root_id: PageID,
+        tags_tree_root_id: PageID,
+        next_page_id: PageID,
+        next_position: Position,
+    ) -> DCBResult<()> {
+        let mut headers = self.headers.lock().unwrap();
+        let headers_idx = {
+            if page_id == HEADER_PAGE_ID_0 {
+                0
+            } else {
+                1
             }
         };
-        Ok(header_node)
+        let header = &mut headers[headers_idx];
+        match &mut header.node {
+            Node::Header(node) => {
+                // Update node values.
+                node.tsn = tsn;
+                node.free_lists_tree_root_id = free_lists_tree_root_id;
+                node.events_tree_root_id = events_tree_root_id;
+                node.tags_tree_root_id = tags_tree_root_id;
+                node.next_page_id = next_page_id;
+                node.next_position = next_position;
+
+                // Write node using pre-allocated buffer.
+                let mut buf = self.page_buf.lock().unwrap();
+                serialize_page_into(&mut buf, &header.node)?;
+                self.pager.write_page(page_id, &buf)?;
+                Ok(())
+            },
+            _=> panic!("Shouldn't get here: header should be a header")
+        }
+
     }
 
     pub fn read_page(&self, page_id: PageID) -> DCBResult<Page> {
@@ -344,33 +350,16 @@ impl Mvcc {
         // Flush the file to disk
         self.flush()?;
 
-        // Write the new header page to the file
-        let header_page_id = if writer.header_page_id == self.header_page_id0 {
-            self.header_page_id1
-        } else {
-            self.header_page_id0
-        };
-
         // Mutate the owned header instance and serialize into the preallocated buffer
-        if writer.header_page_id == self.header_page_id0 {
-            let mut h1 = self.header1.lock().unwrap();
-            h1.tsn = writer.tsn;
-            h1.next_page_id = writer.next_page_id;
-            h1.free_lists_tree_root_id = writer.free_lists_tree_root_id;
-            h1.events_tree_root_id = writer.events_tree_root_id;
-            h1.tags_tree_root_id = writer.tags_tree_root_id;
-            h1.next_position = writer.next_position;
-            self.write_header_using_buf(header_page_id, &h1)?;
-        } else {
-            let mut h0 = self.header0.lock().unwrap();
-            h0.tsn = writer.tsn;
-            h0.next_page_id = writer.next_page_id;
-            h0.free_lists_tree_root_id = writer.free_lists_tree_root_id;
-            h0.events_tree_root_id = writer.events_tree_root_id;
-            h0.tags_tree_root_id = writer.tags_tree_root_id;
-            h0.next_position = writer.next_position;
-            self.write_header_using_buf(header_page_id, &h0)?;
-        }
+        self.update_header(
+            if writer.header_page_id == HEADER_PAGE_ID_0{ HEADER_PAGE_ID_1 } else { HEADER_PAGE_ID_0},
+            writer.tsn,
+            writer.free_lists_tree_root_id,
+            writer.events_tree_root_id,
+            writer.tags_tree_root_id,
+            writer.next_page_id,
+            writer.next_position,
+        )?;
 
         // Flush the file to disk
         self.flush()?;
@@ -2765,8 +2754,8 @@ mod tests {
 
             // Collect active page IDs
             let mut active_page_ids = vec![
-                db.header_page_id0,
-                db.header_page_id1,
+                HEADER_PAGE_ID_0,
+                HEADER_PAGE_ID_1,
                 writer.free_lists_tree_root_id,
                 writer.events_tree_root_id,
                 writer.tags_tree_root_id,
@@ -2906,8 +2895,8 @@ mod tests {
 
             // Collect active page IDs
             let mut active_page_ids = vec![
-                db.header_page_id0,
-                db.header_page_id1,
+                HEADER_PAGE_ID_0,
+                HEADER_PAGE_ID_1,
                 writer.free_lists_tree_root_id,
                 writer.events_tree_root_id,
                 writer.tags_tree_root_id,
@@ -3088,8 +3077,8 @@ mod tests {
 
                 // Audit page IDs
                 let active_page_ids = vec![
-                    db.header_page_id0,
-                    db.header_page_id1,
+                    HEADER_PAGE_ID_0,
+                    HEADER_PAGE_ID_1,
                     writer.free_lists_tree_root_id,
                     writer.events_tree_root_id,
                     writer.tags_tree_root_id,
@@ -3198,8 +3187,8 @@ mod tests {
 
             // Collect active page IDs
             let mut active_page_ids = vec![
-                db.header_page_id0,
-                db.header_page_id1,
+                HEADER_PAGE_ID_0,
+                HEADER_PAGE_ID_1,
                 writer.free_lists_tree_root_id,
                 writer.events_tree_root_id,
                 writer.tags_tree_root_id,
@@ -3405,8 +3394,8 @@ mod tests {
 
                 // Audit page IDs
                 let active_page_ids = vec![
-                    db.header_page_id0,
-                    db.header_page_id1,
+                    HEADER_PAGE_ID_0,
+                    HEADER_PAGE_ID_1,
                     writer.free_lists_tree_root_id,
                     writer.events_tree_root_id,
                     writer.tags_tree_root_id,
@@ -3961,8 +3950,8 @@ mod tests {
             let mut active: Vec<PageID> = Vec::new();
             let mut freed_tree: Vec<PageID> = Vec::new();
             // Always-active headers and roots
-            active.push(db.header_page_id0);
-            active.push(db.header_page_id1);
+            active.push(HEADER_PAGE_ID_0);
+            active.push(HEADER_PAGE_ID_1);
             active.push(w2.free_lists_tree_root_id);
             active.push(w2.events_tree_root_id);
             active.push(w2.tags_tree_root_id);

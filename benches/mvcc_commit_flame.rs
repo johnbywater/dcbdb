@@ -1,5 +1,4 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use pprof::criterion::{Output, PProfProfiler};
 use tempfile::tempdir;
 use umadb::bench_api::BenchDb;
 
@@ -90,12 +89,14 @@ fn flame_config() -> Criterion {
     let out_dir = PathBuf::from("target/flamegraphs");
     let _ = std::fs::create_dir_all(&out_dir);
 
-    // Configure default flamegraph options; if the pprof backend honors output paths,
-    // it will emit into Criterion’s dir unless otherwise specified here.
-    Criterion::default().with_profiler(PProfProfiler::new(
-        100,
-        Output::Flamegraph(Some(FlameOptions::default())),
-    ))
+    // TODO: Can't do this because at time of writing, pprof 0.15 still targets Criterion 0.5.x. (not 0.7.0)
+    // // Configure default flamegraph options; if the pprof backend honors output paths,
+    // // it will emit into Criterion’s dir unless otherwise specified here.
+    // Criterion::default().with_profiler(PProfProfiler::new(
+    //     100,
+    //     Output::Flamegraph(Some(FlameOptions::default())),
+    // ))
+    Criterion::default()
 }
 
 criterion_group! {

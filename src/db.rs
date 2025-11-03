@@ -20,7 +20,7 @@ pub static DEFAULT_PAGE_SIZE: usize = 4096;
 
 /// EventStore implementing the DCBEventStoreSync interface
 pub struct UmaDB {
-    mvcc: std::sync::Arc<Mvcc>,
+    mvcc: Arc<Mvcc>,
 }
 
 impl UmaDB {
@@ -35,11 +35,11 @@ impl UmaDB {
         };
         let mvcc = Mvcc::new(&file_path, DEFAULT_PAGE_SIZE, false)?;
         Ok(Self {
-            mvcc: std::sync::Arc::new(mvcc),
+            mvcc: Arc::new(mvcc),
         })
     }
 
-    pub fn from_arc(mvcc: std::sync::Arc<Mvcc>) -> Self {
+    pub fn from_arc(mvcc: Arc<Mvcc>) -> Self {
         Self { mvcc }
     }
 
@@ -1378,7 +1378,7 @@ mod tests {
             uuid: None,
         };
         // Large data to ensure it spills into event overflow pages
-        let big_data_len = super::DEFAULT_PAGE_SIZE * 3; // 3 pages worth to be safe
+        let big_data_len = DEFAULT_PAGE_SIZE * 3; // 3 pages worth to be safe
         let big = DCBEvent {
             event_type: "B".into(),
             data: vec![0xAB; big_data_len],
@@ -1509,7 +1509,7 @@ mod tests {
             uuid: None,
         };
         // Big overflow event: type "B" with tag "y" and large payload to exercise overflow pages
-        let big_data_len = super::DEFAULT_PAGE_SIZE * 3; // ensure multiple overflow pages
+        let big_data_len = DEFAULT_PAGE_SIZE * 3; // ensure multiple overflow pages
         let big = DCBEvent {
             event_type: "B".into(),
             data: vec![0xCD; big_data_len],

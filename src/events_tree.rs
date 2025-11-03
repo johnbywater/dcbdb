@@ -437,15 +437,15 @@ pub fn event_tree_lookup(
                 }
                 current_page_id = internal.child_ids[idx];
             }
-            Node::EventLeaf(leaf) => match leaf.keys.binary_search(&position) {
+            Node::EventLeaf(leaf) => return match leaf.keys.binary_search(&position) {
                 Ok(i) => {
                     let rec = materialize_event_value(mvcc, dirty, &leaf.values[i])?;
-                    return Ok(rec);
+                    Ok(rec)
                 }
                 Err(_) => {
-                    return Err(DCBError::DatabaseCorrupted(format!(
+                    Err(DCBError::DatabaseCorrupted(format!(
                         "Event at position {position:?} not found",
-                    )));
+                    )))
                 }
             },
             _ => {

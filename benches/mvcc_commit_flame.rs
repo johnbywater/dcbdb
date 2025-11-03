@@ -81,7 +81,7 @@ fn generate_flamegraphs(db: &BenchDb, page_size: usize) -> std::io::Result<()> {
 }
 
 // Configure Criterion to use pprof to emit Flamegraph SVGs at a predictable location.
-use pprof::flamegraph::Options as FlameOptions;
+// use pprof::flamegraph::Options as FlameOptions;
 use std::path::PathBuf;
 
 fn flame_config() -> Criterion {

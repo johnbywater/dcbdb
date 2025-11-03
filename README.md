@@ -2,26 +2,27 @@
 
 # What is UmaDB
 
-**UmaDB** is a next-generation event store built for **dynamic consistency boundaries**.
-UmaDB empowers event-driven architectures where consistency rules can adapt dynamically to
+**UmaDB** is a specialist open-source event store built for **dynamic consistency boundaries**.
+
+UmaDB supports event-driven architectures where consistency rules can adapt dynamically to
 business needs, rather than being hardwired into the database.
 
-UmaDB follows ideas first put forward by Sara Pellegrini, and directly implements the
-[independent specification](https://dcb.events/specification/) for
-[Dynamic Consistency Boundaries](https://dcb.events) created by Bastian Waidelich, Sara Pellegrini, and Paul Grimshaw.
+UmaDB directly implements the [independent specification](https://dcb.events/specification/) for
+[Dynamic Consistency Boundaries](https://dcb.events) created by Bastian Waidelich, Sara Pellegrini,
+and Paul Grimshaw.
 
-Events are stored in an append-only sequence, indexed by monotonically increasing gapless positions,
+UmaDB stores events in an append-only sequence, indexed by monotonically increasing gapless positions,
 and can be tagged for fast, precise filtering.
 
 UmaDB offers:
 
-* **High-performance concurrency**: non-blocking reads and writes via MVCC
+* **High-performance concurrency** with non-blocking reads and writes
 * **Optimistic concurrency control** to prevent simultaneous write conflicts
-* **Business-rule enforcement** via query-driven append conditions
+* **Dynamic business-rule enforcement** via query-driven append conditions
 * **Real-time subscriptions** with seamless catch-up and continuous delivery
+* **OSI-approved permissive open-source licenses** (MIT and Apache License 2.0) 
 
-Consistency boundaries are expressed as queries over event tags and types, allowing
-applications to define constraints dynamically per write operation.
+UmaDB makes new events fully durable before acknowledgements are returned to clients.
 
 ## Key Features
 
@@ -29,50 +30,55 @@ applications to define constraints dynamically per write operation.
 
 UmaDB lets you define exactly when an event can be appended, creating a flexible consistency boundary. You can:
 
-* **Prevent conflicts with concurrent writes** by ensuring no new events have been added since a known point.
-* **Enforce business rules** by preventing new events being appended if certain events already exist.
+* **Enforce business rules** by ensuring new events are appended only if certain events do not already exist
+* **Prevent concurrency conflicts** by ensuring no new events have been added since a known point
 
 These controls can be combined to implement patterns like uniqueness constraints, idempotency, or coordinating
-multi-step processes, all without relying on fixed aggregate boundaries.
+multi-step processes **without relying on fixed aggregate boundaries**.
 
 ### Multi-Version Concurrency Control
 
-UmaDB uses **MVCC** to enable **high-concurrency reads and writes without blocking**. Each transaction sees a
-consistent snapshot of the database. Append requests are atomic and crash safe. Space is efficiently reclaimed
-once old versions are no longer referenced.
+UmaDB uses **MVCC** to enable high-concurrency reads and writes without blocking. Each transaction sees a
+consistent snapshot of the database. UmaDB reclaims space efficiently from unreachable older versions.
 
-How it works (overview):
+* Readers see a **consistent snapshot** and never block writers or other readers.
+* The writer uses **copy-on-write**, creating new versions of database pages.
+* New versions are **published atomically** after being made **fully durable**.
+* Old database **pages are reused** only when no active readers can reference them.
 
-* Readers see a consistent snapshot and never block writers.
-* Writers update data using copy-on-write, creating new versions of database pages.
-* Committed updates are published atomically so readers always see a complete state.
-* Old database pages are reclaimed safely once no active readers reference them.
+This design combines non-blocking concurrency, atomic commits, crash safety, and efficient space management,
+making UmaDB fast, safe, and consistent under load.
 
-This design combines non-blocking concurrency, atomic commits, and efficient space management, making UmaDB fast, safe,
-and consistent under load.
+### Simple Compliant DCB API
 
-### Reading and Subscribing
+UmaDB has one method for reading events, and one method for writing events.
 
-UmaDB supports both normal read and streaming subscriptions with "catch-up and continue" semantics:
+The `read()` and `append()` methods are fully documented and easy to use.
 
-* Normal reads deliver existing events and terminate
-* Subscription reads deliver existing events, then block waiting for new events
-* Read responses are streamed in batches, with each batch using a new reader to avoid long-held TSNs
-* Server shutdown signals gracefully terminate all active subscriptions
+They are designed and implemented to comply with the original, well-written, and thoughtful specification for DCB.
 
 ### Append Request Batching
 
 Concurrent append requests are automatically grouped and processed as a nested transaction:
 
 * Requests are queued and collected into batches.
-* A dedicated writer thread drains up to 1,000 requests per batch.
-* Each request in the batch is processed individually, maintaining **per-request atomicity**.
+* A dedicated writer thread processes batches of waiting requests.
+* Each request in the batch is processed individually, maintaining per-request **atomicity** and **isolation**.
 * Dirty pages are flushed to disk once all requests in the batch have been processed.
 * A new header page is written and flushed after all dirty pages are persisted.
 * Individual responses are returned once the entire batch is successfully committed.
 
 This approach **significantly improves throughput under concurrent load** by amortizing disk I/O
-across multiple requests, while still ensuring **atomic per-request semantics** and **crash safety**.
+across concurrent requests, while ensuring **atomic per-request semantics** and **crash safety**.
+
+### Reading and Subscribing
+
+UmaDB supports both normal reads and streaming subscriptions with "catch-up and continue" semantics:
+
+* Normal reads deliver existing events and terminate
+* Subscription reads deliver existing events, then block waiting for new events
+* Read responses are streamed in batches, with each batch using a new reader to avoid long-held TSNs
+* Server shutdown signals gracefully terminate all active subscriptions
 
 ## Core Concepts
 
@@ -96,33 +102,25 @@ Event positions are:
 
 ### Tags and Queries
 
-A **tag** enables efficient filtered reading of events. Tags are arbitrary strings. Common patterns include:
+Tags enable efficient filtered reading of events. A tags is an arbitrary string. Common patterns include:
 
 * Entity identifiers: `"order:12345"`
 * Categories: `"region:us-west"`
 * Relationships: `"customer:789"`
 
-A **query** specifies which events to select based on event types and tags. A query is made up of a
+Queries specify which events to select based on event types and tags. A query is made up of a
 list of zero or more query items. Each query item describes a set of event tags and types to match against
 event records.
-
-When UmaDB runs a query, it selects all events that match the query, unless a position is given,
-in which case only those events that have a greater position will be matched.
 
 When matching events for a query, all events are matched in position order, unless any query items are
 given, then only those that match at least one query item. An event matches a query item if its type is
 in the query item types or there are no query item types, and if all the query item tags are in the event
 tags.
 
-In other words, if tags are provided, the event must include all of those tags to match the query item.
-If no tags are given, the item matches events regardless of tags. If types are provided, only events of
-those types match. If no types are given, all event types match. Each query item serves to expand the
-set of matched events. If an event matches more than one query, it is included only once.
+Queries are used both when reading events (to build a decision model or a materialized view) and when appending events (to implement
+optimistic concurrent control for a consistency boundary).
 
-Queries are used both when reading events (to build a decision model) and when appending events (to implement
-optimistic concurrent control over consistency boundaries).
-
-In short, a DCB query defines what part of the event history matters for building a decision model and for
+Queries define what part of the event history matters for building a decision model and for
 deciding whether a write is allowed. It’s flexible enough to express many business rules, such as uniqueness checks,
 idempotency, or workflow coordination, all without hardcoding fixed entity or aggregate boundaries in the database.
 
@@ -133,13 +131,13 @@ event store. Each layer has a clear responsibility, from client communication at
 at the bottom. Requests typically flow *down* the stack, from client calls through the API and core logic into the
 storage and persistence layers, while query results and acknowledgements flow *back up* the same path.
 
-| **Layer** | **Component**                   | **Responsibility** |
-|------------|---------------------------------|--------------------|
-| **Client Layer** | gRPC Clients                    | Provides application-facing interfaces for reading and writing events |
-| **API Layer** | gRPC API                        | Defines the public API surface (gRPC service) |
-| **Core Logic Layer** | Event Store          | Implements transaction logic, batching, and concurrency control |
-| **Storage Layer** | B+ Trees                        | Indexes events, tags, and free pages for efficient lookups |
-| **Persistence Layer** | LMDB-like Pager and File System | Manages MVCC, page allocation, and durable file I/O |
+| **Layer**             | **Component**                   | **Responsibility**                                                    |
+|-----------------------|---------------------------------|-----------------------------------------------------------------------|
+| **Client Layer**      | gRPC Clients                    | Provides application-facing interfaces for reading and writing events |
+| **API Layer**         | gRPC Server                     | Defines the public API surface (gRPC service)                         |
+| **Logic Layer**       | UmaDB                           | Implements transaction logic, batching, and concurrency control       |
+| **Storage Layer**     | B+ Trees                        | Indexes events, tags, and free pages for efficient lookups            |
+| **Persistence Layer** | LMDB-like Pager and File System | Manages MVCC, page allocation, and durable file I/O                   |
 
 ### Data Flow Summary
 
@@ -416,7 +414,7 @@ You can interact with an UmaDB server using its **gRPC API**. The server impleme
 
 - `Read`: Read events from the event store
 - `Append`: Append events to the event store
-- `Head`: Get the sequence position of the last recorded event
+- `Head`: Get the sequence number of the last recorded event
 
 The following sections detail the protocol defined in `umadb.proto`.
 
@@ -427,7 +425,7 @@ The main gRPC service for reading and appending events.
 | RPC      | Request              | Response                            | Description                                                                        |
 |----------|----------------------|-------------------------------------|------------------------------------------------------------------------------------|
 | `Read`   | `ReadRequestProto`   | **stream**&nbsp;`ReadResponseProto` | Streams batches of events matching the query; may remain open if `subscribe=true`. |
-| `Append` | `AppendRequestProto` | `AppendResponseProto`               | Appends new events atomically, returning the final sequence position.              |
+| `Append` | `AppendRequestProto` | `AppendResponseProto`               | Appends new events atomically, returning the final sequence number.                |
 | `Head`   | `HeadRequestProto`   | `HeadResponseProto`                 | Returns the current head position of the store.                                    |
 
 
@@ -472,9 +470,9 @@ Request to append new events to the store.
 
 Response after successfully appending events.
 
-| Field      | Type     | Description                                   |
-|------------|----------|-----------------------------------------------|
-| `position` | `uint64` | Sequence position of the last appended event. |
+| Field      | Type     | Description                                 |
+|------------|----------|---------------------------------------------|
+| `position` | `uint64` | Sequence number of the last appended event. |
 
 With CQRS-style eventually consistent projections, clients can use the returned position to wait until downstream
 event processing components have become up-to-data.
@@ -700,11 +698,12 @@ an embedded database.
 
 The client methods and DCB object types are described below, followed by some examples.
 
-### Retrieve Events from UmaDB  — `read()`
+### The `read()` Method
 
-Reads events from the event store, optionally with filters, sequence position, limits, and live subscription support.
+Reads events from the event store, optionally with filters, sequence number, limit, and live subscription support.
 
-Fetches events from the store in order, returning them as an event stream.  
+This method can be used both for constructing decision models in a domain layer, and for projecting events into
+materialized views in CQRS.
 
 Arguments:
 
@@ -716,17 +715,14 @@ Arguments:
 | `subscribe`  | `bool`             | If `true`, keeps the stream open to deliver future events as they arrive.                    |
 | `batch_size` | `Option<u32>`      | Optional hint for how many events to buffer per batch from the server.                       |
 
-Returns a "read response" instance from which selected events and the "last known position" can be obtained.
+Returns a "read response" instance from which `DCBSequencedEvent` instances, and the most relevant "last known" sequence number, can be obtained.
 
-| Interface | Response Type       | Description                                                                           |
-|-----------|---------------------|---------------------------------------------------------------------------------------|
-| **Async** | `AsyncReadResponse` | An asynchronous stream of events that can be awaited or iterated via `.next().await`. |
-| **Sync**  | `SyncReadResponse`  | A blocking iterator-style wrapper that uses the async client internally.              |
+| Interface | Response Type       | Description                                                             |
+|-----------|---------------------|-------------------------------------------------------------------------|
+| **Async** | `AsyncReadResponse` | An asynchronous Rust `Stream` that can be iterated via `.next().await`. |
+| **Sync**  | `SyncReadResponse`  | A blocking Rust `Iterator` that can iterated via `.next()`.              |
 
-This method can be used both for constructing decision models in a domain layer, and for projecting events into
-materialized views in CQRS.
-
-### Add Events to the UmaDB  — `append()`
+### The `append()` Method
 
 Appends new events to the store atomically, with optional optimistic concurrency conditions.
 
@@ -744,20 +740,20 @@ Returns the **sequence number** (`u64`) of the last successfully appended event 
 This value can be used to wait for downstream event-processing components in
 a CQRS system to become up-to-date.
 
-### Get Head Position — `head()`
+### The `head()` Method
 
 Returns the **sequence number** (`u64`) of the very last successfully appended event in the database.
 
-### DCB Sequenced Event — `DCBSequencedEvent`
+### Struct — `DCBSequencedEvent`
 
-A recorded event with its assigned **sequence position** in the event store.
+A recorded event with its assigned **sequence number** in the event store.
 
-| Field      | Type       | Description                                           |
-|------------|------------|-------------------------------------------------------|
-| `event`    | `DCBEvent` | The underlying event.                                 |
-| `position` | `u64`      | The event’s absolute position in the global sequence. |
+| Field      | Type       | Description          |
+|------------|------------|----------------------|
+| `event`    | `DCBEvent` | The recorded event.  |
+| `position` | `u64`      | The sequence number. |
 
-### DCB Event — `DCBEvent`
+### Struct — `DCBEvent`
 
 Represents a single event either to be appended or already stored in the event log.
 
@@ -770,7 +766,7 @@ Represents a single event either to be appended or already stored in the event l
 
 Giving events UUIDs activates idempotent support for append operations. 
 
-### DCB Query — `DCBQuery`
+### Struct — `DCBQuery`
 
 A query composed of one or more `DCBQueryItem` filters.  
 An event matches the query if it matches **any** of the query items.
@@ -779,7 +775,7 @@ An event matches the query if it matches **any** of the query items.
 |---------|---------------------|----------------------------------------------------------------------------------------|
 | `items` | `Vec<DCBQueryItem>` | A list of query items. Events matching **any** of these items are included in results. |
 
-### DCB Query Item — `DCBQueryItem`
+### Struct — `DCBQueryItem`
 
 Represents a single **query clause** for filtering events.
 
@@ -788,7 +784,7 @@ Represents a single **query clause** for filtering events.
 | `types` | `Vec<String>` | Event types to match. If empty, all event types are considered. |
 | `tags`  | `Vec<String>` | Tags that must **all** be present in the event for it to match. |
 
-### DCB Append Condition — `DCBAppendCondition`
+### Struct — `DCBAppendCondition`
 
 Conditions that must be satisfied before an append operation succeeds.
 
@@ -797,7 +793,7 @@ Conditions that must be satisfied before an append operation succeeds.
 | `fail_if_events_match` | `Arc<DCBQuery>` | If this query matches **any** existing events, the append operation will fail.                                 |
 | `after`                | `Option<u64>`   | Optional position constraint. If set, the append will only succeed if no events exist **after** this position. |
 
-### DCB Error — `DCBError`
+### Enum — `DCBError`
 
 Represents all errors that can occur in UmaDB.
 
@@ -816,7 +812,7 @@ Represents all errors that can occur in UmaDB.
 | `PageAlreadyFreed(page_id)`      | Attempted to free a page that was already freed.       |
 | `PageAlreadyDirty(page_id)`      | Attempted to mark a page dirty that was already dirty. |
 
-### DCB Result — `DCBResult<T>`
+### Type — `DCBResult<T>`
 
 A convenience alias for results returned by the methods:
 

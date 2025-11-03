@@ -6,13 +6,14 @@ use std::io;
 use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::os::fd::{AsRawFd, RawFd};
 use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 use crate::dcb::{DCBError, DCBResult};
 // use memmap2::{Advice, Mmap, MmapOptions};
 
 // Pager for file I/O
 pub struct Pager {
     pub reader: Mutex<File>,
+    // pub writer: Arc<File>,
     pub writer: Mutex<BufWriter<File>>,
     pub writer_raw_fd: RawFd,
     pub page_size: usize,
@@ -25,32 +26,10 @@ pub struct Pager {
 
 // Implementation for Pager
 impl Pager {
-    fn gcd(mut a: usize, mut b: usize) -> usize {
-        while b != 0 {
-            let t = b;
-            b = a % t;
-            a = t;
-        }
-        a
-    }
-
-    #[cfg(unix)]
-    fn os_page_size() -> usize {
-        // Safe: sysconf is thread-safe and returns a constant for page size
-        unsafe {
-            let sz = libc::sysconf(libc::_SC_PAGESIZE);
-            if sz <= 0 {
-                4096usize // sensible default
-            } else {
-                sz as usize
-            }
-        }
-    }
-
     pub fn new(path: &Path, page_size: usize) -> io::Result<Self> {
         let is_file_new = !path.exists();
 
-        let reader = if is_file_new {
+        let reader_file = if is_file_new {
             OpenOptions::new()
                 .read(true)
                 .write(true)
@@ -72,8 +51,6 @@ impl Pager {
             OpenOptions::new().read(true).write(true).open(path)?
         };
         let writer_raw_fd = writer_file.as_raw_fd();
-        let writer = BufWriter::with_capacity(page_size * 256, writer_file);
-
 
         // Compute pages per mmap so that:
         // - Each mmap offset is aligned to OS page size (and implicitly DB page size), and
@@ -96,8 +73,8 @@ impl Pager {
         let mmap_pages_per_map = align_pages * usize::max(1, k);
 
         Ok(Self {
-            reader: Mutex::new(reader),
-            writer: Mutex::new(writer),
+            reader: Mutex::new(reader_file),
+            writer: Mutex::new(BufWriter::with_capacity(100 * page_size, writer_file)),
             writer_raw_fd,
             page_size,
             is_file_new,
@@ -106,52 +83,30 @@ impl Pager {
         })
     }
 
-    pub fn write_page(&self, page_id: PageID, page: &[u8]) -> DCBResult<()> {
-        let mut writer = self.writer.lock().unwrap();
-        if page.len() != self.page_size {
-            return Err(DCBError::InternalError(
-                format!(
-                    "Page size mismatch: page_id={:?} size={} > PAGE_SIZE={}",
-                    page_id,
-                    page.len(),
-                    self.page_size
-                ),
-            ));
+    fn gcd(mut a: usize, mut b: usize) -> usize {
+        while b != 0 {
+            let t = b;
+            b = a % t;
+            a = t;
         }
-
-        // Seek to the correct position
-        writer.seek(SeekFrom::Start(page_id.0 * (self.page_size as u64)))?;
-
-        // Write the page data
-        writer.write_all(page)?;
-
-        Ok(())
+        a
     }
 
-    pub fn write_pages(&self, pages: &[(PageID, Vec<u8>)]) -> io::Result<()> {
-        let mut writer = self.writer.lock().unwrap();
-        for (page_id, page) in pages.iter() {
-            if page.len() != self.page_size {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
-                        "Page size mismatch: page_id={:?} size={} > PAGE_SIZE={}",
-                        page_id,
-                        page.len(),
-                        self.page_size
-                    ),
-                ));
+    #[cfg(unix)]
+    fn os_page_size() -> usize {
+        // Safe: sysconf is thread-safe and returns a constant for page size
+        unsafe {
+            let sz = libc::sysconf(libc::_SC_PAGESIZE);
+            if sz <= 0 {
+                4096usize // sensible default
+            } else {
+                sz as usize
             }
-            // Seek to the correct position for this page
-            writer.seek(SeekFrom::Start(page_id.0 * (self.page_size as u64)))?;
-            // Write the page data
-            writer.write_all(page)?;
         }
-        Ok(())
     }
 
     pub fn read_page(&self, page_id: PageID) -> io::Result<Vec<u8>> {
-        let mut file: MutexGuard<File> = self.reader.lock().unwrap();
+        let mut file = self.reader.lock().unwrap();
         let offset = page_id.0 * (self.page_size as u64);
         file.seek(SeekFrom::Start(offset))?;
         let mut page = vec![0u8; self.page_size];
@@ -165,103 +120,103 @@ impl Pager {
         Ok(page)
     }
 
-    pub fn read_page_mmap(&self, page_id: PageID) -> io::Result<Vec<u8>> {
-        // Precompute addressing values
-        let page_size_u64 = self.page_size as u64;
-        let offset = page_id.0 * page_size_u64;
-        let pages_per_map = self.mmap_pages_per_map as u64;
-        let map_id = page_id.0 / pages_per_map;
-        let map_offset = map_id * pages_per_map * page_size_u64;
-        let within = (offset - map_offset) as usize;
-
-        // Fast path: if mapping exists, do not obtain file lock; take Arc clone and release map lock
-        if let Some(mmap_arc) = {
-            let maps = self.mmaps.lock().unwrap();
-            maps.get(&map_id).cloned()
-        } {
-            let start = within;
-            let stop = start + self.page_size;
-            if stop > mmap_arc.len() {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    format!("Page {page_id:?} not found"),
-                ));
-            }
-            return Ok(mmap_arc[start..stop].to_vec());
-        }
-
-        // Slow path: need to create the mapping with double-checked locking
-        let file: MutexGuard<File> = self.reader.lock().unwrap();
-        let file_len = file.metadata()?.len();
-
-        // Re-check if mapping appeared while we acquired the file lock
-        if let Some(mmap_arc) = {
-            let maps = self.mmaps.lock().unwrap();
-            maps.get(&map_id).cloned()
-        } {
-            let start = within;
-            let stop = start + self.page_size;
-            if stop > mmap_arc.len() {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    format!("Page {page_id:?} not found"),
-                ));
-            }
-            return Ok(mmap_arc[start..stop].to_vec());
-        }
-
-        // Calculate standard mapping window length (does not depend on current file length)
-        let max_len = pages_per_map * page_size_u64;
-
-        // Before mapping, ensure the requested page is within the current file length.
-        let page_end = offset + page_size_u64;
-        if page_end > file_len {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                format!("Page {page_id:?} not found"),
-            ));
-        }
-
-        // Ensure the underlying file is large enough to permit a full standard-length mapping.
-        let required_len = map_offset + max_len;
-        if file_len < required_len {
-            file.set_len(required_len)?;
-        }
-
-        // Create the mmap and insert it, but guard with a double-check
-        let mmap_new = unsafe {
-            MmapOptions::new()
-                .offset(map_offset)
-                .len(max_len as usize)
-                .map(&*file)?
-        };
-        let mmap_arc = {
-            let mut maps = self.mmaps.lock().unwrap();
-            // Another thread could have inserted meanwhile
-            if let Some(existing) = maps.get(&map_id) {
-                existing.clone()
-            } else {
-                let arc = Arc::new(mmap_new);
-                maps.insert(map_id, arc.clone());
-                // println!(
-                //     "Created new mmap: map_id={} offset={} len={}",
-                //     map_id, map_offset, max_len
-                // );
-                arc
-            }
-        };
-
-        // Now copy the requested page
-        let start = within;
-        let stop = start + self.page_size;
-        if stop > mmap_arc.len() {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                format!("Page {page_id:?} not found"),
-            ));
-        }
-        Ok(mmap_arc[start..stop].to_vec())
-    }
+    // pub fn read_page_mmap(&self, page_id: PageID) -> io::Result<Vec<u8>> {
+    //     // Precompute addressing values
+    //     let page_size_u64 = self.page_size as u64;
+    //     let offset = page_id.0 * page_size_u64;
+    //     let pages_per_map = self.mmap_pages_per_map as u64;
+    //     let map_id = page_id.0 / pages_per_map;
+    //     let map_offset = map_id * pages_per_map * page_size_u64;
+    //     let within = (offset - map_offset) as usize;
+    //
+    //     // Fast path: if mapping exists, do not obtain file lock; take Arc clone and release map lock
+    //     if let Some(mmap_arc) = {
+    //         let maps = self.mmaps.lock().unwrap();
+    //         maps.get(&map_id).cloned()
+    //     } {
+    //         let start = within;
+    //         let stop = start + self.page_size;
+    //         if stop > mmap_arc.len() {
+    //             return Err(io::Error::new(
+    //                 io::ErrorKind::UnexpectedEof,
+    //                 format!("Page {page_id:?} not found"),
+    //             ));
+    //         }
+    //         return Ok(mmap_arc[start..stop].to_vec());
+    //     }
+    //
+    //     // Slow path: need to create the mapping with double-checked locking
+    //     let file = self.reader.lock().unwrap();
+    //     let file_len = file.metadata()?.len();
+    //
+    //     // Re-check if mapping appeared while we acquired the file lock
+    //     if let Some(mmap_arc) = {
+    //         let maps = self.mmaps.lock().unwrap();
+    //         maps.get(&map_id).cloned()
+    //     } {
+    //         let start = within;
+    //         let stop = start + self.page_size;
+    //         if stop > mmap_arc.len() {
+    //             return Err(io::Error::new(
+    //                 io::ErrorKind::UnexpectedEof,
+    //                 format!("Page {page_id:?} not found"),
+    //             ));
+    //         }
+    //         return Ok(mmap_arc[start..stop].to_vec());
+    //     }
+    //
+    //     // Calculate standard mapping window length (does not depend on current file length)
+    //     let max_len = pages_per_map * page_size_u64;
+    //
+    //     // Before mapping, ensure the requested page is within the current file length.
+    //     let page_end = offset + page_size_u64;
+    //     if page_end > file_len {
+    //         return Err(io::Error::new(
+    //             io::ErrorKind::UnexpectedEof,
+    //             format!("Page {page_id:?} not found"),
+    //         ));
+    //     }
+    //
+    //     // Ensure the underlying file is large enough to permit a full standard-length mapping.
+    //     let required_len = map_offset + max_len;
+    //     if file_len < required_len {
+    //         file.set_len(required_len)?;
+    //     }
+    //
+    //     // Create the mmap and insert it, but guard with a double-check
+    //     let mmap_new = unsafe {
+    //         MmapOptions::new()
+    //             .offset(map_offset)
+    //             .len(max_len as usize)
+    //             .map(&*file)?
+    //     };
+    //     let mmap_arc = {
+    //         let mut maps = self.mmaps.lock().unwrap();
+    //         // Another thread could have inserted meanwhile
+    //         if let Some(existing) = maps.get(&map_id) {
+    //             existing.clone()
+    //         } else {
+    //             let arc = Arc::new(mmap_new);
+    //             maps.insert(map_id, arc.clone());
+    //             // println!(
+    //             //     "Created new mmap: map_id={} offset={} len={}",
+    //             //     map_id, map_offset, max_len
+    //             // );
+    //             arc
+    //         }
+    //     };
+    //
+    //     // Now copy the requested page
+    //     let start = within;
+    //     let stop = start + self.page_size;
+    //     if stop > mmap_arc.len() {
+    //         return Err(io::Error::new(
+    //             io::ErrorKind::UnexpectedEof,
+    //             format!("Page {page_id:?} not found"),
+    //         ));
+    //     }
+    //     Ok(mmap_arc[start..stop].to_vec())
+    // }
 
     pub fn read_page_mmap_slice(&self, page_id: PageID) -> io::Result<MappedPage> {
         // Precompute addressing values
@@ -293,7 +248,7 @@ impl Pager {
         }
 
         // Slow path: need to create the mapping with double-checked locking
-        let file: MutexGuard<File> = self.reader.lock().unwrap();
+        let file = self.reader.lock().unwrap();
         let file_len = file.metadata()?.len();
 
         // Re-check if mapping appeared while we acquired the file lock
@@ -375,9 +330,31 @@ impl Pager {
         })
     }
 
+    pub fn write_page(&self, page_id: PageID, page: &[u8]) -> DCBResult<()> {
+        let mut file = self.writer.lock().unwrap();
+        if page.len() != self.page_size {
+            return Err(DCBError::InternalError(
+                format!(
+                    "Page size mismatch: page_id={:?} size={} > PAGE_SIZE={}",
+                    page_id,
+                    page.len(),
+                    self.page_size
+                ),
+            ));
+        }
+
+        // Seek to the correct position
+        file.seek(SeekFrom::Start(page_id.0 * (self.page_size as u64)))?;
+
+        // Write the page data
+        file.write_all(page)?;
+
+        Ok(())
+    }
+
     pub fn flush(&self) -> io::Result<()> {
-        let mut writer = self.writer.lock().unwrap();
-        writer.flush()?;
+        let mut file = self.writer.lock().unwrap();
+        file.flush()?;
         // fsync equivalent in Rust
         #[cfg(unix)]
         unsafe {
@@ -401,6 +378,7 @@ impl Pager {
 }
 
 // A zero-copy view over a page backed by a memory map. Holds an Arc to keep the mapping alive.
+#[derive(Debug)]
 pub struct MappedPage {
     mmap: Arc<Mmap>,
     start: usize,
@@ -459,12 +437,12 @@ mod tests {
         pager.flush().expect("flush");
 
         let r0 = pager.read_page(PageID(0)).expect("read0");
-        let r0m = pager.read_page_mmap(PageID(0)).expect("read0m");
-        assert_eq!(r0, r0m, "mmap read should match std read for page 0");
+        let r0m = pager.read_page_mmap_slice(PageID(0)).expect("read0m");
+        assert_eq!(r0, r0m.as_slice(), "mmap read should match std read for page 0");
 
         let r1 = pager.read_page(PageID(1)).expect("read1");
-        let r1m = pager.read_page_mmap(PageID(1)).expect("read1m");
-        assert_eq!(r1, r1m, "mmap read should match std read for page 1");
+        let r1m = pager.read_page_mmap_slice(PageID(1)).expect("read1m");
+        assert_eq!(r1, r1m.as_slice(), "mmap read should match std read for page 1");
         assert_eq!(&r1[..], &data2[..]);
     }
 
@@ -478,7 +456,7 @@ mod tests {
         pager.write_page(PageID(0), &buf).expect("write p0");
         pager.flush().expect("flush");
 
-        let err = pager.read_page_mmap(PageID(1)).unwrap_err();
+        let err = pager.read_page_mmap_slice(PageID(1)).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
     }
 
@@ -507,9 +485,9 @@ mod tests {
         pager.flush().expect("flush");
 
         // Read both pages via mmap
-        let _ = pager.read_page_mmap(PageID(0)).expect("read0m");
+        let _ = pager.read_page_mmap_slice(PageID(0)).expect("read0m");
         assert_eq!(pager.debug_mmap_count(), 1, "first mmap created");
-        let _ = pager.read_page_mmap(PageID(1)).expect("read1m");
+        let _ = pager.read_page_mmap_slice(PageID(1)).expect("read1m");
         assert_eq!(
             pager.debug_mmap_count(),
             1,
@@ -543,11 +521,11 @@ mod tests {
         pager.flush().expect("flush");
 
         // First read creates first mmap
-        let _ = pager.read_page_mmap(PageID(0)).expect("read first window");
+        let _ = pager.read_page_mmap_slice(PageID(0)).expect("read first window");
         assert_eq!(pager.debug_mmap_count(), 1);
         // Reading the first page in the next window should create a second mmap
         let _ = pager
-            .read_page_mmap(PageID(ppm as u64))
+            .read_page_mmap_slice(PageID(ppm as u64))
             .expect("read second window");
         assert_eq!(pager.debug_mmap_count(), 2);
     }

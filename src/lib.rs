@@ -23,10 +23,11 @@ pub mod bench_api {
     use crate::common::{PageID, Position};
     use crate::dcb::DCBResult;
     use crate::events_tree_nodes::{EventLeafNode, EventRecord, EventValue};
-    use crate::mvcc::Mvcc;
+    use crate::mvcc::{Mvcc, Writer};
     use crate::node::Node;
-    use crate::page::Page;
+    use crate::page::{Page, PAGE_HEADER_SIZE};
     use std::path::Path;
+    use crate::db::DEFAULT_PAGE_SIZE;
 
     /// Minimal public wrapper to allow Criterion benches to measure commit paths
     pub struct BenchDb {
@@ -45,19 +46,52 @@ pub mod bench_api {
             self.mvcc.commit(&mut w)
         }
 
-        /// Commit with n small dirty pages (empty EventLeaf pages) to exercise write_pages + header.
-        pub fn commit_with_dirty(&self, n: usize) -> DCBResult<()> {
-            let mut w = self.mvcc.writer()?;
-            for _ in 0..n {
-                let id = w.alloc_page_id();
-                let node = Node::EventLeaf(EventLeafNode {
-                    keys: Vec::new(),
-                    values: Vec::new(),
-                });
+        pub fn writer(&self) -> Writer {
+            self.mvcc.writer().unwrap()
+        }
+
+        pub fn insert_dirty_pages(&self, w: &mut Writer, n: usize) -> DCBResult<()> {
+            // Populate each dirty page with an EventLeaf that has many keys/values
+            const KEYS_PER_LEAF: usize = 70; // "lots" of keys/values per leaf
+            const TAGS_PER: usize = 3;
+            const DATA_LEN: u64 = 1024; // pretend payload size for overflow metadata
+
+            w.dirty.clear();
+            for i in 0..n {
+                let id = PageID(i as u64);
+
+                // Build keys [0..KEYS_PER_LEAF)
+                let keys: Vec<Position> = (0..KEYS_PER_LEAF).map(|k| Position(k as u64)).collect();
+
+                // Build many values; use Overflow to avoid allocating large inline payloads
+                let tags: Vec<String> = (0..TAGS_PER).map(|t| format!("tag-{t}")).collect();
+                let mut values = Vec::with_capacity(KEYS_PER_LEAF);
+                for k in 0..KEYS_PER_LEAF {
+                    // Derive a synthetic, unique-ish root_id for the overflow chain
+                    let root_id = PageID(1 + (i as u64) * (KEYS_PER_LEAF as u64) + (k as u64));
+                    values.push(EventValue::Overflow {
+                        event_type: "ev".to_string(),
+                        data_len: DATA_LEN,
+                        tags: tags.clone(),
+                        root_id,
+                        uuid: None,
+                    });
+                }
+
+                let node = Node::EventLeaf(EventLeafNode { keys, values });
+                let node_size = node.calc_serialized_size();
+                let max_node_size = DEFAULT_PAGE_SIZE - PAGE_HEADER_SIZE;
+                if node_size > max_node_size {
+                    panic!("The node {node_size} is too big (max: {max_node_size:?})");
+                }
                 let page = Page::new(id, node);
                 w.insert_dirty(page)?;
             }
-            self.mvcc.commit(&mut w)
+            Ok(())
+        }
+
+        pub fn commit_with_dirty(&self, w: &mut Writer) -> DCBResult<()> {
+            self.mvcc.commit(w)
         }
     }
 

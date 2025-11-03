@@ -1,3 +1,4 @@
+// use std::cell::RefCell;
 use crate::common::Position;
 use crate::common::{PageID, Tsn};
 use crate::dcb::{DCBError, DCBResult};
@@ -10,17 +11,24 @@ use crate::node::Node;
 use crate::page::{serialize_page_into, Page, PAGE_HEADER_SIZE};
 use crate::pager::Pager;
 use crate::tags_tree_nodes::TagsLeafNode;
+// use rayon::prelude::*;
+// use std::os::unix::fs::FileExt; // For write_at on Unix
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Mutex};
 use std::thread::sleep;
 use std::time::Duration;
+// use crate::db::DEFAULT_PAGE_SIZE;
 
 const GET_LATEST_HEADER_RETRIES: usize = 5;
 const GET_LATEST_HEADER_DELAY: Duration = Duration::from_millis(10);
 const HEADER_PAGE_ID_0: PageID = PageID(0);
 const HEADER_PAGE_ID_1: PageID = PageID(1);
+
+// thread_local! {
+//     static PAGE_BUF: RefCell<Vec<u8>> = RefCell::new(vec![0u8; DEFAULT_PAGE_SIZE]);
+// }
 
 // Main MVCC structure
 pub struct Mvcc {
@@ -315,6 +323,43 @@ impl Mvcc {
         Ok(count)
     }
 
+    // pub fn write_pages_parallel<'a, I>(&self, pages: I) -> DCBResult<usize>
+    // where
+    //     I: IntoIterator<Item = &'a Page> + Send,
+    //     I::IntoIter: Send,
+    // {
+    //     let pages: Vec<&Page> = pages.into_iter().collect();
+    //     if pages.is_empty() {
+    //         return Ok(0);
+    //     }
+    //
+    //     let file = self.pager.writer.clone();
+    //     let page_size = self.page_size;
+    //     let verbose = self.verbose;
+    //
+    //     let count: DCBResult<usize> = pages
+    //         .par_iter()
+    //         .map(|page| -> DCBResult<usize> {
+    //             PAGE_BUF.with(|cell| -> DCBResult<usize> {
+    //                 let mut buf = cell.borrow_mut();
+    //                 if buf.len() != page_size {
+    //                     *buf = vec![0u8; page_size]; // lazy init
+    //                 }
+    //
+    //                 page.serialize_into(&mut buf)?;
+    //                 file.write_at(&buf, page.page_id.0 * page_size as u64)?;
+    //
+    //                 if verbose {
+    //                     println!("Wrote {:?} to file", page.page_id);
+    //                 }
+    //                 Ok(1)
+    //             })
+    //         })
+    //         .try_reduce(|| 0, |a, b| Ok(a + b));
+    //
+    //     count
+    // }
+
     pub fn commit(&self, writer: &mut Writer) -> DCBResult<()> {
         // Process reused and freed page IDs
         if self.verbose {
@@ -341,7 +386,16 @@ impl Mvcc {
 
         // Write all dirty pages (except for the header page) to the file
         if !writer.dirty.is_empty() {
-            let count = self.write_pages(writer.dirty.values())?;
+            let count = {
+                // let num_dirty = writer.dirty.len();
+                // println!("Number dirty pages: {num_dirty}");
+                // if num_dirty >= 0 {
+                //     self.write_pages_parallel(writer.dirty.values())?
+                // } else {
+                //     self.write_pages(writer.dirty.values())?
+                // }
+                self.write_pages(writer.dirty.values())?
+            };
             if self.verbose {
                 println!("Wrote {} dirty page(s) to file", count);
             }

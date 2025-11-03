@@ -1,38 +1,26 @@
 use crate::common::PageID;
-use crate::header_node::HeaderNode;
-use crate::page::calc_crc;
 use memmap2::{Mmap, MmapOptions};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io;
-use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::fd::AsRawFd;
+use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
+use std::os::fd::{AsRawFd, RawFd};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
+use crate::dcb::{DCBError, DCBResult};
 // use memmap2::{Advice, Mmap, MmapOptions};
 
 // Pager for file I/O
 pub struct Pager {
-    pub file: Mutex<File>,
+    pub reader: Mutex<File>,
+    pub writer: Mutex<BufWriter<File>>,
+    pub writer_raw_fd: RawFd,
     pub page_size: usize,
     pub is_file_new: bool,
     // Number of logical database pages contained in a single mmap window.
     mmap_pages_per_map: usize,
     // Cache of memory maps, keyed by map identifier (floor(page_id / mmap_pages_per_map)).
     mmaps: Mutex<HashMap<u64, Arc<Mmap>>>,
-}
-
-// A zero-copy view over a page backed by a memory map. Holds an Arc to keep the mapping alive.
-pub struct MappedPage {
-    mmap: Arc<Mmap>,
-    start: usize,
-    len: usize,
-}
-
-impl MappedPage {
-    pub fn as_slice(&self) -> &[u8] {
-        &self.mmap[self.start..self.start + self.len]
-    }
 }
 
 // Implementation for Pager
@@ -62,7 +50,7 @@ impl Pager {
     pub fn new(path: &Path, page_size: usize) -> io::Result<Self> {
         let is_file_new = !path.exists();
 
-        let file = if is_file_new {
+        let reader = if is_file_new {
             OpenOptions::new()
                 .read(true)
                 .write(true)
@@ -72,6 +60,20 @@ impl Pager {
         } else {
             OpenOptions::new().read(true).write(true).open(path)?
         };
+
+        let writer_file = if is_file_new {
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(path)?
+        } else {
+            OpenOptions::new().read(true).write(true).open(path)?
+        };
+        let writer_raw_fd = writer_file.as_raw_fd();
+        let writer = BufWriter::with_capacity(page_size * 256, writer_file);
+
 
         // Compute pages per mmap so that:
         // - Each mmap offset is aligned to OS page size (and implicitly DB page size), and
@@ -94,7 +96,9 @@ impl Pager {
         let mmap_pages_per_map = align_pages * usize::max(1, k);
 
         Ok(Self {
-            file: Mutex::new(file),
+            reader: Mutex::new(reader),
+            writer: Mutex::new(writer),
+            writer_raw_fd,
             page_size,
             is_file_new,
             mmap_pages_per_map,
@@ -102,13 +106,12 @@ impl Pager {
         })
     }
 
-    pub fn write_page(&self, page_id: PageID, page: &[u8]) -> io::Result<()> {
-        let mut file: MutexGuard<File> = self.file.lock().unwrap();
-        if page.len() > self.page_size {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
+    pub fn write_page(&self, page_id: PageID, page: &[u8]) -> DCBResult<()> {
+        let mut writer = self.writer.lock().unwrap();
+        if page.len() != self.page_size {
+            return Err(DCBError::InternalError(
                 format!(
-                    "Page overflow: page_id={:?} size={} > PAGE_SIZE={}",
+                    "Page size mismatch: page_id={:?} size={} > PAGE_SIZE={}",
                     page_id,
                     page.len(),
                     self.page_size
@@ -117,58 +120,22 @@ impl Pager {
         }
 
         // Seek to the correct position
-        file.seek(SeekFrom::Start(page_id.0 * (self.page_size as u64)))?;
+        writer.seek(SeekFrom::Start(page_id.0 * (self.page_size as u64)))?;
 
         // Write the page data
-        file.write_all(page)?;
-
-        // Pad with zeros if needed (avoid heap allocation)
-        let mut remaining = self.page_size - page.len();
-        if remaining > 0 {
-            // Write zeros in chunks using a fixed-size stack buffer
-            let zero_chunk = [0u8; 4096];
-            while remaining > 0 {
-                let to_write = remaining.min(zero_chunk.len());
-                file.write_all(&zero_chunk[..to_write])?;
-                remaining -= to_write;
-            }
-        }
+        writer.write_all(page)?;
 
         Ok(())
     }
 
-    /// No-allocation write of a header page (node type '1') using a small stack buffer.
-    /// Writes the 9-byte page header (type, crc32, len) followed by the 48-byte header body
-    /// and pads the rest of the DB page with zeros.
-    pub fn write_header_page(&self, page_id: PageID, header: &HeaderNode) -> io::Result<()> {
-        // Serialize header body into fixed stack buffer
-        let mut body = [0u8; 48];
-        let len = header.serialize_into(&mut body);
-        debug_assert_eq!(len, 48);
-        let crc = calc_crc(&body[..len]);
-
-        // Compose page header (9 bytes): type('1'), crc32(le), len=written
-        let mut head = [0u8; 9];
-        head[0] = b'1'; // must match Node::Header encoding
-        head[1..5].copy_from_slice(&crc.to_le_bytes());
-        head[5..9].copy_from_slice(&((len as u32).to_le_bytes()));
-
-        // Combine into a single small buffer to leverage existing write_page logic
-        let mut buf = [0u8; 57];
-        buf[0..9].copy_from_slice(&head);
-        buf[9..9 + len].copy_from_slice(&body[..len]);
-
-        self.write_page(page_id, &buf[..9 + len])
-    }
-
     pub fn write_pages(&self, pages: &[(PageID, Vec<u8>)]) -> io::Result<()> {
-        let mut file: MutexGuard<File> = self.file.lock().unwrap();
+        let mut writer = self.writer.lock().unwrap();
         for (page_id, page) in pages.iter() {
-            if page.len() > self.page_size {
+            if page.len() != self.page_size {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!(
-                        "Page overflow: page_id={:?} size={} > PAGE_SIZE={}",
+                        "Page size mismatch: page_id={:?} size={} > PAGE_SIZE={}",
                         page_id,
                         page.len(),
                         self.page_size
@@ -176,25 +143,15 @@ impl Pager {
                 ));
             }
             // Seek to the correct position for this page
-            file.seek(SeekFrom::Start(page_id.0 * (self.page_size as u64)))?;
+            writer.seek(SeekFrom::Start(page_id.0 * (self.page_size as u64)))?;
             // Write the page data
-            file.write_all(page)?;
-            // Pad with zeros if needed (avoid heap allocation)
-            let mut remaining = self.page_size - page.len();
-            if remaining > 0 {
-                let zero_chunk = [0u8; 4096];
-                while remaining > 0 {
-                    let to_write = remaining.min(zero_chunk.len());
-                    file.write_all(&zero_chunk[..to_write])?;
-                    remaining -= to_write;
-                }
-            }
+            writer.write_all(page)?;
         }
         Ok(())
     }
 
     pub fn read_page(&self, page_id: PageID) -> io::Result<Vec<u8>> {
-        let mut file: MutexGuard<File> = self.file.lock().unwrap();
+        let mut file: MutexGuard<File> = self.reader.lock().unwrap();
         let offset = page_id.0 * (self.page_size as u64);
         file.seek(SeekFrom::Start(offset))?;
         let mut page = vec![0u8; self.page_size];
@@ -234,7 +191,7 @@ impl Pager {
         }
 
         // Slow path: need to create the mapping with double-checked locking
-        let file: MutexGuard<File> = self.file.lock().unwrap();
+        let file: MutexGuard<File> = self.reader.lock().unwrap();
         let file_len = file.metadata()?.len();
 
         // Re-check if mapping appeared while we acquired the file lock
@@ -336,7 +293,7 @@ impl Pager {
         }
 
         // Slow path: need to create the mapping with double-checked locking
-        let file: MutexGuard<File> = self.file.lock().unwrap();
+        let file: MutexGuard<File> = self.reader.lock().unwrap();
         let file_len = file.metadata()?.len();
 
         // Re-check if mapping appeared while we acquired the file lock
@@ -419,12 +376,12 @@ impl Pager {
     }
 
     pub fn flush(&self) -> io::Result<()> {
-        let mut file: MutexGuard<File> = self.file.lock().unwrap();
-        file.flush()?;
+        let mut writer = self.writer.lock().unwrap();
+        writer.flush()?;
         // fsync equivalent in Rust
         #[cfg(unix)]
         unsafe {
-            let result = libc::fsync(file.as_raw_fd());
+            let result = libc::fsync(self.writer_raw_fd);
             if result != 0 {
                 return Err(io::Error::last_os_error());
             }
@@ -443,16 +400,49 @@ impl Pager {
     }
 }
 
+// A zero-copy view over a page backed by a memory map. Holds an Arc to keep the mapping alive.
+pub struct MappedPage {
+    mmap: Arc<Mmap>,
+    start: usize,
+    len: usize,
+}
+
+impl MappedPage {
+    pub fn as_slice(&self) -> &[u8] {
+        &self.mmap[self.start..self.start + self.len]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::Pager;
     use crate::common::PageID;
     use std::path::PathBuf;
     use tempfile::tempdir;
+    use crate::dcb::{DCBError};
 
     fn temp_file_path(name: &str) -> PathBuf {
         let dir = tempdir().expect("tempdir");
         dir.keep().join(name)
+    }
+
+    #[test]
+    fn test_write_page_size_mismatch_error() {
+        let page_size = 1024usize;
+        let path = temp_file_path("pager_mmap_test.db");
+        let pager = Pager::new(&path, page_size).expect("pager new");
+
+        let data1 = vec![1u8; 100];
+
+        let err = pager.write_page(PageID(0), &data1);
+        assert!(
+            matches!(
+                err,
+                Err(
+                    DCBError::InternalError(_)
+                )
+            )
+        );
     }
 
     #[test]
@@ -461,7 +451,7 @@ mod tests {
         let path = temp_file_path("pager_mmap_test.db");
         let pager = Pager::new(&path, page_size).expect("pager new");
 
-        let data1 = vec![1u8; 100];
+        let data1 = vec![1u8; page_size];
         let data2 = (0..page_size).map(|i| (i % 256) as u8).collect::<Vec<_>>();
 
         pager.write_page(PageID(0), &data1).expect("write page 0");
@@ -471,9 +461,6 @@ mod tests {
         let r0 = pager.read_page(PageID(0)).expect("read0");
         let r0m = pager.read_page_mmap(PageID(0)).expect("read0m");
         assert_eq!(r0, r0m, "mmap read should match std read for page 0");
-        // padding zeros expected after data1 length
-        assert_eq!(&r0[..100], &data1[..]);
-        assert!(r0[100..].iter().all(|&b| b == 0));
 
         let r1 = pager.read_page(PageID(1)).expect("read1");
         let r1m = pager.read_page_mmap(PageID(1)).expect("read1m");
@@ -487,7 +474,8 @@ mod tests {
         let path = temp_file_path("pager_mmap_oob.db");
         let pager = Pager::new(&path, page_size).expect("pager new");
 
-        pager.write_page(PageID(0), &[42u8; 10]).expect("write p0");
+        let buf = vec![0u8; page_size];
+        pager.write_page(PageID(0), &buf).expect("write p0");
         pager.flush().expect("flush");
 
         let err = pager.read_page_mmap(PageID(1)).unwrap_err();
@@ -511,7 +499,7 @@ mod tests {
 
         // Write two pages
         pager
-            .write_page(PageID(0), &vec![1u8; page_size / 2])
+            .write_page(PageID(0), &vec![1u8; page_size])
             .expect("write p0");
         pager
             .write_page(PageID(1), &vec![2u8; page_size])

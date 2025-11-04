@@ -2,14 +2,15 @@ use async_trait::async_trait;
 use futures::Stream;
 use futures::ready;
 use std::collections::VecDeque;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::thread;
+use std::{fs, thread};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Code, Request, Response, Status, transport::Server};
+use tonic::transport::{ServerTlsConfig, Identity, ClientTlsConfig, Certificate, Endpoint, Channel};
 
 use crate::db::{DEFAULT_PAGE_SIZE, UmaDB, is_request_idempotent, read_conditional};
 use crate::dcb::{
@@ -38,18 +39,14 @@ const APPEND_BATCH_MAX_EVENTS: usize = 2000;
 const READ_RESPONSE_BATCH_SIZE_DEFAULT: u32 = 100;
 const READ_RESPONSE_BATCH_SIZE_MAX: u32 = 5000;
 
-// Function to start the gRPC server with a shutdown signal
-pub async fn start_server<P: AsRef<Path> + Send + 'static>(
-    path: P,
-    addr: &str,
-    shutdown_rx: oneshot::Receiver<()>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let addr = addr.parse()?;
-    // Create a shutdown broadcast channel for terminating ongoing subscriptions
-    let (srv_shutdown_tx, srv_shutdown_rx) = watch::channel(false);
-    let server = UmaDBServer::new(path, srv_shutdown_rx)?;
-    println!("UmaDB server listening on {addr}");
+// Optional TLS configuration helpers
+#[derive(Clone, Debug)]
+pub struct ServerTlsOptions {
+    pub cert_pem: Vec<u8>,
+    pub key_pem: Vec<u8>,
+}
 
+fn build_server_builder_with_options(tls: Option<ServerTlsOptions>) -> Server {
     use std::time::Duration;
     let mut server_builder = Server::builder()
         .http2_keepalive_interval(Some(Duration::from_secs(5)))
@@ -58,6 +55,69 @@ pub async fn start_server<P: AsRef<Path> + Send + 'static>(
         .initial_connection_window_size(Some(8 * 1024 * 1024))
         .tcp_nodelay(true)
         .concurrency_limit_per_connection(1024);
+
+    if let Some(opts) = tls {
+        let identity = Identity::from_pem(opts.cert_pem, opts.key_pem);
+        server_builder = server_builder
+            .tls_config(ServerTlsConfig::new().identity(identity))
+            .expect("failed to apply TLS config");
+    }
+
+    server_builder
+}
+
+// Function to start the gRPC server with a shutdown signal
+pub async fn start_server<P: AsRef<Path> + Send + 'static>(
+    path: P,
+    addr: &str,
+    shutdown_rx: oneshot::Receiver<()>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    start_server_internal(path, addr, shutdown_rx, None).await
+}
+
+/// Start server with TLS using PEM-encoded cert and key.
+pub async fn start_server_secure<P: AsRef<Path> + Send + 'static>(
+    path: P,
+    addr: &str,
+    shutdown_rx: oneshot::Receiver<()>,
+    cert_pem: Vec<u8>,
+    key_pem: Vec<u8>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tls = ServerTlsOptions { cert_pem, key_pem };
+    start_server_internal(path, addr, shutdown_rx, Some(tls)).await
+}
+
+/// Convenience: load cert and key from filesystem paths
+pub async fn start_server_secure_from_files<P: AsRef<Path> + Send + 'static, CP: AsRef<Path>, KP: AsRef<Path>>(
+    path: P,
+    addr: &str,
+    shutdown_rx: oneshot::Receiver<()>,
+    cert_path: CP,
+    key_path: KP,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::fs;
+    let cert_pem = fs::read(cert_path)?;
+    let key_pem = fs::read(key_path)?;
+    start_server_secure(path, addr, shutdown_rx, cert_pem, key_pem).await
+}
+
+async fn start_server_internal<P: AsRef<Path> + Send + 'static>(
+    path: P,
+    addr: &str,
+    shutdown_rx: oneshot::Receiver<()>,
+    tls: Option<ServerTlsOptions>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let addr = addr.parse()?;
+    // Create a shutdown broadcast channel for terminating ongoing subscriptions
+    let (srv_shutdown_tx, srv_shutdown_rx) = watch::channel(false);
+    let server = UmaDBServer::new(path, srv_shutdown_rx)?;
+    if tls.is_some() {
+        println!("Started UmaDB server (with TLS) listening on {addr}");
+    } else {
+        println!("UmaDB server (insecure) listening on {addr}");
+    }
+
+    let mut server_builder = build_server_builder_with_options(tls);
 
     server_builder
         .add_service(server.into_service())
@@ -508,6 +568,9 @@ impl RequestHandler {
                                             DCBError::PageAlreadyDirty(id) => {
                                                 DCBError::PageAlreadyDirty(*id)
                                             }
+                                            DCBError::TransportError(err) => {
+                                                DCBError::TransportError(err.clone())
+                                            }
                                         }
                                     }
                                     let total = responders.len();
@@ -735,34 +798,77 @@ pub struct AsyncUmaDBClient {
     client: umadb::uma_db_service_client::UmaDbServiceClient<tonic::transport::Channel>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct ClientTlsOptions {
+    pub domain: Option<String>,
+    pub ca_pem: Option<Vec<u8>>, // trusted CA cert in PEM for self-signed setups
+}
+
+fn endpoint_from_url_with_options(url: &str, tls: Option<ClientTlsOptions>) -> Result<Endpoint, tonic::transport::Error> {
+    use std::time::Duration;
+
+    // Accept grpcs:// as an alias for https://
+    let mut url_owned = url.to_string();
+    if url_owned.starts_with("grpcs://") {
+        url_owned = url_owned.replacen("grpcs://", "https://", 1);
+    }
+
+    let mut endpoint = Endpoint::from_shared(url_owned)?
+        .tcp_nodelay(true)
+        .http2_keep_alive_interval(Duration::from_secs(5))
+        .keep_alive_timeout(Duration::from_secs(10))
+        .initial_stream_window_size(Some(4 * 1024 * 1024))
+        .initial_connection_window_size(Some(8 * 1024 * 1024));
+
+    if let Some(opts) = tls {
+        let mut cfg = ClientTlsConfig::new();
+        if let Some(domain) = &opts.domain {
+            cfg = cfg.domain_name(domain.clone());
+        }
+        if let Some(ca) = opts.ca_pem {
+            cfg = cfg.ca_certificate(Certificate::from_pem(ca));
+        }
+        endpoint = endpoint.tls_config(cfg)?;
+    } else if url.starts_with("https://") {
+        // When using https without explicit options, still enable default TLS.
+        endpoint = endpoint.tls_config(ClientTlsConfig::new())?;
+    }
+
+    Ok(endpoint)
+}
+
 impl AsyncUmaDBClient {
-    pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
-    where
-        D: TryInto<tonic::transport::Endpoint>,
-        D::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-    {
-        let client = umadb::uma_db_service_client::UmaDbServiceClient::connect(dst).await?;
-        Ok(Self { client })
+    pub async fn connect(url: &str, ca_path: Option<&str>) -> DCBResult<Self> {
+        // Try to read the CA certificate.
+        let ca_pem = {
+            if let Some(ca_path) = ca_path {
+                let ca_path = PathBuf::from(ca_path);
+                Some(fs::read(&ca_path).expect(&format!("Couldn't read cert_path: {:?}", ca_path)))
+            } else {
+                None
+            }
+        };
+
+        let client_tls_options = Some(ClientTlsOptions { domain: None, ca_pem });
+
+        Self::connect_with_options(url, client_tls_options).await
     }
 
-    // Optimized connect that configures the transport for lower latency and better concurrency.
-    // Takes a URL like "http://127.0.0.1:50051".
-    pub async fn connect_optimized_url(url: &str) -> Result<Self, tonic::transport::Error> {
-        use std::time::Duration;
-        use tonic::transport::Endpoint;
-
-        let endpoint = Endpoint::from_shared(url.to_string())?
-            .tcp_nodelay(true)
-            .http2_keep_alive_interval(Duration::from_secs(5))
-            .keep_alive_timeout(Duration::from_secs(10))
-            // Bump the window sizes to reduce flow-control stalls under high throughput
-            .initial_stream_window_size(Some(4 * 1024 * 1024))
-            .initial_connection_window_size(Some(8 * 1024 * 1024));
-
-        let channel = endpoint.connect().await?;
-        let client = umadb::uma_db_service_client::UmaDbServiceClient::new(channel);
-        Ok(Self { client })
+    pub async fn connect_with_options(url: &str, client_tls_options: Option<ClientTlsOptions>) -> DCBResult<AsyncUmaDBClient> {
+        match new_channel(url, client_tls_options).await {
+            Ok(channel) => Ok(
+                Self { client: umadb::uma_db_service_client::UmaDbServiceClient::new(channel) }
+            ),
+            Err(err) => Err(
+                DCBError::TransportError(format!("failed to connect: {:?}", err))
+            ),
+        }
     }
+}
+
+async fn new_channel(url: &str, tls: Option<ClientTlsOptions>) -> Result<Channel, tonic::transport::Error> {
+    let endpoint = endpoint_from_url_with_options(url, tls)?;
+    endpoint.connect().await
 }
 
 #[async_trait]
@@ -1152,14 +1258,10 @@ pub struct UmaDBClient {
 }
 
 impl UmaDBClient {
-    pub fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
-    where
-        D: TryInto<tonic::transport::Endpoint>,
-        D::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-    {
+    pub fn connect(url: &str, ca_path: Option<&str>) -> DCBResult<Self> {
         // Try to use an existing runtime first
         if let Ok(handle) = Handle::try_current() {
-            let async_client = handle.block_on(AsyncUmaDBClient::connect(dst))?;
+            let async_client = handle.block_on(AsyncUmaDBClient::connect(url, ca_path))?;
             return Ok(Self {
                 async_client,
                 _runtime: None, // We didn’t create a runtime
@@ -1170,7 +1272,7 @@ impl UmaDBClient {
         // No runtime → create and own one
         let rt = Runtime::new().expect("failed to create Tokio runtime");
         let handle = rt.handle().clone();
-        let async_client = rt.block_on(AsyncUmaDBClient::connect(dst))?;
+        let async_client = rt.block_on(AsyncUmaDBClient::connect(url, ca_path))?;
         Ok(Self {
             async_client,
             _runtime: Some(rt), // Keep runtime alive for the client lifetime

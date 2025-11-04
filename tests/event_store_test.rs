@@ -1050,7 +1050,7 @@ fn test_grpc_event_store_client() {
         use std::{thread, time::Duration};
         let mut attempts = 0;
         loop {
-            match UmaDBClient::connect(addr_with_scheme.clone()) {
+            match UmaDBClient::connect(&addr_with_scheme.clone(), None) {
                 Ok(c) => break c,
                 Err(e) => {
                     attempts += 1;

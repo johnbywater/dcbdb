@@ -383,18 +383,18 @@ Once you have Rust and Cargo installed, you can build the project with:
 cargo build --release
 ```
 
-This will create the UmaDB server executable `uma` in `target/release/`.
+This will create the `uma` UmaDB server executable in `target/release/`.
 
-The UmaDB server can be started using the `uma` binary. You can run it directly after installing or building:
+You can run the `uma` binary directly after installing or building:
 
 ```bash
-./target/release/uma --path /path/to/event-store --address 127.0.0.1:50051
+./target/release/uma --path /path/to/event-store --addr 127.0.0.1:50051
 ```
 
 Or you can use `cargo run` (dev build, builds faster, runs slower):
 
 ```bash
-cargo run --bin uma -- --path /path/to/event-store --address 127.0.0.1:50051
+cargo run --bin uma -- --path /path/to/event-store --addr 127.0.0.1:50051
 ```
 
 ### Command-line Options
@@ -402,9 +402,41 @@ cargo run --bin uma -- --path /path/to/event-store --address 127.0.0.1:50051
 The `uma` executable accepts the following command-line options:
 
 - `-p, --path <PATH>`: Path to the event store directory (required)
-- `-a, --address <ADDR>`: Address to listen on (default: "127.0.0.1:50051")
+- `-a, --addr <ADDR>`: Address to listen on (default: "127.0.0.1:50051")
+- `-c, --cert <PATH>`: Path to PEM-encoded server certificate chain (enable TLS when used with --key)
+- `-k, --key <PATH>`: Path to PEM-encoded private key (enable TLS when used with --cert)
 - `-h, --help`: Print help information
 - `-V, --version`: Print version information
+
+### Self-signed TLS Certificate
+
+For development and testing purposes, you can create a self-signed TSL certification with the following command:
+
+```bash
+openssl req \
+  -x509 \
+  -newkey rsa:4096 \
+  -keyout server.key \
+  -out server.pem \
+  -days 365 \
+  -nodes \
+  -subj "/CN=localhost" \
+  -addext "basicConstraints = CA:FALSE" \
+  -addext "subjectAltName = DNS:localhost"
+```
+
+Explanation:
+* `-x509` — creates a self-signed certificate (instead of a CSR).
+* `-newkey` rsa:4096 — generates a new 4096-bit RSA key.
+* `-keyout` server.key — output file for the private key.
+* `-out` server.pem — output file for the certificate.
+* `-days` 365 — validity period (1 year).
+* `-nodes` — don’t encrypt the private key with a passphrase.
+* `-subj` "/CN=localhost" — sets the certificate’s Common Name (CN).
+* `-addext` "basicConstraints = CA:FALSE" — marks the cert as not a Certificate Authority.
+* `-addext` "subjectAltName = DNS:localhost" — adds a SAN entry, required by modern TLS clients.
+
+This one-liner will produce a valid self-signed server certificate usable by the Rust client examples below.
 
 ----
 
@@ -698,7 +730,43 @@ an embedded database.
 
 The client methods and DCB object types are described below, followed by some examples.
 
-### The `read()` Method
+### `fn connect()`
+
+Connects to an UmaDB server, with or without TLS.
+
+If the required `url` argument has protocol `https` or `grpcs` a secure gRPC channel will used. In
+this case, if the server's root certificate is not installed locally, then the path
+to a file containing the certificate must be provided with the optional `ca_path` argument.
+
+Arguments:
+
+| Parameter | Type           | Description                                                                                                                                                               |
+|-----------|----------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `url`     | `&str`         | Database URL, for example: `"http://localhost:50051"` for an UmaDB server running without TLS or `"https://localhost:50051"` for an UmaDB server running with TLS enabled |
+| `ca_path` | `Option<&str>` | Path to PEM-encoded server root certificate, for example: `None` or `Some("server.pem")`                                                                                  |
+
+Returns an instance of the client.
+
+Examples:
+
+```rust
+use umadb::grpc::UmaDBClient;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+   // Synchronous client, without TLS
+   let client = UmaDBClient::connect("http://localhost:50051", None)?;
+
+   // Synchronous client, with TLS
+   let client = UmaDBClient::connect("https://localhost:50051", Some("server.pem"))?;
+
+   // Asynchronous client, without TLS
+   let client = UmaDBClient::connect("http://localhost:50051", None).await?;
+
+   // Asynchronous client, with TLS
+   let client = UmaDBClient::connect("https://localhost:50051", Some("server.pem")).await?;
+```
+
+### `fn read()`
 
 Reads events from the event store, optionally with filters, sequence number, limit, and live subscription support.
 
@@ -722,7 +790,7 @@ Returns a "read response" instance from which `DCBSequencedEvent` instances, and
 | **Async** | `AsyncReadResponse` | An asynchronous Rust `Stream` that can be iterated via `.next().await`. |
 | **Sync**  | `SyncReadResponse`  | A blocking Rust `Iterator` that can iterated via `.next()`.              |
 
-### The `append()` Method
+### `fn append()`
 
 Appends new events to the store atomically, with optional optimistic concurrency conditions.
 
@@ -740,11 +808,11 @@ Returns the **sequence number** (`u64`) of the last successfully appended event 
 This value can be used to wait for downstream event-processing components in
 a CQRS system to become up-to-date.
 
-### The `head()` Method
+### `fn head()`
 
 Returns the **sequence number** (`u64`) of the very last successfully appended event in the database.
 
-### Struct — `DCBSequencedEvent`
+### `struct DCBSequencedEvent`
 
 A recorded event with its assigned **sequence number** in the event store.
 
@@ -753,7 +821,7 @@ A recorded event with its assigned **sequence number** in the event store.
 | `event`    | `DCBEvent` | The recorded event.  |
 | `position` | `u64`      | The sequence number. |
 
-### Struct — `DCBEvent`
+### `struct DCBEvent`
 
 Represents a single event either to be appended or already stored in the event log.
 
@@ -766,7 +834,7 @@ Represents a single event either to be appended or already stored in the event l
 
 Giving events UUIDs activates idempotent support for append operations. 
 
-### Struct — `DCBQuery`
+### `struct DCBQuery`
 
 A query composed of one or more `DCBQueryItem` filters.  
 An event matches the query if it matches **any** of the query items.
@@ -775,7 +843,7 @@ An event matches the query if it matches **any** of the query items.
 |---------|---------------------|----------------------------------------------------------------------------------------|
 | `items` | `Vec<DCBQueryItem>` | A list of query items. Events matching **any** of these items are included in results. |
 
-### Struct — `DCBQueryItem`
+### `struct DCBQueryItem`
 
 Represents a single **query clause** for filtering events.
 
@@ -784,7 +852,7 @@ Represents a single **query clause** for filtering events.
 | `types` | `Vec<String>` | Event types to match. If empty, all event types are considered. |
 | `tags`  | `Vec<String>` | Tags that must **all** be present in the event for it to match. |
 
-### Struct — `DCBAppendCondition`
+### `struct DCBAppendCondition`
 
 Conditions that must be satisfied before an append operation succeeds.
 
@@ -793,7 +861,7 @@ Conditions that must be satisfied before an append operation succeeds.
 | `fail_if_events_match` | `Arc<DCBQuery>` | If this query matches **any** existing events, the append operation will fail.                                 |
 | `after`                | `Option<u64>`   | Optional position constraint. If set, the append will only succeed if no events exist **after** this position. |
 
-### Enum — `DCBError`
+### `enum DCBError`
 
 Represents all errors that can occur in UmaDB.
 
@@ -811,8 +879,9 @@ Represents all errors that can occur in UmaDB.
 | `DeserializationError(message)`  | Failure to parse serialized data.                      |
 | `PageAlreadyFreed(page_id)`      | Attempted to free a page that was already freed.       |
 | `PageAlreadyDirty(page_id)`      | Attempted to mark a page dirty that was already dirty. |
+| `TransportError(message)`        | Client-server connection failed.                       |
 
-### Type — `DCBResult<T>`
+### `type DCBResult<T>`
 
 A convenience alias for results returned by the methods:
 
@@ -820,7 +889,7 @@ A convenience alias for results returned by the methods:
 type DCBResult<T> = Result<T, DCBError>;
 ```
 
-All the methods return this type, which yields either a successful result `T` or a `DCBError`.
+All the client methods return this type, which yields either a successful result `T` or a `DCBError`.
 
 ### Examples
 
@@ -836,7 +905,7 @@ use umadb::grpc::UmaDBClient;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Connect to the gRPC server
-    let client = UmaDBClient::connect("http://127.0.0.1:50051")?;
+    let client = UmaDBClient::connect("http://localhost:50051", None)?;
 
     // Define a consistency boundary
     let cb = Arc::new(DCBQuery {
@@ -960,7 +1029,7 @@ use umadb::grpc::AsyncUmaDBClient;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Connect to the gRPC server
-    let client = AsyncUmaDBClient::connect("http://127.0.0.1:50051").await?;
+    let client = AsyncUmaDBClient::connect("http://localhost:50051", None).await?;
 
     // Define a consistency boundary
     let cb = Arc::new(DCBQuery {

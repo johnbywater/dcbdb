@@ -209,6 +209,8 @@ pub enum DCBError {
     PageAlreadyFreed(PageID),
     #[error("Page already dirty: {0:?}")]
     PageAlreadyDirty(PageID),
+    #[error("Transport error: {0}")]
+    TransportError(String),
 }
 
 pub type DCBResult<T> = Result<T, DCBError>;

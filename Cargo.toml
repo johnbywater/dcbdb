@@ -11,9 +11,9 @@ itertools = "0.14.0"
 tempfile = "3.20.0"
 thiserror = "2.0.12"
 uuid = { version = "1.17.0", features = ["v5", "v4"] }
-tonic = "0.14.2"
+tonic = { version = "0.14.2", features = ["tls-native-roots", "tls-ring"] }
 prost = "0.14.1"
-tokio = { version = "1.46.0", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
+tokio = { version = "1.46.0", features = ["full"] }
 tokio-stream = "0.1.14"
 async-trait = "0.1.73"
 futures = "0.3.28"
@@ -35,6 +35,7 @@ tonic-prost = "0.14.2"
 serial_test = "3.2.0"
 criterion = { version = "0.7.0", features = ["html_reports", "csv_output"] }
 pprof = { version = "0.15.0", features = ["criterion", "flamegraph"] }
+rcgen = "0.12"
 
 [build-dependencies]
 tonic-prost-build = "0.14.2"

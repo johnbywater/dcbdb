@@ -34,6 +34,7 @@ use umadb::{
     uma_db_service_server::{UmaDbService, UmaDbServiceServer},
 };
 use uuid::Uuid;
+use crate::common::Position;
 
 const APPEND_BATCH_MAX_EVENTS: usize = 2000;
 const READ_RESPONSE_BATCH_SIZE_DEFAULT: u32 = 100;
@@ -169,7 +170,8 @@ impl UmaDbService for UmaDBServer {
 
         // Convert protobuf query to DCB types
         let mut query: Option<Arc<DCBQuery>> = read_request.query.map(|q| q.into());
-        let after = read_request.after;
+        let start = read_request.start;
+        let backwards = read_request.backwards.unwrap_or(false);
         let limit = read_request.limit;
         // Cap requested batch size.
         let capped_batch_size = read_request.batch_size.unwrap_or(READ_RESPONSE_BATCH_SIZE_DEFAULT).max(1).min(READ_RESPONSE_BATCH_SIZE_MAX);
@@ -186,11 +188,11 @@ impl UmaDbService for UmaDBServer {
         tokio::spawn(async move {
             // Ensure we can reuse the same query across batches
             let query_clone = query.take();
-            let mut next_after = after;
+            let mut next_start = start;
             let mut sent_any = false;
             let mut remaining = limit;
             // Create a watch receiver for head updates (for subscriptions)
-            // TODO: Make this optional.
+            // TODO: Make this an Option and only do this for subscriptions?
             let mut head_rx = request_handler.watch_head();
             // If overall read is unlimited, compute global head once to preserve semantics
             let global_head = if remaining.is_none() && !subscribe {
@@ -219,7 +221,7 @@ impl UmaDbService for UmaDBServer {
                     break;
                 }
                 match request_handler
-                    .read(query_clone.clone(), next_after, Some(per_iter_limit))
+                    .read(query_clone.clone(), next_start, backwards, Some(per_iter_limit))
                     .await
                 {
                     Ok((events, head)) => {
@@ -247,8 +249,8 @@ impl UmaDbService for UmaDBServer {
                                         break;
                                     }
                                     let current_head = *head_rx.borrow();
-                                    let na = next_after.unwrap_or(0);
-                                    if current_head.map(|h| h > na).unwrap_or(false) {
+                                    let na = next_start.unwrap_or(1);
+                                    if current_head.map(|h| h >= na).unwrap_or(false) {
                                         break; // new events available
                                     }
                                     // Wait for either a new head or a server shutdown signal
@@ -329,9 +331,9 @@ impl UmaDbService for UmaDBServer {
                         sent_any = true;
 
                         // Advance the cursor (use a new reader on the next loop iteration)
-                        next_after = events
+                        next_start = events
                             .get(slice_start as usize + slice_len as usize - 1)
-                            .map(|e| e.position);
+                            .map(|e| e.position + 1);
 
                         // Stop streaming further If we reached the
                         // captured head boundary (non-subscriber only).
@@ -601,7 +603,8 @@ impl RequestHandler {
     async fn read(
         &self,
         query: Option<Arc<DCBQuery>>,
-        after: Option<u64>,
+        start: Option<u64>,
+        backwards: bool,
         limit: Option<u32>,
     ) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
         // Offload blocking read to a dedicated threadpool
@@ -612,14 +615,15 @@ impl RequestHandler {
                 let last_committed_position = reader.next_position.0.saturating_sub(1);
 
                 let q = query.unwrap_or(Arc::new(DCBQuery { items: vec![] }));
-                let after_pos = crate::common::Position(after.unwrap_or(0));
+                let from = start.map(|after| Position(after));
                 let events = read_conditional(
                     &db,
                     &std::collections::HashMap::new(),
                     reader.events_tree_root_id,
                     reader.tags_tree_root_id,
                     q,
-                    after_pos,
+                    from,
+                    backwards,
                     limit,
                 )
                 .map_err(|e| DCBError::Corruption(format!("{e}")))?;
@@ -673,7 +677,7 @@ impl RequestHandler {
                 };
 
                 // Perform conditional read on the snapshot (limit 1) starting after the given position
-                let after = crate::common::Position(given_condition.after.unwrap_or(0));
+                let from = given_condition.after.map(|after| Position(after + 1));
                 let empty_dirty = std::collections::HashMap::new();
                 let found = read_conditional(
                     &mvcc,
@@ -681,7 +685,8 @@ impl RequestHandler {
                     reader.events_tree_root_id,
                     reader.tags_tree_root_id,
                     given_condition.fail_if_events_match.clone(),
-                    after,
+                    from,
+                    false,
                     Some(1),
                 )?;
 
@@ -694,7 +699,7 @@ impl RequestHandler {
                         reader.tags_tree_root_id,
                         &events_clone,
                         given_condition.fail_if_events_match.clone(),
-                        after,
+                        from,
                     ) {
                         Ok(Some(last_recorded_position)) => {
                             // Request is idempotent; skip actual append
@@ -877,7 +882,8 @@ impl DCBEventStoreAsync for AsyncUmaDBClient {
     async fn read<'a>(
         &'a self,
         query: Option<Arc<DCBQuery>>,
-        after: Option<u64>,
+        start: Option<u64>,
+        backwards: bool,
         limit: Option<u32>,
         subscribe: bool,
         batch_size: Option<u32>,
@@ -894,7 +900,8 @@ impl DCBEventStoreAsync for AsyncUmaDBClient {
         });
         let request = ReadRequestProto {
             query: query_proto,
-            after,
+            start,
+            backwards: Some(backwards),
             limit,
             subscribe: Some(subscribe),
             batch_size,
@@ -1285,14 +1292,15 @@ impl DCBEventStoreSync for UmaDBClient {
     fn read(
         &self,
         query: Option<Arc<DCBQuery>>,
-        after: Option<u64>,
+        start: Option<u64>,
+        backwards: bool,
         limit: Option<u32>,
         subscribe: bool,
         batch_size: Option<u32>,
     ) -> Result<Box<dyn DCBReadResponseSync + '_>, DCBError> {
         let async_read_response = self.handle.block_on(
             self.async_client
-                .read(query, after, limit, subscribe, batch_size),
+                .read(query, start, backwards, limit, subscribe, batch_size),
         )?;
         Ok(Box::new(SyncClientReadResponse {
             rt: &self.handle,

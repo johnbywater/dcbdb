@@ -18,7 +18,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(None, head_position);
 
     // Read all, expect no results.
-    let (result, head) = event_store.read_with_head(None, None, None).unwrap();
+    let (result, head) = event_store.read_with_head(None, None, false, None).unwrap();
     assert_eq!(0, result.len());
     assert_eq!(None, head);
 
@@ -39,25 +39,25 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(Some(1), head_position);
 
     // Read all, expect one event.
-    let (result, head) = event_store.read_with_head(None, None, None).unwrap();
+    let (result, head) = event_store.read_with_head(None, None, false, None).unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event1.data, result[0].event.data);
     assert_eq!(event1.uuid, result[0].event.uuid);
     assert_eq!(Some(1), head);
 
     // Read all after 1, expect no events.
-    let (result, head) = event_store.read_with_head(None, Some(1), None).unwrap();
+    let (result, head) = event_store.read_with_head(None, Some(2), false, None).unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(1), head);
 
     // Read all limit 1, expect one event.
-    let (result, head) = event_store.read_with_head(None, None, Some(1)).unwrap();
+    let (result, head) = event_store.read_with_head(None, None, false, Some(1)).unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event1.data, result[0].event.data);
     assert_eq!(Some(1), head);
 
     // Read all limit 0, expect no events (and head is None).
-    let (result, head) = event_store.read_with_head(None, None, Some(0)).unwrap();
+    let (result, head) = event_store.read_with_head(None, None, false, Some(0)).unwrap();
     assert_eq!(0, result.len());
     assert_eq!(None, head);
 
@@ -69,7 +69,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         }],
     });
     let (result, head) = event_store
-        .read_with_head(Some(query_type1.clone()), None, None)
+        .read_with_head(Some(query_type1.clone()), None, false, None)
         .unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event1.data, result[0].event.data);
@@ -83,7 +83,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         }],
     });
     let (result, head) = event_store
-        .read_with_head(Some(query_type2.clone()), None, None)
+        .read_with_head(Some(query_type2.clone()), None, false, None)
         .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(1), head);
@@ -96,7 +96,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         }],
     });
     let (result, head) = event_store
-        .read_with_head(Some(query_tag_x.clone()), None, None)
+        .read_with_head(Some(query_tag_x.clone()), None, false, None)
         .unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event1.data, result[0].event.data);
@@ -110,7 +110,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         }],
     });
     let (result, head) = event_store
-        .read_with_head(Some(query_tag_y.clone()), None, None)
+        .read_with_head(Some(query_tag_y.clone()), None, false, None)
         .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(1), head);
@@ -123,7 +123,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         }],
     });
     let (result, head) = event_store
-        .read_with_head(Some(query_type1_tag_x.clone()), None, None)
+        .read_with_head(Some(query_type1_tag_x.clone()), None, false, None)
         .unwrap();
     assert_eq!(1, result.len());
     assert_eq!(Some(1), head);
@@ -136,7 +136,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         }],
     });
     let (result, head) = event_store
-        .read_with_head(Some(query_type1_tag_y), None, None)
+        .read_with_head(Some(query_type1_tag_y), None, false, None)
         .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(1), head);
@@ -149,7 +149,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         }],
     });
     let (result, head) = event_store
-        .read_with_head(Some(query_type2_tag_x), None, None)
+        .read_with_head(Some(query_type2_tag_x), None, false, None)
         .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(1), head);
@@ -179,7 +179,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(Some(3), head_position);
 
     // Read all, expect 3 events (in ascending order).
-    let (result, head) = event_store.read_with_head(None, None, None).unwrap();
+    let (result, head) = event_store.read_with_head(None, None, false, None).unwrap();
     assert_eq!(3, result.len());
     assert_eq!(event1.data, result[0].event.data);
     assert_eq!(event2.data, result[1].event.data);
@@ -187,55 +187,55 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(Some(3), head);
 
     // Read all after 1, expect two events.
-    let (result, head) = event_store.read_with_head(None, Some(1), None).unwrap();
+    let (result, head) = event_store.read_with_head(None, Some(2), false, None).unwrap();
     assert_eq!(2, result.len());
     assert_eq!(event2.data, result[0].event.data);
     assert_eq!(event3.data, result[1].event.data);
     assert_eq!(Some(3), head);
 
     // Read all after 2, expect one event.
-    let (result, head) = event_store.read_with_head(None, Some(2), None).unwrap();
+    let (result, head) = event_store.read_with_head(None, Some(3), false, None).unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event3.data, result[0].event.data);
     assert_eq!(Some(3), head);
 
     // Read all after 1, limit 1, expect one event.
-    let (result, head) = event_store.read_with_head(None, Some(1), Some(1)).unwrap();
+    let (result, head) = event_store.read_with_head(None, Some(2), false, Some(1)).unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event2.data, result[0].event.data);
     assert_eq!(Some(2), head);
 
     // Read all after 10, limit 10, expect zero events.
     let (result, head) = event_store
-        .read_with_head(None, Some(10), Some(10))
+        .read_with_head(None, Some(11), false, Some(10))
         .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(None, head);
 
     // Read type1 after 1, expect no events.
     let (result, head) = event_store
-        .read_with_head(Some(query_type1.clone()), Some(1), None)
+        .read_with_head(Some(query_type1.clone()), Some(2), false, None)
         .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(3), head);
 
     // Read tagX after 1, expect no events.
     let (result, head) = event_store
-        .read_with_head(Some(query_tag_x.clone()), Some(1), None)
+        .read_with_head(Some(query_tag_x.clone()), Some(2), false, None)
         .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(3), head);
 
     // Read tagX after 1, limit 1 expect no events.
     let (result, head) = event_store
-        .read_with_head(Some(query_tag_x.clone()), Some(1), Some(1))
+        .read_with_head(Some(query_tag_x.clone()), Some(2), false, Some(1))
         .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(None, head);
 
     // Read type1 and tagX after 1, expect no events.
     let (result, head) = event_store
-        .read_with_head(Some(query_type1_tag_x.clone()), Some(1), None)
+        .read_with_head(Some(query_type1_tag_x.clone()), Some(2), false, None)
         .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(3), head);
@@ -248,7 +248,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         }],
     });
     let (result, head) = event_store
-        .read_with_head(Some(query_tag_a.clone()), None, None)
+        .read_with_head(Some(query_tag_a.clone()), None, false, None)
         .unwrap();
     assert_eq!(2, result.len());
     assert_eq!(event2.data, result[0].event.data);
@@ -263,7 +263,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         }],
     });
     let (result, head) = event_store
-        .read_with_head(Some(query_tag_a_and_b.clone()), None, None)
+        .read_with_head(Some(query_tag_a_and_b.clone()), None, false, None)
         .unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event2.data, result[0].event.data);
@@ -283,7 +283,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         ],
     });
     let (result, head) = event_store
-        .read_with_head(Some(query_tag_b_or_c.clone()), None, None)
+        .read_with_head(Some(query_tag_b_or_c.clone()), None, false, None)
         .unwrap();
     assert_eq!(2, result.len());
     assert_eq!(event2.data, result[0].event.data);
@@ -304,7 +304,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         ],
     });
     let (result, head) = event_store
-        .read_with_head(Some(query_tag_x_or_y.clone()), None, None)
+        .read_with_head(Some(query_tag_x_or_y.clone()), None, false, None)
         .unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event1.data, result[0].event.data);
@@ -318,7 +318,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         }],
     });
     let (result, head) = event_store
-        .read_with_head(Some(query_type2_tag_a.clone()), None, None)
+        .read_with_head(Some(query_type2_tag_a.clone()), None, false, None)
         .unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event2.data, result[0].event.data);
@@ -326,7 +326,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
 
     // Read events with type2 and tagA after 2, expect no events.
     let (result, head) = event_store
-        .read_with_head(Some(query_type2_tag_a.clone()), Some(2), None)
+        .read_with_head(Some(query_type2_tag_a.clone()), Some(3), false, None)
         .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(3), head);
@@ -345,7 +345,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         ],
     });
     let (result, head) = event_store
-        .read_with_head(Some(query_type2_tag_b_or_type3_tagc.clone()), None, None)
+        .read_with_head(Some(query_type2_tag_b_or_type3_tagc.clone()), None, false, None)
         .unwrap();
     assert_eq!(2, result.len());
     assert_eq!(event2.data, result[0].event.data);
@@ -366,7 +366,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         ],
     });
     let (result, head) = event_store
-        .read_with_head(Some(query_type3_tag_c_or_type2_tag_b), None, None)
+        .read_with_head(Some(query_type3_tag_c_or_type2_tag_b), None, false, None)
         .unwrap();
     assert_eq!(2, result.len());
     assert_eq!(event2.data, result[0].event.data);
@@ -651,7 +651,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         )
         .unwrap();
 
-    let (result, head) = event_store.read_with_head(None, None, None).unwrap();
+    let (result, head) = event_store.read_with_head(None, None, false, None).unwrap();
     assert_eq!(13, result.len());
     assert_eq!(result[10].event.event_type, student_registered.event_type);
     assert_eq!(result[11].event.event_type, course_registered.event_type);
@@ -676,6 +676,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
                 }],
             })),
             None,
+            false,
             None,
         )
         .unwrap();
@@ -691,6 +692,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
                 }],
             })),
             None,
+            false,
             None,
         )
         .unwrap();
@@ -709,6 +711,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
                 }],
             })),
             None,
+            false,
             None,
         )
         .unwrap();
@@ -723,7 +726,8 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
                     tags: vec![student_id.clone()],
                 }],
             })),
-            Some(2),
+            Some(3),
+            false,
             None,
         )
         .unwrap();
@@ -738,7 +742,8 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
                     tags: vec![course_id.clone()],
                 }],
             })),
-            Some(2),
+            Some(3),
+            false,
             None,
         )
         .unwrap();
@@ -756,7 +761,8 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
                     ],
                 }],
             })),
-            Some(2),
+            Some(3),
+            false,
             None,
         )
         .unwrap();
@@ -771,7 +777,8 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
                     tags: vec![student_id.clone()],
                 }],
             })),
-            Some(2),
+            Some(3),
+            false,
             Some(1),
         )
         .unwrap();
@@ -786,7 +793,8 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
                     tags: vec![course_id.clone()],
                 }],
             })),
-            Some(2),
+            Some(3),
+            false,
             Some(1),
         )
         .unwrap();
@@ -804,7 +812,8 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
                     ],
                 }],
             })),
-            Some(2),
+            Some(3),
+            false,
             Some(1),
         )
         .unwrap();
@@ -830,7 +839,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         ],
     });
     let (result, head) = event_store
-        .read_with_head(Some(consistency_boundary), None, None)
+        .read_with_head(Some(consistency_boundary), None, false, None)
         .unwrap();
     assert_eq!(3, result.len());
     assert_eq!(Some(13), head);
@@ -870,7 +879,8 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
                     tags: event5.tags.clone(),
                 }],
             })),
-            Some(13),
+            Some(14),
+            false,
             None,
         )
         .unwrap();
@@ -905,7 +915,8 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
                     tags: event5.tags.clone(),
                 }],
             })),
-            Some(13),
+            Some(14),
+            false,
             None,
         )
         .unwrap();
@@ -959,6 +970,7 @@ fn test_tag_hash_collision() {
                 }],
             })),
             None,
+            false,
             None,
         )
         .unwrap();
@@ -980,6 +992,7 @@ fn test_tag_hash_collision() {
                 }],
             })),
             None,
+            false,
             None,
         )
         .unwrap();
@@ -1007,6 +1020,7 @@ fn test_tag_hash_collision() {
                 ],
             })),
             None,
+            false,
             None,
         )
         .unwrap();

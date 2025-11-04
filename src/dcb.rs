@@ -16,14 +16,15 @@ pub trait DCBEventStoreSync {
     /// Reads events from the store based on the provided query and constraints
     ///
     /// Returns a DCBReadResponseSync that provides an iterator over all events,
-    /// unless 'after' is given then only those with position greater than 'after',
+    /// unless 'from' is given then only those with position greater than 'after',
     /// and unless any query items are given, then only those that match at least one
     /// query item. An event matches a query item if its type is in the item types or
     /// there are no item types, and if all the item tags are in the event tags.
     fn read(
         &self,
         query: Option<Arc<DCBQuery>>,
-        after: Option<u64>,
+        start: Option<u64>,
+        backwards: bool,
         limit: Option<u32>,
         subscribe: bool,
         batch_size: Option<u32>,
@@ -33,10 +34,11 @@ pub trait DCBEventStoreSync {
     fn read_with_head(
         &self,
         query: Option<Arc<DCBQuery>>,
-        after: Option<u64>,
+        start: Option<u64>,
+        backwards: bool,
         limit: Option<u32>,
     ) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
-        let mut response = self.read(query, after, limit, false, None)?;
+        let mut response = self.read(query, start, backwards, limit, false, None)?;
         response.collect_with_head()
     }
 
@@ -78,7 +80,8 @@ pub trait DCBEventStoreAsync: Send + Sync {
     async fn read<'a>(
         &'a self,
         query: Option<Arc<DCBQuery>>,
-        after: Option<u64>,
+        start: Option<u64>,
+        backwards: bool,
         limit: Option<u32>,
         subscribe: bool,
         batch_size: Option<u32>,
@@ -89,9 +92,10 @@ pub trait DCBEventStoreAsync: Send + Sync {
         &'a self,
         query: Option<Arc<DCBQuery>>,
         after: Option<u64>,
+        backwards: bool,
         limit: Option<u32>,
     ) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
-        let mut response = self.read(query, after, limit, false, None).await?;
+        let mut response = self.read(query, after, backwards, limit, false, None).await?;
         response.collect_with_head().await
     }
 

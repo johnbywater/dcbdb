@@ -461,9 +461,10 @@ pub fn event_tree_lookup(
 pub struct EventIterator<'a> {
     pub mvcc: &'a Mvcc,
     pub dirty: &'a HashMap<PageID, Page>,
-    pub stack: Vec<(PageID, usize)>,
+    pub stack: Vec<(PageID, Option<usize>)>,
     pub page_cache: HashMap<PageID, Page>,
-    pub after: Position,
+    pub start: Option<Position>,  // inclusive position, better for binary search
+    pub backwards: bool,
 }
 
 impl<'a> EventIterator<'a> {
@@ -471,16 +472,17 @@ impl<'a> EventIterator<'a> {
         mvcc: &'a Mvcc,
         dirty: &'a HashMap<PageID, Page>,
         events_tree_root_id: PageID,
-        after: Option<Position>,
+        start: Option<Position>,
+        backwards: bool,
     ) -> Self {
-        let next_position = (events_tree_root_id, 0);
-        let after = after.unwrap_or(Position(0));
+        let next_position = (events_tree_root_id, None);
         Self {
             mvcc,
             dirty,
             stack: vec![next_position],
             page_cache: HashMap::new(),
-            after,
+            start,
+            backwards,
         }
     }
 
@@ -489,19 +491,22 @@ impl<'a> EventIterator<'a> {
         if batch_size == 0 {
             return Ok(result);
         }
+        if self.backwards && self.start == Some(Position(0)) {
+            return Ok(result);
+        }
         while result.len() < batch_size as usize {
-            let Some((page_id, idx)) = self.stack.pop() else {
+            let Some((page_id, mut stacked_idx)) = self.stack.pop() else {
                 break; // traversal finished
             };
 
             // Compute actions under a scoped immutable borrow, then mutate cache/stack afterwards.
             let mut remove_page = false;
-            let mut push_revisit: Option<(PageID, usize)> = None;
-            let mut push_child: Option<(PageID, usize)> = None; // (child_id, starting_idx)
-            let mut emit: Option<(Position, EventRecord)> = None;
+            let mut push_revisit: Option<(PageID, Option<usize>)> = None;
+            let mut push_child: Option<(PageID, Option<usize>)> = None; // (child_id, stacked_keys_idx)
+            let mut emit_event: Option<(Position, EventRecord)> = None;
 
             {
-                // Obtain the current page from cache (deserialize at most once)
+                // Obtain the current page (from dirty, or page cache, or deserialize).
                 let page_ref: &Page = if let Some(p) = self.dirty.get(&page_id) {
                     p
                 } else if let Some(p) = self.page_cache.get(&page_id) {
@@ -516,68 +521,131 @@ impl<'a> EventIterator<'a> {
 
                 match &page_ref.node {
                     Node::EventInternal(internal) => {
-                        // Determine the starting child index. If this is the first time we visit this
-                        // internal node in the current traversal path (idx == 0), perform a binary
-                        // search on the separator keys to skip children whose maxima are <= self.after.
-                        let mut start_idx = idx;
-                        if idx == 0 && !internal.keys.is_empty() {
-                            // Upper bound: first index where key > after
-                            start_idx = match internal.keys.binary_search(&self.after) {
-                                Ok(i) => i + 1,
-                                Err(i) => i,
+                        // println!("Visit internal {page_id:?}");
+                        if stacked_idx.is_none() && !internal.keys.is_empty() {
+                            // println!(" - first visit");
+                            // println!(" - keys: {:?}", internal.keys.clone());
+                            // println!(" - child_ids: {:?}", internal.child_ids.clone());
+                            // println!(" - from: {:?}", self.from);
+
+                            stacked_idx = match &self.start {
+                                Some(from) => {
+                                    match internal.keys.binary_search(from) {
+                                        Ok(i) => Some(i + 1),
+                                        Err(i) => Some(i),
+                                    }
+                                },
+                                None => {
+                                    if !self.backwards {
+                                        Some(0)
+                                    } else {
+                                        Some(internal.child_ids.len() - 1)
+                                    }
+                                },
                             };
                         }
 
-                        if start_idx < internal.child_ids.len() {
-                            let is_last_child = start_idx + 1 >= internal.child_ids.len();
-                            if !is_last_child {
-                                push_revisit = Some((page_id, start_idx + 1));
+                        if let Some(child_ids_idx) = stacked_idx {
+                            // println!(" - child ids index: {} / {}", child_ids_idx + 1, internal.child_ids.len());
+                            // println!(" - will visit child: {:?}", internal.child_ids[child_ids_idx]);
+                            // Push the chosen child.
+                            push_child = Some((internal.child_ids[child_ids_idx], None));
+                            // Do or don't revisit this internal node?
+                            if !self.backwards {
+                                if child_ids_idx + 1 < internal.child_ids.len() {
+                                    // Will revisit this internal node.
+                                    // println!(" - will revisit");
+                                    push_revisit = Some((page_id, Some(child_ids_idx + 1)));
+                                } else {
+                                    // Don't revisit this internal node.
+                                    remove_page = true;
+                                    // println!(" - will remove");
+                                }
                             } else {
-                                // Last child: we won't need this internal again
-                                remove_page = true;
+                                if child_ids_idx > 0 {
+                                    // Will revisit this internal node.
+                                    // println!(" - will revisit");
+                                    push_revisit = Some((page_id, Some(child_ids_idx - 1)));
+                                } else {
+                                    // Don't revisit this internal node.
+                                    remove_page = true;
+                                    // println!(" - will remove");
+                                }
                             }
-                            // Push the chosen child; for internal children we always start at 0
-                            push_child = Some((internal.child_ids[start_idx], 0));
                         } else {
-                            // All relevant children visited (or none relevant)
-                            remove_page = true;
-                        }
+                            // TODO: Clarify if this is always because internal node is empty?
+                            remove_page = true
+                        };
                     }
                     Node::EventLeaf(leaf) => {
-                        // Determine the starting item index. If first visit to this leaf (idx == 0),
-                        // perform an upper-bound binary search to find the first key strictly greater
-                        // than self.after.
-                        let mut item_idx = idx;
-                        if idx == 0 {
-                            item_idx = match leaf.keys.binary_search(&self.after) {
-                                Ok(i) => i + 1, // skip equal keys; we need strictly greater
-                                Err(i) => i,
+                        // println!("Visit leaf {page_id:?}");
+                        if stacked_idx.is_none() {
+                            // println!(" - first visit");
+                            // println!(" - keys: {:?}", leaf.keys.clone());
+                            stacked_idx = match &self.start {
+                                Some(from) => {
+                                    match leaf.keys.binary_search(from) {
+                                        Ok(i) => Some(i),
+                                        Err(i) => {
+                                            if !self.backwards {
+                                                Some(i)
+                                            } else {
+                                                Some(i-1)
+                                            }
+                                        },
+                                    }
+                                },
+                                None => {
+                                    if !self.backwards {
+                                        Some(0)
+                                    } else {
+                                        Some(leaf.values.len() - 1)
+                                    }
+                                },
                             };
                         }
 
-                        if item_idx < leaf.keys.len() {
-                            let is_last_item = item_idx + 1 >= leaf.keys.len();
-                            if !is_last_item {
-                                push_revisit = Some((page_id, item_idx + 1));
+                        if let Some(values_idx) = stacked_idx {
+                            // println!(" - values index: {} / {}", values_idx + 1, leaf.values.len());
+                            if values_idx < leaf.values.len() {
+                                let event_position = leaf.keys[values_idx];
+                                let event_record = materialize_event_value(
+                                    self.mvcc,
+                                    self.dirty,
+                                    &leaf.values[values_idx],
+                                )?;
+                                // println!(" - emit event position: {:?}", event_position.clone());
+                                emit_event = Some((event_position, event_record));
+
+                                if !self.backwards {
+                                    if values_idx + 1 < leaf.values.len() {
+                                        // Revisit this leaf.
+                                        push_revisit = Some((page_id, Some(values_idx + 1)));
+                                        // println!(" - not last value, will revisit");
+                                    } else {
+                                        // The last value.
+                                        remove_page = true;
+                                        // println!(" - last value, will remove");
+                                    }
+                                } else {
+                                    if values_idx > 0 {
+                                        // Revisit this leaf.
+                                        push_revisit = Some((page_id, Some(values_idx - 1)));
+                                        // println!(" - not last value, will revisit");
+                                    } else {
+                                        // The last value.
+                                        remove_page = true;
+                                        // println!(" - last value, will remove");
+                                    }
+                                }
                             } else {
-                                // Last item from this leaf: we can drop it
+                                // No key greater or equal to 'from' in this leaf
+                                // println!(" - value index out of range, why wasn't this removed?");
                                 remove_page = true;
                             }
-                            let pos = leaf.keys[item_idx];
-                            let rec = materialize_event_value(
-                                self.mvcc,
-                                self.dirty,
-                                &leaf.values[item_idx],
-                            )?;
-                            if pos > self.after {
-                                emit = Some((pos, rec));
-                            } else {
-                                // pos <= after (can happen when revisiting or empty upper bound), skip emit
-                                emit = None;
-                            }
                         } else {
-                            // Leaf exhausted or no key greater than 'after' in this leaf
-                            remove_page = true;
+                            // Shouldn't get here?
+                            panic!("Shouldn't get here?")
                         }
                     }
                     _ => {
@@ -597,8 +665,8 @@ impl<'a> EventIterator<'a> {
             if let Some((child_id, child_start_idx)) = push_child {
                 self.stack.push((child_id, child_start_idx));
             }
-            if let Some((pos, rec)) = emit {
-                result.push((pos, rec));
+            if let Some((event_position, event_record)) = emit_event {
+                result.push((event_position, event_record));
             }
             if remove_page {
                 self.page_cache.remove(&page_id);
@@ -1071,7 +1139,7 @@ mod tests {
         let reader_tsn = reader.tsn;
 
         let dirty = HashMap::new();
-        let mut events_iterator = EventIterator::new(&db, &dirty, events_tree_root_id, None);
+        let mut events_iterator = EventIterator::new(&db, &dirty, events_tree_root_id, None, false);
 
         // Ensure the reader's tsn is registered while the iterator is alive
         {
@@ -1141,9 +1209,9 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_read_events_after() {
+    fn test_read_events_from_forwards() {
         // Setup a temporary database
-        let (_temp_dir, db) = construct_db(512);
+        let (_temp_dir, db) = construct_db(128);
 
         let mut has_split_internal = false;
         let mut appended: Vec<(Position, EventRecord)> = Vec::new();
@@ -1188,66 +1256,193 @@ mod tests {
             db.commit(&mut writer).unwrap();
         }
 
-        // Choose an 'after' value halfway through appended events
-        let mid = appended.len() / 2;
-        let after_pos = appended[mid].0;
+        let appended_len = appended.len();
+        // println!("Appended number: {}", appended_len);
 
-        // Start a reader
-        let reader = db.reader().unwrap();
-        let events_tree_root_id = reader.events_tree_root_id;
-        let reader_tsn = reader.tsn;
-        let dirty = HashMap::new();
-        let mut events_iterator =
-            EventIterator::new(&db, &dirty, events_tree_root_id, Some(after_pos));
+        // Iterate through various 'from' positions.
+        for i in 0..appended_len + 2 {
+            let from = Position(i as u64);
 
-        // Ensure the reader's tsn is registered while the iterator is alive
-        {
-            let map = db.reader_tsns.lock().unwrap();
-            assert!(
-                map.values().any(|&tsn| tsn == reader_tsn),
-                "TSN should remain registered until reader is dropped"
-            );
-        }
+            // Start a reader
+            let reader = db.reader().unwrap();
+            let events_tree_root_id = reader.events_tree_root_id;
+            let reader_tsn = reader.tsn;
+            let dirty = HashMap::new();
+            let mut events_iterator =
+                EventIterator::new(&db, &dirty, events_tree_root_id, Some(from), false);
 
-        // Progressively iterate over events using batches
-        let mut scanned: Vec<(Position, EventRecord)> = Vec::new();
-        loop {
-            let batch = events_iterator.next_batch(3).unwrap();
-            if batch.is_empty() {
-                break;
+            // Ensure the reader's tsn is registered while the iterator is alive
+            {
+                let map = db.reader_tsns.lock().unwrap();
+                assert!(
+                    map.values().any(|&tsn| tsn == reader_tsn),
+                    "TSN should remain registered until reader is dropped"
+                );
             }
-            scanned.extend(batch);
 
-            // The reader should remain registered throughout iteration
-            let map = db.reader_tsns.lock().unwrap();
+            // Progressively iterate over events using batches
+            let mut scanned: Vec<(Position, EventRecord)> = Vec::new();
+            loop {
+                let batch = events_iterator.next_batch(3).unwrap();
+                if batch.is_empty() {
+                    break;
+                }
+                scanned.extend(batch);
+
+                // The reader should remain registered throughout iteration
+                let map = db.reader_tsns.lock().unwrap();
+                assert!(
+                    map.values().any(|&tsn| tsn == reader_tsn),
+                    "TSN should remain registered until reader is dropped"
+                );
+            }
+
+            // Expected are strictly from the chosen 'from' position
+            let num_to_skip = i.max(1) - 1;
+            let expected: Vec<(Position, EventRecord)> = appended.clone().into_iter().skip(num_to_skip).collect();
+            assert_eq!(expected.len(), scanned.len());
+            // println!("Get expected number: {}", expected.len());
+            for (i, exp) in expected.iter().enumerate() {
+                assert_eq!(exp.0, scanned[i].0);
+                assert_eq!(exp.1, scanned[i].1);
+            }
+
+            // Ensure we did not accumulate pages in the iterator cache
             assert!(
-                map.values().any(|&tsn| tsn == reader_tsn),
-                "TSN should remain registered until reader is dropped"
+                events_iterator.page_cache.is_empty(),
+                "EventIterator page_cache should be empty after filtered scan"
             );
+
+            // Drop the reader and ensure the reader tsn is removed
+            drop(reader);
+            {
+                let map = db.reader_tsns.lock().unwrap();
+                assert!(
+                    map.values().all(|&tsn| tsn != reader_tsn),
+                    "TSN should be removed after reader is dropped"
+                );
+            }
+
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_read_events_from_backwards() {
+        // Setup a temporary database
+        let (_temp_dir, db) = construct_db(128);
+
+        let mut has_split_internal = false;
+        let mut appended: Vec<(Position, EventRecord)> = Vec::new();
+
+        // Insert events until we split a root internal node
+        while !has_split_internal {
+            // Start a writer
+            let mut writer = db.writer().unwrap();
+
+            // Issue a new position and create a record
+            let position = writer.issue_position();
+            let record = EventRecord {
+                event_type: "UserCreated".to_string(),
+                data: (0..8).map(|_| random::<u8>()).collect(),
+                tags: vec!["users".to_string(), "creation".to_string()],
+                uuid: None,
+            };
+            appended.push((position, record.clone()));
+
+            // Append the event
+            event_tree_append(&db, &mut writer, record, position).unwrap();
+
+            // Check if the root is an internal node
+            let root_page = writer.dirty.get(&writer.events_tree_root_id).unwrap();
+            match &root_page.node {
+                Node::EventInternal(root_node) => {
+                    // Check if the first child is an internal node
+                    if !root_node.child_ids.is_empty() {
+                        let child_id = root_node.child_ids[0];
+                        if let Some(child_page) = writer.dirty.get(&child_id) {
+                            match &child_page.node {
+                                Node::EventInternal(_) => {
+                                    has_split_internal = true;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            db.commit(&mut writer).unwrap();
         }
 
-        // Expected are strictly after the chosen 'after' position
-        let expected: Vec<(Position, EventRecord)> = appended.into_iter().skip(mid + 1).collect();
-        assert_eq!(expected.len(), scanned.len());
-        for (i, exp) in expected.iter().enumerate() {
-            assert_eq!(exp.0, scanned[i].0);
-            assert_eq!(exp.1, scanned[i].1);
-        }
+        let appended_len = appended.len();
+        // println!("Appended number: {}", appended_len);
 
-        // Ensure we did not accumulate pages in the iterator cache
-        assert!(
-            events_iterator.page_cache.is_empty(),
-            "EventIterator page_cache should be empty after filtered scan"
-        );
+        // Iterate through various 'from' positions.
+        for i in 0..appended_len + 2 {
+            let from = Position(i as u64);
 
-        // Drop the reader and ensure the reader tsn is removed
-        drop(reader);
-        {
-            let map = db.reader_tsns.lock().unwrap();
+            // Start a reader
+            let reader = db.reader().unwrap();
+            let events_tree_root_id = reader.events_tree_root_id;
+            let reader_tsn = reader.tsn;
+            let dirty = HashMap::new();
+            let mut events_iterator =
+                EventIterator::new(&db, &dirty, events_tree_root_id, Some(from), true);
+
+            // Ensure the reader's tsn is registered while the iterator is alive
+            {
+                let map = db.reader_tsns.lock().unwrap();
+                assert!(
+                    map.values().any(|&tsn| tsn == reader_tsn),
+                    "TSN should remain registered until reader is dropped"
+                );
+            }
+
+            // Progressively iterate over events using batches
+            let mut scanned: Vec<(Position, EventRecord)> = Vec::new();
+            loop {
+                let batch = events_iterator.next_batch(3).unwrap();
+                if batch.is_empty() {
+                    break;
+                }
+                scanned.extend(batch);
+
+                // The reader should remain registered throughout iteration
+                let map = db.reader_tsns.lock().unwrap();
+                assert!(
+                    map.values().any(|&tsn| tsn == reader_tsn),
+                    "TSN should remain registered until reader is dropped"
+                );
+            }
+
+            // Expected are strictly from the chosen 'from' position
+            let mut expected: Vec<(Position, EventRecord)> = appended.clone();
+            expected.truncate(i);
+            expected.reverse();
+            assert_eq!(expected.len(), scanned.len());
+            // println!("Get expected number: {}", expected.len());
+            for (i, exp) in expected.iter().enumerate() {
+                assert_eq!(exp.0, scanned[i].0);
+                assert_eq!(exp.1, scanned[i].1);
+            }
+
+            // Ensure we did not accumulate pages in the iterator cache
             assert!(
-                map.values().all(|&tsn| tsn != reader_tsn),
-                "TSN should be removed after reader is dropped"
+                events_iterator.page_cache.is_empty(),
+                "EventIterator page_cache should be empty after filtered scan"
             );
+
+            // Drop the reader and ensure the reader tsn is removed
+            drop(reader);
+            {
+                let map = db.reader_tsns.lock().unwrap();
+                assert!(
+                    map.values().all(|&tsn| tsn != reader_tsn),
+                    "TSN should be removed after reader is dropped"
+                );
+            }
+
         }
     }
 

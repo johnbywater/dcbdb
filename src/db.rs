@@ -63,14 +63,15 @@ impl UmaDB {
         for (events, condition) in items.into_iter() {
             // Check condition using read_conditional (limit 1), starting after the provided position
             if let Some(cond) = condition {
-                let after = Position(cond.after.unwrap_or(0));
+                let from = cond.after.map(|after| Position(after + 1));
                 let read_result1 = read_conditional(
                     mvcc,
                     &writer.dirty,
                     writer.events_tree_root_id,
                     writer.tags_tree_root_id,
                     cond.fail_if_events_match.clone(),
-                    after,
+                    from,
+                    false,
                     Some(1),
                 );
                 match read_result1 {
@@ -85,7 +86,7 @@ impl UmaDB {
                                 writer.tags_tree_root_id,
                                 &events,
                                 cond.fail_if_events_match.clone(),
-                                after,
+                                from,
                             ) {
                                 Ok(Some(last_recorded_position)) => {
                                     results.push(Ok(last_recorded_position));
@@ -140,7 +141,8 @@ impl DCBEventStoreSync for UmaDB {
     fn read(
         &self,
         query: Option<Arc<DCBQuery>>,
-        after: Option<u64>,
+        start: Option<u64>,
+        backwards: bool,
         limit: Option<u32>,
         _subscribe: bool,
         _batch_size: Option<u32>,
@@ -153,7 +155,8 @@ impl DCBEventStoreSync for UmaDB {
 
         // Build query and after
         let q = query.unwrap_or(Arc::new(DCBQuery { items: vec![] }));
-        let after_pos = Position(after.unwrap_or(0));
+        let from = start.map(|after| Position(after));
+
 
         // Delegate to read_conditional
         let events = read_conditional(
@@ -162,7 +165,8 @@ impl DCBEventStoreSync for UmaDB {
             reader.events_tree_root_id,
             reader.tags_tree_root_id,
             q,
-            after_pos,
+            from,
+            backwards,
             limit,
         )?;
 
@@ -286,7 +290,8 @@ pub fn read_conditional(
     events_tree_root_id: PageID,
     tags_tree_root_id: PageID,
     query: Arc<DCBQuery>,
-    after: Position,
+    start: Option<Position>,
+    backwards: bool,
     limit: Option<u32>,
 ) -> DCBResult<Vec<DCBSequencedEvent>> {
     const SCAN_BATCH_SIZE: u32 = 256;
@@ -297,7 +302,7 @@ pub fn read_conditional(
 
     // If no items, return all events with after/limit respected via sequential scan
     if query.items.is_empty() {
-        let mut iter = EventIterator::new(mvcc, dirty, events_tree_root_id, Some(after));
+        let mut iter = EventIterator::new(mvcc, dirty, events_tree_root_id, start, backwards);
         let mut out: Vec<DCBSequencedEvent> = Vec::new();
         'outer_all: loop {
             let batch = iter.next_batch(limit.unwrap_or(SCAN_BATCH_SIZE))?;
@@ -328,7 +333,7 @@ pub fn read_conditional(
     let all_items_have_tags = query.items.iter().all(|it| !it.tags.is_empty());
     if !all_items_have_tags {
         // Fallback: sequentially scan all events and apply the same matching logic
-        let mut iter = EventIterator::new(mvcc, dirty, events_tree_root_id, Some(after));
+        let mut iter = EventIterator::new(mvcc, dirty, events_tree_root_id, start, backwards);
         let mut out: Vec<DCBSequencedEvent> = Vec::new();
         let matches_item = |rec: &EventRecord| -> bool {
             for item in &query.items {
@@ -414,7 +419,7 @@ pub fn read_conditional(
     let mut tag_iters: Vec<PositionTagQiidIterator<_>> = Vec::new();
     for (tag, qiids) in tag_qiis.iter() {
         let tag_hash: TagHash = tag_to_hash(tag);
-        let positions_iter = TagsTreeIterator::new(mvcc, dirty, tags_tree_root_id, tag_hash, after); // yields positions for tag
+        let positions_iter = TagsTreeIterator::new(mvcc, dirty, tags_tree_root_id, tag_hash, start, backwards); // yields positions for tag
         tag_iters.push(PositionTagQiidIterator::new(
             positions_iter,
             tag.clone(),
@@ -423,7 +428,9 @@ pub fn read_conditional(
     }
 
     // Merge iterators ordered by position
-    let merged = tag_iters.into_iter().kmerge_by(|a, b| a.0 < b.0);
+    let merged = tag_iters
+        .into_iter()
+        .kmerge_by(|a, b| if !backwards { a.0 < b.0 } else { a.0 > b.0 });
 
     // Group by position, collecting tags and qiids
     struct GroupByPositionIterator<I>
@@ -571,7 +578,7 @@ pub fn is_request_idempotent(
     tags_tree_root_id: PageID,
     events: &Vec<DCBEvent>,
     fail_if_events_match: Arc<DCBQuery>,
-    after: Position,
+    start: Option<Position>,
 ) -> DCBResult<Option<u64>> {
     // Check events for event IDs. If all have events IDs then
     // call read_conditional again with limit=event.len() and then
@@ -593,7 +600,8 @@ pub fn is_request_idempotent(
             events_tree_root_id,
             tags_tree_root_id,
             fail_if_events_match,
-            after,
+            start,
+            false,
             Some(submitted_events_len as u32),
         );
         match read_result {
@@ -643,7 +651,8 @@ mod tests {
         events_tree_root_id: PageID,
         tags_tree_root_id: PageID,
         query: DCBQuery,
-        after: Position,
+        start: Option<Position>,
+        backwards: bool,
         limit: Option<u32>,
     ) -> DCBResult<Vec<DCBSequencedEvent>> {
         super::read_conditional(
@@ -652,7 +661,8 @@ mod tests {
             events_tree_root_id,
             tags_tree_root_id,
             Arc::new(query),
-            after,
+            start,
+            backwards,
             limit,
         )
     }
@@ -711,7 +721,8 @@ mod tests {
             reader.events_tree_root_id,
             reader.tags_tree_root_id,
             DCBQuery { items: vec![] },
-            Position(0),
+            Some(Position(1)),
+            false,
             None,
         )
         .unwrap();
@@ -725,7 +736,8 @@ mod tests {
             reader.events_tree_root_id,
             reader.tags_tree_root_id,
             DCBQuery { items: vec![] },
-            Position(first),
+            Some(Position(first + 1)),
+            false,
             None,
         )
         .unwrap();
@@ -738,7 +750,8 @@ mod tests {
             reader.events_tree_root_id,
             reader.tags_tree_root_id,
             DCBQuery { items: vec![] },
-            Position(last),
+            Some(Position(last + 1)),
+            false,
             None,
         )
         .unwrap();
@@ -750,7 +763,8 @@ mod tests {
             reader.events_tree_root_id,
             reader.tags_tree_root_id,
             DCBQuery { items: vec![] },
-            Position(0),
+            Some(Position(1)),
+            false,
             Some(0),
         )
         .unwrap();
@@ -760,7 +774,8 @@ mod tests {
             reader.events_tree_root_id,
             reader.tags_tree_root_id,
             DCBQuery { items: vec![] },
-            Position(0),
+            Some(Position(1)),
+            false,
             Some(3),
         )
         .unwrap();
@@ -770,7 +785,8 @@ mod tests {
             reader.events_tree_root_id,
             reader.tags_tree_root_id,
             DCBQuery { items: vec![] },
-            Position(0),
+            Some(Position(1)),
+            false,
             Some(20),
         )
         .unwrap();
@@ -793,7 +809,8 @@ mod tests {
             reader.events_tree_root_id,
             reader.tags_tree_root_id,
             qi.clone(),
-            Position(0),
+            Some(Position(1)),
+            false,
             None,
         )
         .unwrap();
@@ -811,7 +828,8 @@ mod tests {
             reader.events_tree_root_id,
             reader.tags_tree_root_id,
             qi.clone(),
-            Position(positions[0]),
+            Some(Position(positions[0] + 1)),
+            false,
             None,
         )
         .unwrap();
@@ -821,7 +839,8 @@ mod tests {
             reader.events_tree_root_id,
             reader.tags_tree_root_id,
             qi.clone(),
-            Position(*positions.last().unwrap()),
+            Some(Position(*positions.last().unwrap() + 1)),
+            false,
             None,
         )
         .unwrap();
@@ -833,7 +852,8 @@ mod tests {
             reader.events_tree_root_id,
             reader.tags_tree_root_id,
             qi.clone(),
-            Position(0),
+            Some(Position(1)),
+            false,
             Some(0),
         )
         .unwrap();
@@ -843,7 +863,8 @@ mod tests {
             reader.events_tree_root_id,
             reader.tags_tree_root_id,
             qi.clone(),
-            Position(0),
+            Some(Position(1)),
+            false,
             Some(1),
         )
         .unwrap();
@@ -853,7 +874,8 @@ mod tests {
             reader.events_tree_root_id,
             reader.tags_tree_root_id,
             qi,
-            Position(0),
+            Some(Position(1)),
+            false,
             Some(10),
         )
         .unwrap();
@@ -876,7 +898,8 @@ mod tests {
             reader.events_tree_root_id,
             reader.tags_tree_root_id,
             qi,
-            Position(0),
+            Some(Position(1)),
+            false,
             None,
         )
         .unwrap();
@@ -907,7 +930,8 @@ mod tests {
             reader.events_tree_root_id,
             reader.tags_tree_root_id,
             qi,
-            Position(0),
+            Some(Position(1)),
+            false,
             None,
         )
         .unwrap();
@@ -932,7 +956,8 @@ mod tests {
             reader.events_tree_root_id,
             reader.tags_tree_root_id,
             alpha_only.clone(),
-            Position(0),
+            Some(Position(1)),
+            false,
             None,
         )
         .unwrap()
@@ -958,7 +983,8 @@ mod tests {
             reader.events_tree_root_id,
             reader.tags_tree_root_id,
             query,
-            Position(0),
+            Some(Position(1)),
+            false,
             None,
         )
         .unwrap();
@@ -1014,7 +1040,8 @@ mod tests {
             reader.events_tree_root_id,
             reader.tags_tree_root_id,
             qi.clone(),
-            Position(0),
+            Some(Position(1)),
+            false,
             None,
         )
         .unwrap();
@@ -1028,7 +1055,8 @@ mod tests {
             reader.events_tree_root_id,
             reader.tags_tree_root_id,
             qi.clone(),
-            Position(first_pos),
+            Some(Position(first_pos + 1)),
+            false,
             None,
         )
         .unwrap();
@@ -1040,7 +1068,8 @@ mod tests {
             reader.events_tree_root_id,
             reader.tags_tree_root_id,
             qi,
-            Position(0),
+            Some(Position(1)),
+            false,
             Some(1),
         )
         .unwrap();
@@ -1065,20 +1094,22 @@ mod tests {
             reader.events_tree_root_id,
             reader.tags_tree_root_id,
             qi.clone(),
-            Position(0),
+            Some(Position(1)),
+            false,
             None,
         )
         .unwrap();
         assert_eq!(all.len(), input.len());
 
         // After and limit still apply
-        let first = all[0].position;
+        let first = all[1].position;
         let tail = read_conditional(
             &mut db,
             reader.events_tree_root_id,
             reader.tags_tree_root_id,
             qi.clone(),
-            Position(first),
+            Some(Position(first)),
+            false,
             None,
         )
         .unwrap();
@@ -1088,7 +1119,8 @@ mod tests {
             reader.events_tree_root_id,
             reader.tags_tree_root_id,
             qi,
-            Position(0),
+            Some(Position(1)),
+            false,
             Some(5),
         )
         .unwrap();
@@ -1124,7 +1156,7 @@ mod tests {
         assert_eq!(store.head().unwrap(), Some(last));
 
         // Read all
-        let mut resp = store.read(None, None, None, false, None).unwrap();
+        let mut resp = store.read(None, None, false, None, false, None).unwrap();
         let (all, head) = resp.collect_with_head().unwrap();
         assert_eq!(head, Some(last));
         assert_eq!(all.len(), 2);
@@ -1132,7 +1164,7 @@ mod tests {
         assert_eq!(all[1].event.event_type, "TypeB");
 
         // Limit semantics: only first event returned and head equals that position
-        let mut resp_lim1 = store.read(None, None, Some(1), false, None).unwrap();
+        let mut resp_lim1 = store.read(None, None, false, Some(1), false, None).unwrap();
         let (only_one, head_lim1) = resp_lim1.collect_with_head().unwrap();
         assert_eq!(only_one.len(), 1);
         assert_eq!(only_one[0].event.event_type, "TypeA");
@@ -1145,15 +1177,15 @@ mod tests {
                 tags: vec!["foo".to_string()],
             }],
         });
-        let mut resp2 = store.read(Some(query), None, None, false, None).unwrap();
+        let mut resp2 = store.read(Some(query), None, false, None, false, None).unwrap();
         let out2 = resp2.next_batch().unwrap();
         assert_eq!(out2.len(), 2);
         assert!(out2.iter().all(|e| e.event.tags.iter().any(|t| t == "foo")));
 
-        // After semantics: skip the first event
-        let first_pos = all[0].position;
+        // From semantics: skip the first event
+        let first_pos = all[0].position + 1;
         let mut resp3 = store
-            .read(None, Some(first_pos), None, false, None)
+            .read(None, Some(first_pos), false, None, false, None)
             .unwrap();
         let out3 = resp3.next_batch().unwrap();
         assert_eq!(out3.len(), 1);
@@ -1274,7 +1306,7 @@ mod tests {
         }
 
         // Verify committed state: only e1 and e3 should be present, head is 2
-        let (events, head) = store.read_with_head(None, None, None).unwrap();
+        let (events, head) = store.read_with_head(None, None, false, None).unwrap();
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].event.data, e1.data);
         assert_eq!(events[1].event.data, e3.data);
@@ -1351,7 +1383,7 @@ mod tests {
         }
 
         // Verify committed state and tag index behavior
-        let (events, head) = store.read_with_head(None, None, None).unwrap();
+        let (events, head) = store.read_with_head(None, None, false, None).unwrap();
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].event.data, e1.data);
         assert_eq!(events[1].event.data, e3.data);
@@ -1359,7 +1391,7 @@ mod tests {
 
         // Query by tag x returns only the first event
         let (tagx_events, _) = store
-            .read_with_head(Some(query_tag_x.clone()), None, None)
+            .read_with_head(Some(query_tag_x.clone()), None, false, None)
             .unwrap();
         assert_eq!(tagx_events.len(), 1);
         assert_eq!(tagx_events[0].event.data, e1.data);
@@ -1473,7 +1505,7 @@ mod tests {
         }
 
         // Verify committed state: we should have small (pos1), big (pos2), final_ok (pos3)
-        let (events, head) = store.read_with_head(None, None, None).unwrap();
+        let (events, head) = store.read_with_head(None, None, false, None).unwrap();
         assert_eq!(events.len(), 3);
         assert_eq!(events[0].event.event_type, small.event_type);
         assert_eq!(events[1].event.event_type, big.event_type);
@@ -1482,13 +1514,13 @@ mod tests {
 
         // Check type queries and large data integrity
         let (small_by_type, _) = store
-            .read_with_head(Some(q_type_s.clone()), None, None)
+            .read_with_head(Some(q_type_s.clone()), None, false, None)
             .unwrap();
         assert_eq!(small_by_type.len(), 1);
         assert_eq!(small_by_type[0].event.event_type, "S");
 
         let (big_by_type, _) = store
-            .read_with_head(Some(q_type_b.clone()), None, None)
+            .read_with_head(Some(q_type_b.clone()), None, false, None)
             .unwrap();
         assert_eq!(big_by_type.len(), 1);
         assert_eq!(big_by_type[0].event.event_type, "B");
@@ -1605,7 +1637,7 @@ mod tests {
         }
 
         // Verify committed state and order
-        let (events, head) = store.read_with_head(None, None, None).unwrap();
+        let (events, head) = store.read_with_head(None, None, false, None).unwrap();
         assert_eq!(events.len(), 3);
         assert_eq!(events[0].event.event_type, small.event_type);
         assert_eq!(events[1].event.event_type, big.event_type);
@@ -1614,14 +1646,14 @@ mod tests {
 
         // Query by combined type+tag should return exactly one for each
         let (small_combined, _) = store
-            .read_with_head(Some(q_s_and_x.clone()), None, None)
+            .read_with_head(Some(q_s_and_x.clone()), None, false, None)
             .unwrap();
         assert_eq!(small_combined.len(), 1);
         assert_eq!(small_combined[0].event.event_type, "S");
         assert!(small_combined[0].event.tags.iter().any(|t| t == "x"));
 
         let (big_combined, _) = store
-            .read_with_head(Some(q_b_and_y.clone()), None, None)
+            .read_with_head(Some(q_b_and_y.clone()), None, false, None)
             .unwrap();
         assert_eq!(big_combined.len(), 1);
         assert_eq!(big_combined[0].event.event_type, "B");
@@ -1652,7 +1684,7 @@ mod tests {
             .unwrap();
         assert_eq!(1, commit_position1);
 
-        let (result, head) = store.read_with_head(None, None, None).unwrap();
+        let (result, head) = store.read_with_head(None, None, false, None).unwrap();
         assert_eq!(1, result.len());
         assert_eq!(Some(1), head);
         assert_eq!(event1.uuid, result[0].event.uuid);
@@ -1666,7 +1698,7 @@ mod tests {
         assert_eq!(1, commit_position1);
 
         // Check we still have only one sequenced event.
-        let (result, head) = store.read_with_head(None, None, None).unwrap();
+        let (result, head) = store.read_with_head(None, None, false, None).unwrap();
         assert_eq!(1, result.len());
         assert_eq!(Some(1), head);
         assert_eq!(event1.uuid, result[0].event.uuid);
@@ -1683,7 +1715,7 @@ mod tests {
         assert_eq!(2, commit_position2);
 
         // Check we have two sequenced events.
-        let (result, head) = store.read_with_head(None, None, None).unwrap();
+        let (result, head) = store.read_with_head(None, None, false, None).unwrap();
         assert_eq!(2, result.len());
         assert_eq!(Some(2), head);
         assert_eq!(event1.uuid, result[0].event.uuid);
@@ -1706,7 +1738,7 @@ mod tests {
         assert_eq!(2, commit_position2);
 
         // Check we still have two sequenced events.
-        let (result, head) = store.read_with_head(None, None, None).unwrap();
+        let (result, head) = store.read_with_head(None, None, false, None).unwrap();
         assert_eq!(2, result.len());
         assert_eq!(Some(2), head);
         assert_eq!(event1.uuid, result[0].event.uuid);
@@ -1719,5 +1751,286 @@ mod tests {
         // Try with two events in different order - should get an error.
         let result = store.append(vec![event2.clone(), event1.clone()], condition1.clone());
         assert!(matches!(result, Err(DCBError::IntegrityError(_))));
+    }
+
+    #[test]
+    #[serial]
+    fn empty_query_backwards_from_and_limit() {
+        let (_tmp, mvcc, _input) = setup_db_with_standard_events();
+        let reader = mvcc.reader().unwrap();
+
+        // Forwards: all events starting from position 1
+        let fwd = read_conditional(
+            &mvcc,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            DCBQuery { items: vec![] },
+            Some(Position(1)),
+            false,
+            None,
+        )
+        .unwrap();
+        let fwd_pos: Vec<u64> = fwd.iter().map(|e| e.position).collect();
+        assert!(!fwd_pos.is_empty());
+        assert!(fwd_pos.windows(2).all(|w| w[0] < w[1]));
+
+        // Backwards: all events (from=None) in descending order
+        let back_all = read_conditional(
+            &mvcc,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            DCBQuery { items: vec![] },
+            None,
+            true,
+            None,
+        )
+        .unwrap();
+        let back_all_pos: Vec<u64> = back_all.iter().map(|e| e.position).collect();
+        let mut fwd_rev = fwd_pos.clone();
+        fwd_rev.reverse();
+        assert_eq!(fwd_rev, back_all_pos);
+
+        // Backwards with from=last should still return all (<= last)
+        let last = *fwd_pos.last().unwrap();
+        let back_from_last = read_conditional(
+            &mvcc,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            DCBQuery { items: vec![] },
+            Some(Position(last)),
+            true,
+            None,
+        )
+        .unwrap();
+        let back_from_last_pos: Vec<u64> = back_from_last.iter().map(|e| e.position).collect();
+        assert_eq!(back_from_last_pos, fwd_rev);
+
+        // Backwards with from=last-1 should drop the very last element
+        let back_from_before_last = read_conditional(
+            &mvcc,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            DCBQuery { items: vec![] },
+            Some(Position(last - 1)),
+            true,
+            None,
+        )
+        .unwrap();
+        let back_from_before_last_pos: Vec<u64> =
+            back_from_before_last.iter().map(|e| e.position).collect();
+        assert_eq!(back_from_before_last_pos, fwd_rev[1..].to_vec());
+
+        // Limit in backwards order: first 3 of the reversed forward vector
+        let back_lim3 = read_conditional(
+            &mvcc,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            DCBQuery { items: vec![] },
+            None,
+            true,
+            Some(3),
+        )
+        .unwrap();
+        let back_lim3_pos: Vec<u64> = back_lim3.iter().map(|e| e.position).collect();
+        assert_eq!(back_lim3_pos, fwd_rev[..3.min(fwd_rev.len())].to_vec());
+    }
+
+    #[test]
+    #[serial]
+    fn tags_only_single_tag_backwards() {
+        let (_tmp, mvcc, _input) = setup_db_with_standard_events();
+        let reader = mvcc.reader().unwrap();
+        let qi = DCBQuery {
+            items: vec![DCBQueryItem { types: vec![], tags: vec!["alpha".to_string()] }],
+        };
+
+        let fwd = read_conditional(
+            &mvcc,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            qi.clone(),
+            Some(Position(1)),
+            false,
+            None,
+        )
+        .unwrap();
+        let fwd_pos: Vec<u64> = fwd.iter().map(|e| e.position).collect();
+        assert!(!fwd_pos.is_empty());
+        assert!(fwd_pos.windows(2).all(|w| w[0] < w[1]));
+
+        let back_all = read_conditional(
+            &mvcc,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            qi.clone(),
+            None,
+            true,
+            None,
+        )
+        .unwrap();
+        let back_all_pos: Vec<u64> = back_all.iter().map(|e| e.position).collect();
+        let mut fwd_rev = fwd_pos.clone();
+        fwd_rev.reverse();
+        assert_eq!(back_all_pos, fwd_rev);
+
+        // from = just before the last matching position should drop the newest one in backwards order
+        let last = *fwd_pos.last().unwrap();
+        let back_from_before_last = read_conditional(
+            &mvcc,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            qi,
+            Some(Position(last - 1)),
+            true,
+            None,
+        )
+        .unwrap();
+        let back_from_before_last_pos: Vec<u64> =
+            back_from_before_last.iter().map(|e| e.position).collect();
+        assert_eq!(back_from_before_last_pos, fwd_rev[1..].to_vec());
+    }
+
+    #[test]
+    #[serial]
+    fn tags_only_multi_tag_and_backwards() {
+        let (_tmp, db, _input) = setup_db_with_standard_events();
+        let reader = db.reader().unwrap();
+        let qi = DCBQuery {
+            items: vec![DCBQueryItem { types: vec![], tags: vec!["alpha".to_string(), "gamma".to_string()] }],
+        };
+
+        // Forwards baseline
+        let fwd = read_conditional(
+            &db,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            qi.clone(),
+            Some(Position(1)),
+            false,
+            None,
+        ).unwrap();
+        let fwd_pos: Vec<u64> = fwd.iter().map(|e| e.position).collect();
+        assert!(!fwd_pos.is_empty());
+        assert!(fwd_pos.windows(2).all(|w| w[0] < w[1]));
+        // All should include both tags
+        assert!(fwd.iter().all(|e| e.event.tags.iter().any(|t| t == "alpha")));
+        assert!(fwd.iter().all(|e| e.event.tags.iter().any(|t| t == "gamma")));
+
+        // Backwards from=None should equal reverse of forwards
+        let back_all = read_conditional(
+            &db,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            qi.clone(),
+            None,
+            true,
+            None,
+        ).unwrap();
+        let mut fwd_rev = fwd_pos.clone();
+        fwd_rev.reverse();
+        let back_all_pos: Vec<u64> = back_all.iter().map(|e| e.position).collect();
+        assert_eq!(back_all_pos, fwd_rev);
+
+        // Backwards from=last should still return full reverse (<= last)
+        let last = *fwd_pos.last().unwrap();
+        let back_from_last = read_conditional(
+            &db,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            qi.clone(),
+            Some(Position(last)),
+            true,
+            None,
+        ).unwrap();
+        let back_from_last_pos: Vec<u64> = back_from_last.iter().map(|e| e.position).collect();
+        assert_eq!(back_from_last_pos, fwd_rev);
+
+        // Backwards from just before last should drop newest
+        let back_from_before_last = read_conditional(
+            &db,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            qi.clone(),
+            Some(Position(last - 1)),
+            true,
+            None,
+        ).unwrap();
+        let back_from_before_last_pos: Vec<u64> = back_from_before_last.iter().map(|e| e.position).collect();
+        assert_eq!(back_from_before_last_pos, fwd_rev[1..].to_vec());
+
+        // Backwards with limit
+        let back_lim2 = read_conditional(
+            &db,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            qi,
+            None,
+            true,
+            Some(2),
+        ).unwrap();
+        let back_lim2_pos: Vec<u64> = back_lim2.iter().map(|e| e.position).collect();
+        assert_eq!(back_lim2_pos, fwd_rev[..2.min(fwd_rev.len())].to_vec());
+    }
+
+    #[test]
+    #[serial]
+    fn tags_multi_item_two_tags_each_backwards() {
+        let (_tmp, db, _input) = setup_db_with_standard_events();
+        let reader = db.reader().unwrap();
+        // Two items: (alpha & gamma) OR (beta & delta)
+        let qi = DCBQuery {
+            items: vec![
+                DCBQueryItem { types: vec![], tags: vec!["alpha".to_string(), "gamma".to_string()] },
+                DCBQueryItem { types: vec![], tags: vec!["beta".to_string(), "delta".to_string()] },
+            ],
+        };
+
+        // Forwards baseline
+        let fwd = read_conditional(
+            &db,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            qi.clone(),
+            Some(Position(1)),
+            false,
+            None,
+        ).unwrap();
+        let fwd_pos: Vec<u64> = fwd.iter().map(|e| e.position).collect();
+        assert!(!fwd_pos.is_empty());
+        assert!(fwd_pos.windows(2).all(|w| w[0] < w[1]));
+        // Each event must satisfy one of the items fully
+        assert!(fwd.iter().all(|e| {
+            let tags = &e.event.tags;
+            let has = |a: &str| tags.iter().any(|t| t == a);
+            (has("alpha") && has("gamma")) || (has("beta") && has("delta"))
+        }));
+
+        // Backwards with None should be reverse
+        let back_all = read_conditional(
+            &db,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            qi.clone(),
+            None,
+            true,
+            None,
+        ).unwrap();
+        let mut fwd_rev = fwd_pos.clone();
+        fwd_rev.reverse();
+        let back_all_pos: Vec<u64> = back_all.iter().map(|e| e.position).collect();
+        assert_eq!(back_all_pos, fwd_rev);
+
+        // Backwards with limit 1 should return newest matching
+        let back_lim1 = read_conditional(
+            &db,
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            qi,
+            None,
+            true,
+            Some(1),
+        ).unwrap();
+        assert_eq!(back_lim1.len(), 1);
+        assert_eq!(back_lim1[0].position, *fwd_rev.first().unwrap());
     }
 }

@@ -83,7 +83,7 @@ async fn secure_grpc_end_to_end_append_and_read() {
 
     // Read them back (no query means everything)
     let mut resp = client
-        .read(None, None, None, false, None)
+        .read(None, None, false, None, false, None)
         .await
         .expect("read start");
 

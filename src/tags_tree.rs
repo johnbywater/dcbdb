@@ -585,16 +585,20 @@ pub struct TagsTreeIterator<'a> {
     dirty: &'a HashMap<PageID, Page>,
     tags_root_id: PageID,
     tag: TagHash,
-    after: Position,
+    start: Option<Position>,
+    backwards: bool,
+    // New traversal machinery similar to EventIterator
+    stack: Vec<(PageID, Option<usize>)>,
+    page_cache: HashMap<PageID, Page>,
+    // Current batch of positions (from a single page)
+    batch: Vec<Position>,
+    batch_index: usize,
     state: IterState,
 }
 
 enum IterState {
     NotStarted,
-    Ready {
-        positions: Vec<Position>,
-        index: usize,
-    },
+    Ready,
     Done,
 }
 
@@ -604,14 +608,20 @@ impl<'a> TagsTreeIterator<'a> {
         dirty: &'a HashMap<PageID, Page>,
         tags_root_id: PageID,
         tag: TagHash,
-        after: Position,
+        start: Option<Position>,
+        backwards: bool,
     ) -> Self {
         Self {
             db,
             dirty,
             tags_root_id,
             tag,
-            after,
+            start,
+            backwards,
+            stack: Vec::new(),
+            page_cache: HashMap::new(),
+            batch: Vec::new(),
+            batch_index: 0,
             state: IterState::NotStarted,
         }
     }
@@ -622,112 +632,24 @@ impl<'a> Iterator for TagsTreeIterator<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            match &mut self.state {
-                IterState::NotStarted => {
-                    // Lazily traverse the tags tree to locate positions for the tag
-                    let mut current_page_id: PageID = self.tags_root_id;
-                    let positions: Vec<Position> = loop {
-                        match self.get_page(current_page_id) {
-                            Ok(page) => match page.node {
-                                Node::TagsInternal(internal) => {
-                                    let idx = match internal.keys.binary_search(&self.tag) {
-                                        Ok(i) => i + 1,
-                                        Err(i) => i,
-                                    };
-                                    if idx >= internal.child_ids.len() {
-                                        // Corruption detected: end iteration
-                                        break Vec::new();
-                                    }
-                                    current_page_id = internal.child_ids[idx];
-                                }
-                                Node::TagsLeaf(leaf) => match leaf.keys.binary_search(&self.tag) {
-                                    Ok(i) => {
-                                        let val = &leaf.values[i];
-                                        if val.root_id == PageID(0) {
-                                            break val.positions.clone();
-                                        } else {
-                                            // Load positions from per-tag leaf page
-                                            match self.get_page(val.root_id) {
-                                                Ok(p) => match p.node {
-                                                    Node::TagLeaf(tleaf) => {
-                                                        break tleaf.positions.clone();
-                                                    }
-                                                    Node::TagInternal(internal) => {
-                                                        // Traverse per-tag internal subtree in-order to collect all positions
-                                                        let mut positions: Vec<Position> =
-                                                            Vec::new();
-                                                        let mut stack: Vec<PageID> = internal
-                                                            .child_ids
-                                                            .iter()
-                                                            .rev()
-                                                            .cloned()
-                                                            .collect();
-                                                        while let Some(pid) = stack.pop() {
-                                                            if let Ok(child_page) =
-                                                                self.get_page(pid)
-                                                            {
-                                                                match child_page.node {
-                                                                    Node::TagLeaf(tleaf) => {
-                                                                        positions
-                                                                            .extend_from_slice(
-                                                                                &tleaf.positions,
-                                                                            );
-                                                                    }
-                                                                    Node::TagInternal(
-                                                                        child_internal,
-                                                                    ) => {
-                                                                        // push children in reverse to process left-to-right
-                                                                        for cid in child_internal
-                                                                            .child_ids
-                                                                            .iter()
-                                                                            .rev()
-                                                                        {
-                                                                            stack.push(*cid);
-                                                                        }
-                                                                    }
-                                                                    _ => {}
-                                                                }
-                                                            }
-                                                        }
-                                                        break positions;
-                                                    }
-                                                    _ => break Vec::new(),
-                                                },
-                                                Err(_) => break Vec::new(),
-                                            }
-                                        }
-                                    }
-                                    Err(_) => break Vec::new(),
-                                },
-                                _ => break Vec::new(),
-                            },
-                            Err(_) => break Vec::new(),
-                        }
-                    };
-
-                    if positions.is_empty() {
-                        self.state = IterState::Done;
-                    } else {
-                        // Start from the first position strictly greater than self.after
-                        let start_idx = positions.partition_point(|p| *p <= self.after);
-                        if start_idx >= positions.len() {
+            match self.state {
+                IterState::NotStarted | IterState::Ready => {
+                    // If current batch is empty or exhausted, fetch next batch
+                    if self.batch_index >= self.batch.len() {
+                        if !self.next_batch() {
                             self.state = IterState::Done;
-                        } else {
-                            self.state = IterState::Ready {
-                                positions,
-                                index: start_idx,
-                            };
+                            continue;
                         }
+                        self.state = IterState::Ready;
                     }
-                    // Continue loop to yield the first element if any
-                }
-                IterState::Ready { positions, index } => {
-                    if *index < positions.len() {
-                        let p = positions[*index];
-                        *index += 1;
+                    if self.batch_index < self.batch.len() {
+                        let p = self.batch[self.batch_index];
+                        self.batch_index += 1;
                         return Some(p);
                     } else {
+                        // No items in batch and no more batches
                         self.state = IterState::Done;
+                        continue;
                     }
                 }
                 IterState::Done => return None,
@@ -737,14 +659,179 @@ impl<'a> Iterator for TagsTreeIterator<'a> {
 }
 
 impl<'a> TagsTreeIterator<'a> {
-    fn get_page(&self, page_id: PageID) -> DCBResult<Page> {
-        // Prefer the dirty (unflushed) page if present; otherwise read from disk
-        let page = if let Some(p) = self.dirty.get(&page_id) {
-            p.clone()
-        } else {
-            self.db.read_page(page_id)?
-        };
-        Ok(page)
+    // Return next batch (positions from a single page). Returns false if no more batches.
+    fn next_batch(&mut self) -> bool {
+        let tag = self.tag;
+        let from = self.start;
+        match self.state {
+            IterState::NotStarted => {
+                // Descend the tags tree to find the entry for the tag
+                let mut current_page_id: PageID = self.tags_root_id;
+                loop {
+                    // Use a scoped borrow to avoid holding &mut self across later mutations
+                    let mut next_child: Option<PageID> = None;
+                    let mut found_inline: Option<Vec<Position>> = None;
+                    let mut per_tag_root: Option<PageID> = None;
+                    {
+                        let page = match self.get_page_cached(current_page_id) { Ok(p) => p, Err(_) => { self.state = IterState::Done; return false; } };
+                        match &page.node {
+                            Node::TagsInternal(internal) => {
+                                let idx = match internal.keys.binary_search(&tag) {
+                                    Ok(i) => i + 1,
+                                    Err(i) => i,
+                                };
+                                if idx >= internal.child_ids.len() { self.state = IterState::Done; return false; }
+                                next_child = Some(internal.child_ids[idx]);
+                            }
+                            Node::TagsLeaf(leaf) => {
+                                match leaf.keys.binary_search(&tag) {
+                                    Ok(i) => {
+                                        let val = &leaf.values[i];
+                                        if val.root_id == PageID(0) {
+                                            found_inline = Some(val.positions.clone());
+                                        } else {
+                                            per_tag_root = Some(val.root_id);
+                                        }
+                                    }
+                                    Err(_) => { self.state = IterState::Done; return false; }
+                                }
+                            }
+                            _ => { self.state = IterState::Done; return false; }
+                        }
+                    }
+                    if let Some(child) = next_child { current_page_id = child; continue; }
+                    if let Some(mut positions) = found_inline {
+                        if !self.backwards {
+                            if let Some(f) = from {
+                                let start_idx = positions.partition_point(|p| *p < f);
+                                self.batch = positions.split_off(start_idx);
+                            } else {
+                                // No lower bound: take all positions in forward order
+                                self.batch = positions;
+                            }
+                        } else {
+                            if let Some(f) = from {
+                                // take positions <= f and iterate in reverse order
+                                let end_idx = positions.partition_point(|p| *p <= f);
+                                self.batch = positions.drain(..end_idx).collect();
+                            } else {
+                                // No upper bound: take all then reverse for backwards
+                                self.batch = positions;
+                            }
+                            self.batch.reverse();
+                        }
+                        self.batch_index = 0;
+                        return !self.batch.is_empty();
+                    }
+                    if let Some(root) = per_tag_root {
+                        self.stack.clear();
+                        self.page_cache.shrink_to_fit(); // optional, keep cache small early
+                        self.stack.push((root, None));
+                        break; // proceed to traverse subtree for first batch
+                    }
+                    // If neither inline nor per_tag_root found, done
+                    self.state = IterState::Done;
+                    return false;
+                }
+                // fallthrough to traverse subtree stack below
+            }
+            IterState::Ready => { /* continue to traverse subtree or finish */ }
+            IterState::Done => return false,
+        }
+
+        // Traverse per-tag subtree like EventIterator: DFS, each TagLeaf yields a batch
+        while let Some((page_id, mut stacked_idx)) = self.stack.pop() {
+            // Plan pushes and batch under a scoped immutable borrow first
+            let mut push_revisit: Option<(PageID, Option<usize>)> = None;
+            let mut push_child: Option<(PageID, Option<usize>)> = None;
+            let mut leaf_batch: Option<Vec<Position>> = None;
+            let backwards = self.backwards;
+            {
+                let page_ref = match self.get_page_cached(page_id) { Ok(p) => p, Err(_) => { self.state = IterState::Done; return false; } };
+                match &page_ref.node {
+                    Node::TagInternal(internal) => {
+                        if stacked_idx.is_none() && !internal.keys.is_empty() {
+                            stacked_idx = match from {
+                                Some(f) => {
+                                    match internal.keys.binary_search(&f) {
+                                        Ok(i) => Some(i + 1),
+                                        Err(i) => Some(i),
+                                    }
+                                }
+                                None => {
+                                    if !backwards { Some(0) } else { Some(internal.child_ids.len().saturating_sub(1)) }
+                                }
+                            };
+                        }
+                        let child_idx = stacked_idx.unwrap_or(if !backwards { 0 } else { internal.child_ids.len().saturating_sub(1) });
+                        if child_idx < internal.child_ids.len() {
+                            // Determine revisit direction based on backwards flag
+                            if !backwards {
+                                if child_idx + 1 < internal.child_ids.len() {
+                                    push_revisit = Some((page_id, Some(child_idx + 1)));
+                                }
+                            } else {
+                                if child_idx > 0 {
+                                    push_revisit = Some((page_id, Some(child_idx - 1)));
+                                }
+                            }
+                            push_child = Some((internal.child_ids[child_idx], None));
+                        }
+                    }
+                    Node::TagLeaf(tleaf) => {
+                        if !tleaf.positions.is_empty() {
+                            if !backwards {
+                                if let Some(f) = from {
+                                    let start_idx = tleaf.positions.partition_point(|p| *p < f);
+                                    if start_idx < tleaf.positions.len() {
+                                        let batch = tleaf.positions[start_idx..].to_vec();
+                                        leaf_batch = Some(batch);
+                                    }
+                                } else {
+                                    // No lower bound: entire leaf in forward order
+                                    leaf_batch = Some(tleaf.positions.clone());
+                                }
+                            } else {
+                                if let Some(f) = from {
+                                    let end_idx = tleaf.positions.partition_point(|p| *p <= f);
+                                    if end_idx > 0 {
+                                        let mut batch: Vec<Position> = tleaf.positions[..end_idx].to_vec();
+                                        batch.reverse();
+                                        leaf_batch = Some(batch);
+                                    }
+                                } else {
+                                    // No upper bound: entire leaf reversed
+                                    let mut batch = tleaf.positions.clone();
+                                    batch.reverse();
+                                    leaf_batch = Some(batch);
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(rev) = push_revisit { self.stack.push(rev); }
+            if let Some(ch) = push_child { self.stack.push(ch); }
+            if let Some(batch) = leaf_batch {
+                self.batch = batch;
+                self.batch_index = 0;
+                return true;
+            }
+        }
+        // No more leaves/batches
+        false
+    }
+
+    fn get_page_cached(&mut self, page_id: PageID) -> DCBResult<&Page> {
+        if let Some(p) = self.dirty.get(&page_id) {
+            return Ok(p);
+        }
+        if !self.page_cache.contains_key(&page_id) {
+            let page = self.db.read_page(page_id)?;
+            self.page_cache.insert(page_id, page);
+        }
+        Ok(self.page_cache.get(&page_id).expect("cached page missing"))
     }
 }
 
@@ -755,6 +842,34 @@ mod tests {
     use tempfile::{TempDir, tempdir};
 
     static VERBOSE: bool = false;
+
+        // Test helper: iterate a range of `from` positions and assert lookup returns
+        // the positions that were inserted for the given tag and are >= `from`.
+        fn verify_tag_lookup_range(db: &Mvcc, tag: TagHash, inserted: &Vec<Position>, backwards: bool) {
+            // Try a range that goes slightly below the first position and past the last.
+            let len = inserted.len();
+            for i in 0..(len + 3) {
+                let start = Position(i as u64);
+                let reader = db.reader().unwrap();
+                let got = tags_tree_lookup(db, reader.tags_tree_root_id, tag, start, backwards).unwrap();
+                let expected: Vec<Position> = if !backwards {
+                    inserted
+                        .iter()
+                        .cloned()
+                        .filter(|p| p.0 >= start.0)
+                        .collect()
+                } else {
+                    let mut v: Vec<Position> = inserted
+                        .iter()
+                        .cloned()
+                        .filter(|p| p.0 <= start.0)
+                        .collect();
+                    v.reverse();
+                    v
+                };
+                assert_eq!(expected, got, "from={:?}, backwards={}", start, backwards);
+            }
+        }
 
     fn construct_db(page_size: usize) -> (TempDir, Mvcc) {
         let temp_dir = tempdir().unwrap();
@@ -772,10 +887,12 @@ mod tests {
         mvcc: &Mvcc,
         tags_root_id: PageID,
         tag: TagHash,
+        from: Position,
+        backwards: bool,
     ) -> DCBResult<Vec<Position>> {
         // Reuse the iterator to traverse and collect all positions for the tag
         let dirty = HashMap::new();
-        let iter = TagsTreeIterator::new(mvcc, &dirty, tags_root_id, tag, Position(0));
+        let iter = TagsTreeIterator::new(mvcc, &dirty, tags_root_id, tag, Some(from), backwards);
         Ok(iter.collect())
     }
 
@@ -827,9 +944,9 @@ mod tests {
         // Commit and verify lookup_tag on some keys
         db.commit(&mut writer).unwrap();
         let reader = db.reader().unwrap();
-        let res_10 = tags_tree_lookup(&db, reader.tags_tree_root_id, th(10)).unwrap();
+        let res_10 = tags_tree_lookup(&db, reader.tags_tree_root_id, th(10), Position(1), false).unwrap();
         assert!(!res_10.is_empty());
-        let res_missing = tags_tree_lookup(&db, reader.tags_tree_root_id, th(999)).unwrap();
+        let res_missing = tags_tree_lookup(&db, reader.tags_tree_root_id, th(999), Position(1), false).unwrap();
         assert!(res_missing.is_empty());
     }
 
@@ -848,15 +965,15 @@ mod tests {
         db.commit(&mut writer).unwrap();
 
         let reader = db.reader().unwrap();
-        let vals = tags_tree_lookup(&db, reader.tags_tree_root_id, t1).unwrap();
+        let vals = tags_tree_lookup(&db, reader.tags_tree_root_id, t1, Position(1), false).unwrap();
         assert_eq!(vals, vec![p1, p2]);
         // non-existent
-        let vals_none = tags_tree_lookup(&db, reader.tags_tree_root_id, th(1000)).unwrap();
+        let vals_none = tags_tree_lookup(&db, reader.tags_tree_root_id, th(1000), Position(1), false).unwrap();
         assert!(vals_none.is_empty());
     }
 
     #[test]
-    fn test_insert_tags_and_positions_until_split_leaf_one_writer() {
+    fn split_tags_tree_leaf_one_writer() {
         // Setup a temporary database
         let (_temp_dir, db) = construct_db(256);
 
@@ -922,10 +1039,16 @@ mod tests {
                 assert_eq!(val.positions[0], appended_pos);
             }
         }
+
+        // Also verify lookup across a range of 'from' positions for a representative tag.
+        db.commit(&mut writer).unwrap();
+        let (tag_last, pos_last) = appended.last().cloned().unwrap();
+        verify_tag_lookup_range(&db, tag_last, &vec![pos_last], false);
+        verify_tag_lookup_range(&db, tag_last, &vec![pos_last], true);
     }
 
     #[test]
-    fn test_insert_tags_and_positions_until_split_internal_one_writer() {
+    fn split_tags_tree_internal_one_writer() {
         // Setup a temporary database
         let (_temp_dir, db) = construct_db(256);
 
@@ -1012,13 +1135,17 @@ mod tests {
         db.commit(&mut writer).unwrap();
         let reader = db.reader().unwrap();
         for (tag, pos) in &appended {
-            let positions = tags_tree_lookup(&db, reader.tags_tree_root_id, *tag).unwrap();
+            let positions = tags_tree_lookup(&db, reader.tags_tree_root_id, *tag, Position(1), false).unwrap();
             assert_eq!(positions, vec![*pos]);
         }
+        // Also verify 'from' filtering using a representative tag
+        let (tag_last, pos_last) = appended.last().cloned().unwrap();
+        verify_tag_lookup_range(&db, tag_last, &vec![pos_last], false);
+        verify_tag_lookup_range(&db, tag_last, &vec![pos_last], true);
     }
 
     #[test]
-    fn test_insert_tags_and_positions_until_split_internal_many_writers() {
+    fn split_tags_tree_internal_many_writers() {
         // Setup a temporary database
         let (_temp_dir, db) = construct_db(512);
 
@@ -1110,13 +1237,17 @@ mod tests {
         // Validate lookup_tag for each inserted tag
         let reader = db.reader().unwrap();
         for (tag, pos) in &appended {
-            let positions = tags_tree_lookup(&db, reader.tags_tree_root_id, *tag).unwrap();
+            let positions = tags_tree_lookup(&db, reader.tags_tree_root_id, *tag, Position(1), false).unwrap();
             assert_eq!(positions, vec![*pos]);
         }
+        // Also verify 'from' filtering using a representative tag
+        let (tag_last, pos_last) = appended.last().cloned().unwrap();
+        verify_tag_lookup_range(&db, tag_last, &vec![pos_last], false);
+        verify_tag_lookup_range(&db, tag_last, &vec![pos_last], true);
     }
 
     #[test]
-    fn test_overflow_tag_positions_to_tag_leaf_node_one_writer() {
+    fn overflow_to_per_tag_leaf_one_writer() {
         // Use small page size to force overflow with inline positions
         let (_tmp, db) = construct_db(256);
         let mut writer = db.writer().unwrap();
@@ -1157,10 +1288,19 @@ mod tests {
             }
             other => panic!("Expected TagsLeaf root, got {:?}", other),
         }
+
+        // Persist and validate lookup_tag for each inserted tag
+        db.commit(&mut writer).unwrap();
+        let reader = db.reader().unwrap();
+        let positions = tags_tree_lookup(&db, reader.tags_tree_root_id, tag, Position(1), false).unwrap();
+        assert_eq!(inserted, positions);
+        // Verify range of 'from' values produce the expected suffix of positions
+        verify_tag_lookup_range(&db, tag, &inserted, false);
+        verify_tag_lookup_range(&db, tag, &inserted, true);
     }
 
     #[test]
-    fn test_overflow_tag_positions_to_tag_leaf_node_many_writers() {
+    fn overflow_to_per_tag_leaf_many_writers() {
         // Use small page size to force overflow with inline positions
         let (_tmp, db) = construct_db(256);
         let tag = th(777);
@@ -1202,10 +1342,18 @@ mod tests {
             }
             other => panic!("Expected TagsLeaf root, got {:?}", other),
         }
+
+        // Persist and validate lookup_tag for each inserted tag
+        let reader = db.reader().unwrap();
+        let positions = tags_tree_lookup(&db, reader.tags_tree_root_id, tag, Position(1), false).unwrap();
+        assert_eq!(inserted, positions);
+        // Verify range of 'from' values produce the expected suffix of positions
+        verify_tag_lookup_range(&db, tag, &inserted, false);
+        verify_tag_lookup_range(&db, tag, &inserted, true);
     }
 
     #[test]
-    fn test_split_tag_leaf_node_one_writer() {
+    fn split_per_tag_leaf_one_writer() {
         // Use small page size to force per-tag TagLeaf split after migration
         let (_tmp, db) = construct_db(256);
         let mut writer = db.writer().unwrap();
@@ -1264,10 +1412,19 @@ mod tests {
             }
             other => panic!("Expected TagsLeaf root, got {:?}", other),
         }
+
+        // Persist and validate lookup_tag for each inserted tag
+        db.commit(&mut writer).unwrap();
+        let reader = db.reader().unwrap();
+        let positions = tags_tree_lookup(&db, reader.tags_tree_root_id, tag, Position(1), false).unwrap();
+        assert_eq!(inserted, positions);
+        // Verify range of 'from' values produce the expected suffix of positions
+        verify_tag_lookup_range(&db, tag, &inserted, false);
+        verify_tag_lookup_range(&db, tag, &inserted, true);
     }
 
     #[test]
-    fn test_split_tag_leaf_node_many_writers() {
+    fn split_per_tag_leaf_many_writers() {
         // Use small page size to force per-tag TagLeaf split after migration
         let (_tmp, db) = construct_db(256);
         let tag = th(888);
@@ -1329,20 +1486,30 @@ mod tests {
             }
             other => panic!("Expected TagsLeaf root, got {:?}", other),
         }
+
+        let reader = db.reader().unwrap();
+        let positions = tags_tree_lookup(&db, reader.tags_tree_root_id, tag, Position(1), false).unwrap();
+        assert_eq!(inserted, positions);
+        // Verify range of 'from' values produce the expected suffix of positions
+        verify_tag_lookup_range(&db, tag, &inserted, false);
+        verify_tag_lookup_range(&db, tag, &inserted, true);
     }
 
     #[test]
-    fn test_split_tag_internal_node_one_writer() {
+    fn split_per_tag_internal_one_writer() {
         // Use small page size to force multiple splits within the per-tag subtree
         let (_tmp, db) = construct_db(256);
         let mut writer = db.writer().unwrap();
         let tag = th(999);
+
+        let mut inserted: Vec<Position> = Vec::new();
 
         // First, drive migration (inline -> TagLeaf) and the first per-tag leaf split to create a TagInternal root
         for _ in 0..31 {
             // 30 to migrate, +1 to split TagLeaf
             let p = writer.issue_position();
             tags_tree_insert(&db, &mut writer, tag, p).unwrap();
+            inserted.push(p);
         }
 
         // Now keep inserting until the per-tag TagInternal root itself splits (i.e., its child is TagInternal)
@@ -1384,19 +1551,31 @@ mod tests {
             // Insert another position and continue
             let p = writer.issue_position();
             tags_tree_insert(&db, &mut writer, tag, p).unwrap();
+            inserted.push(p);
 
             safety -= 1;
             if safety == 0 {
                 panic!("Exceeded safety limit without causing per-tag internal split");
             }
         }
+
+        db.commit(&mut writer).unwrap();
+        let reader = db.reader().unwrap();
+        let positions = tags_tree_lookup(&db, reader.tags_tree_root_id, tag, Position(1), false).unwrap();
+        assert_eq!(inserted, positions);
+        // Verify range of 'from' values produce the expected suffix of positions
+        verify_tag_lookup_range(&db, tag, &inserted, false);
+        verify_tag_lookup_range(&db, tag, &inserted, true);
+
     }
 
     #[test]
-    fn test_split_tag_internal_node_many_writers() {
+    fn split_per_tag_internal_many_writers() {
         // Use small page size to force multiple splits within the per-tag subtree
         let (_tmp, db) = construct_db(256);
         let tag = th(999);
+
+        let mut inserted: Vec<Position> = Vec::new();
 
         // First, drive migration (inline -> TagLeaf) and the first per-tag leaf split to create a TagInternal root
         for _ in 0..31 {
@@ -1405,6 +1584,7 @@ mod tests {
             let p = writer.issue_position();
             tags_tree_insert(&db, &mut writer, tag, p).unwrap();
             db.commit(&mut writer).unwrap();
+            inserted.push(p);
         }
 
         // Now keep inserting until the per-tag TagInternal root itself splits (i.e., its child is TagInternal)
@@ -1446,6 +1626,7 @@ mod tests {
             // Insert another position and continue
             let p = writer.issue_position();
             tags_tree_insert(&db, &mut writer, tag, p).unwrap();
+            inserted.push(p);
             db.commit(&mut writer).unwrap();
 
             safety -= 1;
@@ -1453,10 +1634,17 @@ mod tests {
                 panic!("Exceeded safety limit without causing per-tag internal split");
             }
         }
+
+        let reader = db.reader().unwrap();
+        let positions = tags_tree_lookup(&db, reader.tags_tree_root_id, tag, Position(1), false).unwrap();
+        assert_eq!(inserted, positions);
+        // Verify range of 'from' values produce the expected suffix of positions
+        verify_tag_lookup_range(&db, tag, &inserted, false);
+        verify_tag_lookup_range(&db, tag, &inserted, true);
     }
 
     #[test]
-    fn test_tags_tree_iter_collects_inserted_positions() {
+    fn tags_tree_iter_collects_inserted_positions() {
         let (_tmp, db) = construct_db(1024);
         let mut writer = db.writer().unwrap();
         let tag = th(55);
@@ -1471,34 +1659,41 @@ mod tests {
         let reader = db.reader().unwrap();
         let dirty = HashMap::new();
 
-        // after = 0 -> all positions
+        // from first -> all positions
+        let after_first = inserted[0];
         let collected_all: Vec<Position> =
-            TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, tag, Position(0))
+            TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, tag, Some(after_first), false)
                 .collect();
         assert_eq!(collected_all, inserted);
 
-        // after = first -> drop first
-        let after_first = inserted[0];
-        let collected_after_first: Vec<Position> =
-            TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, tag, after_first)
+        // from second -> drop first
+        let from_first = inserted[1];
+        let collected_fron_first: Vec<Position> =
+            TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, tag, Some(from_first), false)
                 .collect();
-        assert_eq!(collected_after_first, inserted[1..].to_vec());
+        assert_eq!(collected_fron_first, inserted[1..].to_vec());
 
-        // after = middle -> drop up to and including that element
-        let after_mid = inserted[2];
-        let collected_after_mid: Vec<Position> =
-            TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, tag, after_mid).collect();
-        assert_eq!(collected_after_mid, inserted[3..].to_vec());
+        // from middle -> drop up to that element
+        let from_mid = inserted[3];
+        let collected_from_mid: Vec<Position> =
+            TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, tag, Some(from_mid), false).collect();
+        assert_eq!(collected_from_mid, inserted[3..].to_vec());
 
-        // after = last -> empty
-        let after_last = *inserted.last().unwrap();
+        // from last -> empty
+        let from_last = *inserted.last().unwrap();
+        let collected_from_last: Vec<Position> =
+            TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, tag, Some(from_last), false).collect();
+        assert_eq!(collected_from_last, inserted[inserted.len()-1..].to_vec());
+
+        // from last + 1 -> empty
+        let after_last = Position(from_last.0 + 1);
         let collected_empty: Vec<Position> =
-            TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, tag, after_last).collect();
+            TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, tag, Some(after_last), false).collect();
         assert!(collected_empty.is_empty());
 
         // non-existent tag yields empty iterator regardless of after
         let empty_iter =
-            TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, th(9999), Position(0));
+            TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, th(9999), Some(Position(0)), false);
         assert_eq!(empty_iter.collect::<Vec<Position>>(), Vec::new());
     }
 
@@ -1529,7 +1724,7 @@ mod tests {
     //         let reader = db.reader().unwrap();
     //         let start_lookup = Instant::now();
     //         for n in 0..(size as u64) {
-    //             let res = tags_tree_lookup(&db, reader.tags_tree_root_id, th(n)).unwrap();
+    //             let res = tags_tree_lookup(&db, reader.tags_tree_root_id, th(n), Position(1), false).unwrap();
     //             hint::black_box(&res);
     //         }
     //         let lookup_elapsed = start_lookup.elapsed();
@@ -1570,7 +1765,7 @@ mod tests {
     //         // Lookup phase
     //         let reader = db.reader().unwrap();
     //         let start_lookup = Instant::now();
-    //         let res = tags_tree_lookup(&db, reader.tags_tree_root_id, tag).unwrap();
+    //         let res = tags_tree_lookup(&db, reader.tags_tree_root_id, tag, Position(1), false).unwrap();
     //         hint::black_box(&res);
     //         let lookup_elapsed = start_lookup.elapsed();
     //

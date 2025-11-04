@@ -468,7 +468,8 @@ Request to read events from the event store.
 | Field        | Type                           | Description                                                           |
 |--------------|--------------------------------|-----------------------------------------------------------------------|
 | `query`      | **optional**&nbsp;`QueryProto` | Optional filter for selecting specific event types or tags.           |
-| `after`      | **optional**&nbsp;`uint64`     | Start reading after this sequence number.                             |
+| `start`      | **optional**&nbsp;`uint64`     | Read from this sequence number.                                       |
+| `backwards`  | **optional**&nbsp;`bool`       | Start reading backwards.                                              |
 | `limit`      | **optional**&nbsp;`uint32`     | Maximum number of events to return.                                   |
 | `subscribe`  | **optional**&nbsp;`bool`       | If true, the stream remains open and continues delivering new events. |
 | `batch_size` | **optional**&nbsp;`uint32`     | Optional batch size hint for streaming responses.                     |
@@ -635,7 +636,7 @@ cb = QueryProto(
 # Read events for a decision model
 read_request = ReadRequestProto(
     query=cb,
-    after=None,
+    start=None,
     limit=None,
     subscribe=False,
     batch_size=None,
@@ -692,13 +693,8 @@ except grpc.RpcError as e:
         raise
 
 # Subscribe to all events for a projection
-subscription_request = ReadRequestProto(
-    query=None,
-    after=None,
-    limit=None,
-    subscribe=True,
-    batch_size=None,
-)
+subscription_request = ReadRequestProto()
+
 subscription_stream = client.Read(subscription_request)
 
 # Build an up-to-date view
@@ -775,13 +771,14 @@ materialized views in CQRS.
 
 Arguments:
 
-| Parameter    | Type               | Description                                                                                  |
-|--------------|--------------------|----------------------------------------------------------------------------------------------|
-| `query`      | `Option<DCBQuery>` | Optional structured query to filter events (by tags, event types, etc).                      |
-| `after`      | `Option<u64>`      | Start reading *after* this sequence number. Only events with greater positions are returned. |
-| `limit`      | `Option<u32>`      | Optional cap on the number of events to retrieve.                                            |
-| `subscribe`  | `bool`             | If `true`, keeps the stream open to deliver future events as they arrive.                    |
-| `batch_size` | `Option<u32>`      | Optional hint for how many events to buffer per batch from the server.                       |
+| Parameter    | Type               | Description                                                                                                                                                  |
+|--------------|--------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `query`      | `Option<DCBQuery>` | Optional structured query to filter events (by tags, event types, etc).                                                                                      |
+| `start`      | `Option<u64>`      | Read events *from* this sequence number. Only events with positions greater than or equal will be returned (or less than or equal if `backwards` is `true`.  |
+| `backwards`  | `bool`             | If `true` events will be read backwards, either from the given position or from the last recorded event.                                                     |
+| `limit`      | `Option<u32>`      | Optional cap on the number of events to retrieve.                                                                                                            |
+| `subscribe`  | `bool`             | If `true`, keeps the stream open to deliver future events as they arrive.                                                                                    |
+| `batch_size` | `Option<u32>`      | Optional hint for how many events to buffer per batch from the server.                                                                                       |
 
 Returns a "read response" instance from which `DCBSequencedEvent` instances, and the most relevant "last known" sequence number, can be obtained.
 
@@ -897,11 +894,11 @@ Here's an example of how to use the synchronous Rust client for UmaDB:
 
 ```rust
 use std::sync::Arc;
-use uuid::Uuid;
 use umadb::dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreSync, DCBQuery, DCBQueryItem,
 };
 use umadb::grpc::UmaDBClient;
+use uuid::Uuid;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Connect to the gRPC server
@@ -916,7 +913,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Read events for a decision model
-    let mut read_response = client.read(Some(cb.clone()), None, None, false, None)?;
+    let mut read_response = client.read(Some(cb.clone()), None, false, None, false, None)?;
 
     // Build decision model
     while let Some(result) = read_response.next() {
@@ -959,7 +956,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         event_type: "example".to_string(),
         tags: vec!["tag1".to_string(), "tag2".to_string()],
         data: b"Hello, world!".to_vec(),
-        uuid: Some(Uuid::new_v4()),  // different UUID
+        uuid: Some(Uuid::new_v4()), // different UUID
     };
 
     let conflicting_result = client.append(
@@ -979,7 +976,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Appending with identical event IDs and append condition is idempotent.
-    println!("Retrying to append event at position: {:?}", last_known_position);
+    println!(
+        "Retrying to append event at position: {:?}",
+        last_known_position
+    );
     let commit_position2 = client.append(
         vec![event.clone()],
         Some(DCBAppendCondition {
@@ -989,13 +989,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     if commit_position1 == commit_position2 {
-        println!("Append method returned same commit position: {}", commit_position2);
+        println!(
+            "Append method returned same commit position: {}",
+            commit_position2
+        );
     } else {
         panic!("Expected idempotent retry!")
     }
 
     // Subscribe to all events for a projection
-    let mut subscription = client.read(None, None, None, true, None)?;
+    let mut subscription = client.read(None, None, false, None, true, None)?;
 
     // Build an up-to-date view
     while let Some(result) = subscription.next() {
@@ -1020,16 +1023,16 @@ Here's an example of how to use the asynchronous Rust client for UmaDB:
 ```rust
 use futures::StreamExt;
 use std::sync::Arc;
-use uuid::Uuid;
 use umadb::dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreAsync, DCBQuery, DCBQueryItem,
 };
 use umadb::grpc::AsyncUmaDBClient;
+use uuid::Uuid;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Connect to the gRPC server
-    let client = AsyncUmaDBClient::connect("http://localhost:50051", None).await?;
+    let client = AsyncUmaDBClient::connect("https://localhost:50051", None).await?;
 
     // Define a consistency boundary
     let cb = Arc::new(DCBQuery {
@@ -1041,7 +1044,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Read events for a decision model
     let mut read_response = client
-        .read(Some(cb.clone()), None, None, false, None)
+        .read(Some(cb.clone()), None, false, None, false, None)
         .await?;
 
     // Build decision model
@@ -1079,7 +1082,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }),
         )
         .await?;
-    
+
     println!("Appended event at position: {}", commit_position1);
 
     // Append conflicting event - expect an error
@@ -1087,7 +1090,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         event_type: "example".to_string(),
         tags: vec!["tag1".to_string(), "tag2".to_string()],
         data: b"Hello, world!".to_vec(),
-        uuid: Some(Uuid::new_v4()),  // different UUID
+        uuid: Some(Uuid::new_v4()), // different UUID
     };
 
     let conflicting_result = client
@@ -1109,7 +1112,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Appending with identical events IDs and append conditions is idempotent.
-    println!("Retrying to append event at position: {:?}", last_known_position);
+    println!(
+        "Retrying to append event at position: {:?}",
+        last_known_position
+    );
     let commit_position2 = client
         .append(
             vec![event.clone()],
@@ -1119,15 +1125,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }),
         )
         .await?;
-    
+
     if commit_position1 == commit_position2 {
-        println!("Append method returned same commit position: {}", commit_position2);
+        println!(
+            "Append method returned same commit position: {}",
+            commit_position2
+        );
     } else {
         panic!("Expected idempotent retry!")
     }
 
     // Subscribe to all events for a projection
-    let mut subscription = client.read(None, None, None, true, None).await?;
+    let mut subscription = client.read(None, None, false, None, true, None).await?;
 
     // Build an up-to-date view
     while let Some(result) = subscription.next().await {

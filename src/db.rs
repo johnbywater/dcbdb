@@ -157,7 +157,6 @@ impl DCBEventStoreSync for UmaDB {
         let q = query.unwrap_or(Arc::new(DCBQuery { items: vec![] }));
         let from = start.map(|after| Position(after));
 
-
         // Delegate to read_conditional
         let events = read_conditional(
             mvcc,
@@ -419,7 +418,8 @@ pub fn read_conditional(
     let mut tag_iters: Vec<PositionTagQiidIterator<_>> = Vec::new();
     for (tag, qiids) in tag_qiis.iter() {
         let tag_hash: TagHash = tag_to_hash(tag);
-        let positions_iter = TagsTreeIterator::new(mvcc, dirty, tags_tree_root_id, tag_hash, start, backwards); // yields positions for tag
+        let positions_iter =
+            TagsTreeIterator::new(mvcc, dirty, tags_tree_root_id, tag_hash, start, backwards); // yields positions for tag
         tag_iters.push(PositionTagQiidIterator::new(
             positions_iter,
             tag.clone(),
@@ -1177,7 +1177,9 @@ mod tests {
                 tags: vec!["foo".to_string()],
             }],
         });
-        let mut resp2 = store.read(Some(query), None, false, None, false, None).unwrap();
+        let mut resp2 = store
+            .read(Some(query), None, false, None, false, None)
+            .unwrap();
         let out2 = resp2.next_batch().unwrap();
         assert_eq!(out2.len(), 2);
         assert!(out2.iter().all(|e| e.event.tags.iter().any(|t| t == "foo")));
@@ -1841,7 +1843,10 @@ mod tests {
         let (_tmp, mvcc, _input) = setup_db_with_standard_events();
         let reader = mvcc.reader().unwrap();
         let qi = DCBQuery {
-            items: vec![DCBQueryItem { types: vec![], tags: vec!["alpha".to_string()] }],
+            items: vec![DCBQueryItem {
+                types: vec![],
+                tags: vec!["alpha".to_string()],
+            }],
         };
 
         let fwd = read_conditional(
@@ -1896,7 +1901,10 @@ mod tests {
         let (_tmp, db, _input) = setup_db_with_standard_events();
         let reader = db.reader().unwrap();
         let qi = DCBQuery {
-            items: vec![DCBQueryItem { types: vec![], tags: vec!["alpha".to_string(), "gamma".to_string()] }],
+            items: vec![DCBQueryItem {
+                types: vec![],
+                tags: vec!["alpha".to_string(), "gamma".to_string()],
+            }],
         };
 
         // Forwards baseline
@@ -1908,13 +1916,20 @@ mod tests {
             Some(Position(1)),
             false,
             None,
-        ).unwrap();
+        )
+        .unwrap();
         let fwd_pos: Vec<u64> = fwd.iter().map(|e| e.position).collect();
         assert!(!fwd_pos.is_empty());
         assert!(fwd_pos.windows(2).all(|w| w[0] < w[1]));
         // All should include both tags
-        assert!(fwd.iter().all(|e| e.event.tags.iter().any(|t| t == "alpha")));
-        assert!(fwd.iter().all(|e| e.event.tags.iter().any(|t| t == "gamma")));
+        assert!(
+            fwd.iter()
+                .all(|e| e.event.tags.iter().any(|t| t == "alpha"))
+        );
+        assert!(
+            fwd.iter()
+                .all(|e| e.event.tags.iter().any(|t| t == "gamma"))
+        );
 
         // Backwards from=None should equal reverse of forwards
         let back_all = read_conditional(
@@ -1925,7 +1940,8 @@ mod tests {
             None,
             true,
             None,
-        ).unwrap();
+        )
+        .unwrap();
         let mut fwd_rev = fwd_pos.clone();
         fwd_rev.reverse();
         let back_all_pos: Vec<u64> = back_all.iter().map(|e| e.position).collect();
@@ -1941,7 +1957,8 @@ mod tests {
             Some(Position(last)),
             true,
             None,
-        ).unwrap();
+        )
+        .unwrap();
         let back_from_last_pos: Vec<u64> = back_from_last.iter().map(|e| e.position).collect();
         assert_eq!(back_from_last_pos, fwd_rev);
 
@@ -1954,8 +1971,10 @@ mod tests {
             Some(Position(last - 1)),
             true,
             None,
-        ).unwrap();
-        let back_from_before_last_pos: Vec<u64> = back_from_before_last.iter().map(|e| e.position).collect();
+        )
+        .unwrap();
+        let back_from_before_last_pos: Vec<u64> =
+            back_from_before_last.iter().map(|e| e.position).collect();
         assert_eq!(back_from_before_last_pos, fwd_rev[1..].to_vec());
 
         // Backwards with limit
@@ -1967,7 +1986,8 @@ mod tests {
             None,
             true,
             Some(2),
-        ).unwrap();
+        )
+        .unwrap();
         let back_lim2_pos: Vec<u64> = back_lim2.iter().map(|e| e.position).collect();
         assert_eq!(back_lim2_pos, fwd_rev[..2.min(fwd_rev.len())].to_vec());
     }
@@ -1980,8 +2000,14 @@ mod tests {
         // Two items: (alpha & gamma) OR (beta & delta)
         let qi = DCBQuery {
             items: vec![
-                DCBQueryItem { types: vec![], tags: vec!["alpha".to_string(), "gamma".to_string()] },
-                DCBQueryItem { types: vec![], tags: vec!["beta".to_string(), "delta".to_string()] },
+                DCBQueryItem {
+                    types: vec![],
+                    tags: vec!["alpha".to_string(), "gamma".to_string()],
+                },
+                DCBQueryItem {
+                    types: vec![],
+                    tags: vec!["beta".to_string(), "delta".to_string()],
+                },
             ],
         };
 
@@ -1994,7 +2020,8 @@ mod tests {
             Some(Position(1)),
             false,
             None,
-        ).unwrap();
+        )
+        .unwrap();
         let fwd_pos: Vec<u64> = fwd.iter().map(|e| e.position).collect();
         assert!(!fwd_pos.is_empty());
         assert!(fwd_pos.windows(2).all(|w| w[0] < w[1]));
@@ -2014,7 +2041,8 @@ mod tests {
             None,
             true,
             None,
-        ).unwrap();
+        )
+        .unwrap();
         let mut fwd_rev = fwd_pos.clone();
         fwd_rev.reverse();
         let back_all_pos: Vec<u64> = back_all.iter().map(|e| e.position).collect();
@@ -2029,7 +2057,8 @@ mod tests {
             None,
             true,
             Some(1),
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(back_lim1.len(), 1);
         assert_eq!(back_lim1[0].position, *fwd_rev.first().unwrap());
     }

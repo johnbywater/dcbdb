@@ -673,33 +673,49 @@ impl<'a> TagsTreeIterator<'a> {
                     let mut found_inline: Option<Vec<Position>> = None;
                     let mut per_tag_root: Option<PageID> = None;
                     {
-                        let page = match self.get_page_cached(current_page_id) { Ok(p) => p, Err(_) => { self.state = IterState::Done; return false; } };
+                        let page = match self.get_page_cached(current_page_id) {
+                            Ok(p) => p,
+                            Err(_) => {
+                                self.state = IterState::Done;
+                                return false;
+                            }
+                        };
                         match &page.node {
                             Node::TagsInternal(internal) => {
                                 let idx = match internal.keys.binary_search(&tag) {
                                     Ok(i) => i + 1,
                                     Err(i) => i,
                                 };
-                                if idx >= internal.child_ids.len() { self.state = IterState::Done; return false; }
+                                if idx >= internal.child_ids.len() {
+                                    self.state = IterState::Done;
+                                    return false;
+                                }
                                 next_child = Some(internal.child_ids[idx]);
                             }
-                            Node::TagsLeaf(leaf) => {
-                                match leaf.keys.binary_search(&tag) {
-                                    Ok(i) => {
-                                        let val = &leaf.values[i];
-                                        if val.root_id == PageID(0) {
-                                            found_inline = Some(val.positions.clone());
-                                        } else {
-                                            per_tag_root = Some(val.root_id);
-                                        }
+                            Node::TagsLeaf(leaf) => match leaf.keys.binary_search(&tag) {
+                                Ok(i) => {
+                                    let val = &leaf.values[i];
+                                    if val.root_id == PageID(0) {
+                                        found_inline = Some(val.positions.clone());
+                                    } else {
+                                        per_tag_root = Some(val.root_id);
                                     }
-                                    Err(_) => { self.state = IterState::Done; return false; }
                                 }
+                                Err(_) => {
+                                    self.state = IterState::Done;
+                                    return false;
+                                }
+                            },
+                            _ => {
+                                self.state = IterState::Done;
+                                return false;
                             }
-                            _ => { self.state = IterState::Done; return false; }
                         }
                     }
-                    if let Some(child) = next_child { current_page_id = child; continue; }
+                    if let Some(child) = next_child {
+                        current_page_id = child;
+                        continue;
+                    }
                     if let Some(mut positions) = found_inline {
                         if !self.backwards {
                             if let Some(f) = from {
@@ -747,23 +763,35 @@ impl<'a> TagsTreeIterator<'a> {
             let mut leaf_batch: Option<Vec<Position>> = None;
             let backwards = self.backwards;
             {
-                let page_ref = match self.get_page_cached(page_id) { Ok(p) => p, Err(_) => { self.state = IterState::Done; return false; } };
+                let page_ref = match self.get_page_cached(page_id) {
+                    Ok(p) => p,
+                    Err(_) => {
+                        self.state = IterState::Done;
+                        return false;
+                    }
+                };
                 match &page_ref.node {
                     Node::TagInternal(internal) => {
                         if stacked_idx.is_none() && !internal.keys.is_empty() {
                             stacked_idx = match from {
-                                Some(f) => {
-                                    match internal.keys.binary_search(&f) {
-                                        Ok(i) => Some(i + 1),
-                                        Err(i) => Some(i),
-                                    }
-                                }
+                                Some(f) => match internal.keys.binary_search(&f) {
+                                    Ok(i) => Some(i + 1),
+                                    Err(i) => Some(i),
+                                },
                                 None => {
-                                    if !backwards { Some(0) } else { Some(internal.child_ids.len().saturating_sub(1)) }
+                                    if !backwards {
+                                        Some(0)
+                                    } else {
+                                        Some(internal.child_ids.len().saturating_sub(1))
+                                    }
                                 }
                             };
                         }
-                        let child_idx = stacked_idx.unwrap_or(if !backwards { 0 } else { internal.child_ids.len().saturating_sub(1) });
+                        let child_idx = stacked_idx.unwrap_or(if !backwards {
+                            0
+                        } else {
+                            internal.child_ids.len().saturating_sub(1)
+                        });
                         if child_idx < internal.child_ids.len() {
                             // Determine revisit direction based on backwards flag
                             if !backwards {
@@ -795,7 +823,8 @@ impl<'a> TagsTreeIterator<'a> {
                                 if let Some(f) = from {
                                     let end_idx = tleaf.positions.partition_point(|p| *p <= f);
                                     if end_idx > 0 {
-                                        let mut batch: Vec<Position> = tleaf.positions[..end_idx].to_vec();
+                                        let mut batch: Vec<Position> =
+                                            tleaf.positions[..end_idx].to_vec();
                                         batch.reverse();
                                         leaf_batch = Some(batch);
                                     }
@@ -811,8 +840,12 @@ impl<'a> TagsTreeIterator<'a> {
                     _ => {}
                 }
             }
-            if let Some(rev) = push_revisit { self.stack.push(rev); }
-            if let Some(ch) = push_child { self.stack.push(ch); }
+            if let Some(rev) = push_revisit {
+                self.stack.push(rev);
+            }
+            if let Some(ch) = push_child {
+                self.stack.push(ch);
+            }
             if let Some(batch) = leaf_batch {
                 self.batch = batch;
                 self.batch_index = 0;
@@ -843,33 +876,34 @@ mod tests {
 
     static VERBOSE: bool = false;
 
-        // Test helper: iterate a range of `from` positions and assert lookup returns
-        // the positions that were inserted for the given tag and are >= `from`.
-        fn verify_tag_lookup_range(db: &Mvcc, tag: TagHash, inserted: &Vec<Position>, backwards: bool) {
-            // Try a range that goes slightly below the first position and past the last.
-            let len = inserted.len();
-            for i in 0..(len + 3) {
-                let start = Position(i as u64);
-                let reader = db.reader().unwrap();
-                let got = tags_tree_lookup(db, reader.tags_tree_root_id, tag, start, backwards).unwrap();
-                let expected: Vec<Position> = if !backwards {
-                    inserted
-                        .iter()
-                        .cloned()
-                        .filter(|p| p.0 >= start.0)
-                        .collect()
-                } else {
-                    let mut v: Vec<Position> = inserted
-                        .iter()
-                        .cloned()
-                        .filter(|p| p.0 <= start.0)
-                        .collect();
-                    v.reverse();
-                    v
-                };
-                assert_eq!(expected, got, "from={:?}, backwards={}", start, backwards);
-            }
+    // Test helper: iterate a range of `from` positions and assert lookup returns
+    // the positions that were inserted for the given tag and are >= `from`.
+    fn verify_tag_lookup_range(db: &Mvcc, tag: TagHash, inserted: &Vec<Position>, backwards: bool) {
+        // Try a range that goes slightly below the first position and past the last.
+        let len = inserted.len();
+        for i in 0..(len + 3) {
+            let start = Position(i as u64);
+            let reader = db.reader().unwrap();
+            let got =
+                tags_tree_lookup(db, reader.tags_tree_root_id, tag, start, backwards).unwrap();
+            let expected: Vec<Position> = if !backwards {
+                inserted
+                    .iter()
+                    .cloned()
+                    .filter(|p| p.0 >= start.0)
+                    .collect()
+            } else {
+                let mut v: Vec<Position> = inserted
+                    .iter()
+                    .cloned()
+                    .filter(|p| p.0 <= start.0)
+                    .collect();
+                v.reverse();
+                v
+            };
+            assert_eq!(expected, got, "from={:?}, backwards={}", start, backwards);
         }
+    }
 
     fn construct_db(page_size: usize) -> (TempDir, Mvcc) {
         let temp_dir = tempdir().unwrap();
@@ -944,9 +978,11 @@ mod tests {
         // Commit and verify lookup_tag on some keys
         db.commit(&mut writer).unwrap();
         let reader = db.reader().unwrap();
-        let res_10 = tags_tree_lookup(&db, reader.tags_tree_root_id, th(10), Position(1), false).unwrap();
+        let res_10 =
+            tags_tree_lookup(&db, reader.tags_tree_root_id, th(10), Position(1), false).unwrap();
         assert!(!res_10.is_empty());
-        let res_missing = tags_tree_lookup(&db, reader.tags_tree_root_id, th(999), Position(1), false).unwrap();
+        let res_missing =
+            tags_tree_lookup(&db, reader.tags_tree_root_id, th(999), Position(1), false).unwrap();
         assert!(res_missing.is_empty());
     }
 
@@ -968,7 +1004,8 @@ mod tests {
         let vals = tags_tree_lookup(&db, reader.tags_tree_root_id, t1, Position(1), false).unwrap();
         assert_eq!(vals, vec![p1, p2]);
         // non-existent
-        let vals_none = tags_tree_lookup(&db, reader.tags_tree_root_id, th(1000), Position(1), false).unwrap();
+        let vals_none =
+            tags_tree_lookup(&db, reader.tags_tree_root_id, th(1000), Position(1), false).unwrap();
         assert!(vals_none.is_empty());
     }
 
@@ -1135,7 +1172,8 @@ mod tests {
         db.commit(&mut writer).unwrap();
         let reader = db.reader().unwrap();
         for (tag, pos) in &appended {
-            let positions = tags_tree_lookup(&db, reader.tags_tree_root_id, *tag, Position(1), false).unwrap();
+            let positions =
+                tags_tree_lookup(&db, reader.tags_tree_root_id, *tag, Position(1), false).unwrap();
             assert_eq!(positions, vec![*pos]);
         }
         // Also verify 'from' filtering using a representative tag
@@ -1237,7 +1275,8 @@ mod tests {
         // Validate lookup_tag for each inserted tag
         let reader = db.reader().unwrap();
         for (tag, pos) in &appended {
-            let positions = tags_tree_lookup(&db, reader.tags_tree_root_id, *tag, Position(1), false).unwrap();
+            let positions =
+                tags_tree_lookup(&db, reader.tags_tree_root_id, *tag, Position(1), false).unwrap();
             assert_eq!(positions, vec![*pos]);
         }
         // Also verify 'from' filtering using a representative tag
@@ -1292,7 +1331,8 @@ mod tests {
         // Persist and validate lookup_tag for each inserted tag
         db.commit(&mut writer).unwrap();
         let reader = db.reader().unwrap();
-        let positions = tags_tree_lookup(&db, reader.tags_tree_root_id, tag, Position(1), false).unwrap();
+        let positions =
+            tags_tree_lookup(&db, reader.tags_tree_root_id, tag, Position(1), false).unwrap();
         assert_eq!(inserted, positions);
         // Verify range of 'from' values produce the expected suffix of positions
         verify_tag_lookup_range(&db, tag, &inserted, false);
@@ -1345,7 +1385,8 @@ mod tests {
 
         // Persist and validate lookup_tag for each inserted tag
         let reader = db.reader().unwrap();
-        let positions = tags_tree_lookup(&db, reader.tags_tree_root_id, tag, Position(1), false).unwrap();
+        let positions =
+            tags_tree_lookup(&db, reader.tags_tree_root_id, tag, Position(1), false).unwrap();
         assert_eq!(inserted, positions);
         // Verify range of 'from' values produce the expected suffix of positions
         verify_tag_lookup_range(&db, tag, &inserted, false);
@@ -1416,7 +1457,8 @@ mod tests {
         // Persist and validate lookup_tag for each inserted tag
         db.commit(&mut writer).unwrap();
         let reader = db.reader().unwrap();
-        let positions = tags_tree_lookup(&db, reader.tags_tree_root_id, tag, Position(1), false).unwrap();
+        let positions =
+            tags_tree_lookup(&db, reader.tags_tree_root_id, tag, Position(1), false).unwrap();
         assert_eq!(inserted, positions);
         // Verify range of 'from' values produce the expected suffix of positions
         verify_tag_lookup_range(&db, tag, &inserted, false);
@@ -1488,7 +1530,8 @@ mod tests {
         }
 
         let reader = db.reader().unwrap();
-        let positions = tags_tree_lookup(&db, reader.tags_tree_root_id, tag, Position(1), false).unwrap();
+        let positions =
+            tags_tree_lookup(&db, reader.tags_tree_root_id, tag, Position(1), false).unwrap();
         assert_eq!(inserted, positions);
         // Verify range of 'from' values produce the expected suffix of positions
         verify_tag_lookup_range(&db, tag, &inserted, false);
@@ -1561,12 +1604,12 @@ mod tests {
 
         db.commit(&mut writer).unwrap();
         let reader = db.reader().unwrap();
-        let positions = tags_tree_lookup(&db, reader.tags_tree_root_id, tag, Position(1), false).unwrap();
+        let positions =
+            tags_tree_lookup(&db, reader.tags_tree_root_id, tag, Position(1), false).unwrap();
         assert_eq!(inserted, positions);
         // Verify range of 'from' values produce the expected suffix of positions
         verify_tag_lookup_range(&db, tag, &inserted, false);
         verify_tag_lookup_range(&db, tag, &inserted, true);
-
     }
 
     #[test]
@@ -1636,7 +1679,8 @@ mod tests {
         }
 
         let reader = db.reader().unwrap();
-        let positions = tags_tree_lookup(&db, reader.tags_tree_root_id, tag, Position(1), false).unwrap();
+        let positions =
+            tags_tree_lookup(&db, reader.tags_tree_root_id, tag, Position(1), false).unwrap();
         assert_eq!(inserted, positions);
         // Verify range of 'from' values produce the expected suffix of positions
         verify_tag_lookup_range(&db, tag, &inserted, false);
@@ -1661,39 +1705,78 @@ mod tests {
 
         // from first -> all positions
         let after_first = inserted[0];
-        let collected_all: Vec<Position> =
-            TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, tag, Some(after_first), false)
-                .collect();
+        let collected_all: Vec<Position> = TagsTreeIterator::new(
+            &db,
+            &dirty,
+            reader.tags_tree_root_id,
+            tag,
+            Some(after_first),
+            false,
+        )
+        .collect();
         assert_eq!(collected_all, inserted);
 
         // from second -> drop first
         let from_first = inserted[1];
-        let collected_fron_first: Vec<Position> =
-            TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, tag, Some(from_first), false)
-                .collect();
+        let collected_fron_first: Vec<Position> = TagsTreeIterator::new(
+            &db,
+            &dirty,
+            reader.tags_tree_root_id,
+            tag,
+            Some(from_first),
+            false,
+        )
+        .collect();
         assert_eq!(collected_fron_first, inserted[1..].to_vec());
 
         // from middle -> drop up to that element
         let from_mid = inserted[3];
-        let collected_from_mid: Vec<Position> =
-            TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, tag, Some(from_mid), false).collect();
+        let collected_from_mid: Vec<Position> = TagsTreeIterator::new(
+            &db,
+            &dirty,
+            reader.tags_tree_root_id,
+            tag,
+            Some(from_mid),
+            false,
+        )
+        .collect();
         assert_eq!(collected_from_mid, inserted[3..].to_vec());
 
         // from last -> empty
         let from_last = *inserted.last().unwrap();
-        let collected_from_last: Vec<Position> =
-            TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, tag, Some(from_last), false).collect();
-        assert_eq!(collected_from_last, inserted[inserted.len()-1..].to_vec());
+        let collected_from_last: Vec<Position> = TagsTreeIterator::new(
+            &db,
+            &dirty,
+            reader.tags_tree_root_id,
+            tag,
+            Some(from_last),
+            false,
+        )
+        .collect();
+        assert_eq!(collected_from_last, inserted[inserted.len() - 1..].to_vec());
 
         // from last + 1 -> empty
         let after_last = Position(from_last.0 + 1);
-        let collected_empty: Vec<Position> =
-            TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, tag, Some(after_last), false).collect();
+        let collected_empty: Vec<Position> = TagsTreeIterator::new(
+            &db,
+            &dirty,
+            reader.tags_tree_root_id,
+            tag,
+            Some(after_last),
+            false,
+        )
+        .collect();
         assert!(collected_empty.is_empty());
 
         // non-existent tag yields empty iterator regardless of after
-        let empty_iter =
-            TagsTreeIterator::new(&db, &dirty, reader.tags_tree_root_id, th(9999), Some(Position(0)), false);
+        let empty_iter = TagsTreeIterator::new(
+            &db,
+            &dirty,
+            reader.tags_tree_root_id,
+            th(9999),
+            Some(Position(0)),
+            false,
+        );
         assert_eq!(empty_iter.collect::<Vec<Position>>(), Vec::new());
     }
 

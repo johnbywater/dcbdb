@@ -7,7 +7,11 @@ use umadb::grpc::{start_server, start_server_secure_from_files};
 
 /// UmaDB server binary
 #[derive(Debug, Parser)]
-#[command(name = "uma", about = "Run UmaDB gRPC server (with optional TLS)", version)]
+#[command(
+    name = "uma",
+    about = "Run UmaDB gRPC server (with optional TLS)",
+    version
+)]
 struct Cli {
     /// Database directory or file path. If a directory is provided, uma.db file will be created inside it
     #[arg(long, short, value_name = "PATH")]
@@ -46,9 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         (Some(cert), Some(key)) => {
             start_server_secure_from_files(db_path, &addr, shutdown_rx, cert, key).await?
         }
-        (None, None) => {
-            start_server(db_path, &addr, shutdown_rx).await?
-        }
+        (None, None) => start_server(db_path, &addr, shutdown_rx).await?,
         _ => {
             eprintln!("Error: --cert and --key must be provided together");
             std::process::exit(2);

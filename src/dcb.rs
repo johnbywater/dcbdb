@@ -95,7 +95,9 @@ pub trait DCBEventStoreAsync: Send + Sync {
         backwards: bool,
         limit: Option<u32>,
     ) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
-        let mut response = self.read(query, after, backwards, limit, false, None).await?;
+        let mut response = self
+            .read(query, after, backwards, limit, false, None)
+            .await?;
         response.collect_with_head().await
     }
 

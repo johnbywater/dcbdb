@@ -8,7 +8,7 @@ use crate::free_lists_tree_nodes::{
 };
 use crate::header_node::HeaderNode;
 use crate::node::Node;
-use crate::page::{serialize_page_into, Page, PAGE_HEADER_SIZE};
+use crate::page::{PAGE_HEADER_SIZE, Page, serialize_page_into};
 use crate::pager::Pager;
 use crate::tags_tree_nodes::TagsLeafNode;
 // use rayon::prelude::*;
@@ -16,7 +16,7 @@ use crate::tags_tree_nodes::TagsLeafNode;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::Path;
-use std::sync::{Mutex};
+use std::sync::Mutex;
 use std::thread::sleep;
 use std::time::Duration;
 // use crate::db::DEFAULT_PAGE_SIZE;
@@ -57,18 +57,16 @@ impl Mvcc {
             writer_lock: Mutex::new(()),
             page_size,
             max_node_size: page_size - PAGE_HEADER_SIZE,
-            headers: Mutex::new(
-                vec![
-                    Page{
-                        page_id: PageID(0),
-                        node: Node::Header(HeaderNode::default()),
-                    },
-                    Page{
-                        page_id: PageID(1),
-                        node: Node::Header(HeaderNode::default()),
-                    },
-                ]
-            ),
+            headers: Mutex::new(vec![
+                Page {
+                    page_id: PageID(0),
+                    node: Node::Header(HeaderNode::default()),
+                },
+                Page {
+                    page_id: PageID(1),
+                    node: Node::Header(HeaderNode::default()),
+                },
+            ]),
             header_page_buf: Mutex::new(vec![0u8; page_size]),
             page_buf: Mutex::new(vec![0u8; page_size]),
             reader_id_counter: Mutex::new(0),
@@ -107,7 +105,10 @@ impl Mvcc {
                 keys: Vec::new(),
                 values: Vec::new(),
             };
-            let free_list_page = Page::new(initial_free_lists_tree_root_id, Node::FreeListLeaf(free_list_leaf));
+            let free_list_page = Page::new(
+                initial_free_lists_tree_root_id,
+                Node::FreeListLeaf(free_list_leaf),
+            );
 
             // Create and write an empty events tree root page.
             let event_leaf = EventLeafNode {
@@ -182,11 +183,9 @@ impl Mvcc {
         let page = self.read_page(page_id)?;
         match page.node {
             Node::Header(node) => Ok(node),
-            _ => {
-                Err(DCBError::DatabaseCorrupted(
-                    "Invalid header node type".to_string(),
-                ))
-            }
+            _ => Err(DCBError::DatabaseCorrupted(
+                "Invalid header node type".to_string(),
+            )),
         }
     }
 
@@ -201,13 +200,7 @@ impl Mvcc {
         next_position: Position,
     ) -> DCBResult<()> {
         let mut headers = self.headers.lock().unwrap();
-        let headers_idx = {
-            if page_id == HEADER_PAGE_ID_0 {
-                0
-            } else {
-                1
-            }
-        };
+        let headers_idx = { if page_id == HEADER_PAGE_ID_0 { 0 } else { 1 } };
         let header = &mut headers[headers_idx];
         match &mut header.node {
             Node::Header(node) => {
@@ -224,10 +217,9 @@ impl Mvcc {
                 serialize_page_into(&mut buf, &header.node)?;
                 self.pager.write_page(page_id, &buf)?;
                 Ok(())
-            },
-            _=> panic!("Shouldn't get here: header should be a header")
+            }
+            _ => panic!("Shouldn't get here: header should be a header"),
         }
-
     }
 
     pub fn read_page(&self, page_id: PageID) -> DCBResult<Page> {
@@ -406,7 +398,11 @@ impl Mvcc {
 
         // Mutate the owned header instance and serialize into the preallocated buffer
         self.update_header(
-            if writer.header_page_id == HEADER_PAGE_ID_0{ HEADER_PAGE_ID_1 } else { HEADER_PAGE_ID_0},
+            if writer.header_page_id == HEADER_PAGE_ID_0 {
+                HEADER_PAGE_ID_1
+            } else {
+                HEADER_PAGE_ID_0
+            },
             writer.tsn,
             writer.free_lists_tree_root_id,
             writer.events_tree_root_id,

@@ -6,7 +6,7 @@ use tempfile::tempdir;
 use tokio::time::sleep;
 
 use umadb::dcb::{DCBEvent, DCBEventStoreAsync};
-use umadb::grpc::{start_server_secure, AsyncUmaDBClient, ClientTlsOptions};
+use umadb::grpc::{AsyncUmaDBClient, ClientTlsOptions, start_server_secure};
 
 // Helper to pick a free localhost port
 fn get_free_port() -> u16 {
@@ -41,7 +41,14 @@ async fn secure_grpc_end_to_end_append_and_read() {
     let cert_clone = cert_pem.clone();
     let key_clone = key_pem.clone();
     let server_task = tokio::spawn(async move {
-        let _ = start_server_secure(db_path_clone, &addr_clone, shutdown_rx, cert_clone, key_clone).await;
+        let _ = start_server_secure(
+            db_path_clone,
+            &addr_clone,
+            shutdown_rx,
+            cert_clone,
+            key_clone,
+        )
+        .await;
     });
 
     // Build TLS opts for client (trust the self-signed cert and use SNI localhost)
@@ -54,19 +61,25 @@ async fn secure_grpc_end_to_end_append_and_read() {
     let client = {
         let mut last_err = None;
         let mut client: Option<AsyncUmaDBClient> = None;
-        for _ in 0..40 { // up to ~2s
+        for _ in 0..40 {
+            // up to ~2s
             match AsyncUmaDBClient::connect_with_options(&url, Some(tls.clone())).await {
-                Ok(c) => { client = Some(c); break; }
+                Ok(c) => {
+                    client = Some(c);
+                    break;
+                }
                 Err(e) => {
                     last_err = Some(e);
                     sleep(Duration::from_millis(50)).await;
                 }
             }
         }
-        client.unwrap_or_else(|| panic!(
-            "failed to connect to secure server after retries: {:?}",
-            last_err
-        ))
+        client.unwrap_or_else(|| {
+            panic!(
+                "failed to connect to secure server after retries: {:?}",
+                last_err
+            )
+        })
     };
 
     // Append a handful of events
@@ -90,7 +103,9 @@ async fn secure_grpc_end_to_end_append_and_read() {
     let mut total = 0usize;
     loop {
         let batch = resp.next_batch().await.expect("next_batch");
-        if batch.is_empty() { break; }
+        if batch.is_empty() {
+            break;
+        }
         total += batch.len();
         // Ensure events have expected type/tag
         for ev in batch {

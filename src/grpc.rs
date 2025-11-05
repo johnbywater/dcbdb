@@ -9,8 +9,10 @@ use std::task::{Context, Poll};
 use std::{fs, thread};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_stream::wrappers::ReceiverStream;
+use tonic::transport::{
+    Certificate, Channel, ClientTlsConfig, Endpoint, Identity, ServerTlsConfig,
+};
 use tonic::{Code, Request, Response, Status, transport::Server};
-use tonic::transport::{ServerTlsConfig, Identity, ClientTlsConfig, Certificate, Endpoint, Channel};
 
 use crate::db::{DEFAULT_PAGE_SIZE, UmaDB, is_request_idempotent, read_conditional};
 use crate::dcb::{
@@ -24,6 +26,7 @@ pub mod umadb {
     tonic::include_proto!("umadb");
 }
 
+use crate::common::Position;
 use prost::Message;
 use prost::bytes::Bytes;
 use tokio::runtime::{Handle, Runtime};
@@ -34,7 +37,6 @@ use umadb::{
     uma_db_service_server::{UmaDbService, UmaDbServiceServer},
 };
 use uuid::Uuid;
-use crate::common::Position;
 
 const APPEND_BATCH_MAX_EVENTS: usize = 2000;
 const READ_RESPONSE_BATCH_SIZE_DEFAULT: u32 = 100;
@@ -89,7 +91,11 @@ pub async fn start_server_secure<P: AsRef<Path> + Send + 'static>(
 }
 
 /// Convenience: load cert and key from filesystem paths
-pub async fn start_server_secure_from_files<P: AsRef<Path> + Send + 'static, CP: AsRef<Path>, KP: AsRef<Path>>(
+pub async fn start_server_secure_from_files<
+    P: AsRef<Path> + Send + 'static,
+    CP: AsRef<Path>,
+    KP: AsRef<Path>,
+>(
     path: P,
     addr: &str,
     shutdown_rx: oneshot::Receiver<()>,
@@ -174,7 +180,11 @@ impl UmaDbService for UmaDBServer {
         let backwards = read_request.backwards.unwrap_or(false);
         let limit = read_request.limit;
         // Cap requested batch size.
-        let capped_batch_size = read_request.batch_size.unwrap_or(READ_RESPONSE_BATCH_SIZE_DEFAULT).max(1).min(READ_RESPONSE_BATCH_SIZE_MAX);
+        let capped_batch_size = read_request
+            .batch_size
+            .unwrap_or(READ_RESPONSE_BATCH_SIZE_DEFAULT)
+            .max(1)
+            .min(READ_RESPONSE_BATCH_SIZE_MAX);
         let subscribe = read_request.subscribe.unwrap_or(false);
 
         // Create a channel for streaming responses (deeper buffer to reduce backpressure under concurrency)
@@ -221,7 +231,12 @@ impl UmaDbService for UmaDBServer {
                     break;
                 }
                 match request_handler
-                    .read(query_clone.clone(), next_start, backwards, Some(per_iter_limit))
+                    .read(
+                        query_clone.clone(),
+                        next_start,
+                        backwards,
+                        Some(per_iter_limit),
+                    )
                     .await
                 {
                     Ok((events, head)) => {
@@ -718,7 +733,7 @@ impl RequestHandler {
                             // Propagate underlying read error
                             Err(err)
                         }
-                    }
+                    };
                 }
 
                 // No match found: we can advance 'after' to the current head observed by this reader
@@ -809,7 +824,10 @@ pub struct ClientTlsOptions {
     pub ca_pem: Option<Vec<u8>>, // trusted CA cert in PEM for self-signed setups
 }
 
-fn endpoint_from_url_with_options(url: &str, tls: Option<ClientTlsOptions>) -> Result<Endpoint, tonic::transport::Error> {
+fn endpoint_from_url_with_options(
+    url: &str,
+    tls: Option<ClientTlsOptions>,
+) -> Result<Endpoint, tonic::transport::Error> {
     use std::time::Duration;
 
     // Accept grpcs:// as an alias for https://
@@ -854,24 +872,34 @@ impl AsyncUmaDBClient {
             }
         };
 
-        let client_tls_options = Some(ClientTlsOptions { domain: None, ca_pem });
+        let client_tls_options = Some(ClientTlsOptions {
+            domain: None,
+            ca_pem,
+        });
 
         Self::connect_with_options(url, client_tls_options).await
     }
 
-    pub async fn connect_with_options(url: &str, client_tls_options: Option<ClientTlsOptions>) -> DCBResult<AsyncUmaDBClient> {
+    pub async fn connect_with_options(
+        url: &str,
+        client_tls_options: Option<ClientTlsOptions>,
+    ) -> DCBResult<AsyncUmaDBClient> {
         match new_channel(url, client_tls_options).await {
-            Ok(channel) => Ok(
-                Self { client: umadb::uma_db_service_client::UmaDbServiceClient::new(channel) }
-            ),
-            Err(err) => Err(
-                DCBError::TransportError(format!("failed to connect: {:?}", err))
-            ),
+            Ok(channel) => Ok(Self {
+                client: umadb::uma_db_service_client::UmaDbServiceClient::new(channel),
+            }),
+            Err(err) => Err(DCBError::TransportError(format!(
+                "failed to connect: {:?}",
+                err
+            ))),
         }
     }
 }
 
-async fn new_channel(url: &str, tls: Option<ClientTlsOptions>) -> Result<Channel, tonic::transport::Error> {
+async fn new_channel(
+    url: &str,
+    tls: Option<ClientTlsOptions>,
+) -> Result<Channel, tonic::transport::Error> {
     let endpoint = endpoint_from_url_with_options(url, tls)?;
     endpoint.connect().await
 }
@@ -927,8 +955,7 @@ impl DCBEventStoreAsync for AsyncUmaDBClient {
         events: Vec<DCBEvent>,
         condition: Option<DCBAppendCondition>,
     ) -> DCBResult<u64> {
-        let events_proto: Vec<EventProto> =
-            events.into_iter().map(EventProto::from).collect();
+        let events_proto: Vec<EventProto> = events.into_iter().map(EventProto::from).collect();
 
         let condition_proto = condition.map(|c| AppendConditionProto {
             fail_if_events_match: Some(QueryProto {
@@ -1099,7 +1126,7 @@ impl Stream for AsyncReadResponse {
                     this.ended = true;
                     Poll::Ready(None)
                 }
-            }
+            };
         }
     }
 }

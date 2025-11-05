@@ -1,4 +1,5 @@
 use crate::common::PageID;
+use crate::dcb::{DCBError, DCBResult};
 use memmap2::{Mmap, MmapOptions};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -7,7 +8,6 @@ use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::os::fd::{AsRawFd, RawFd};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use crate::dcb::{DCBError, DCBResult};
 // use memmap2::{Advice, Mmap, MmapOptions};
 
 // Pager for file I/O
@@ -333,14 +333,12 @@ impl Pager {
     pub fn write_page(&self, page_id: PageID, page: &[u8]) -> DCBResult<()> {
         let mut file = self.writer.lock().unwrap();
         if page.len() != self.page_size {
-            return Err(DCBError::InternalError(
-                format!(
-                    "Page size mismatch: page_id={:?} size={} > PAGE_SIZE={}",
-                    page_id,
-                    page.len(),
-                    self.page_size
-                ),
-            ));
+            return Err(DCBError::InternalError(format!(
+                "Page size mismatch: page_id={:?} size={} > PAGE_SIZE={}",
+                page_id,
+                page.len(),
+                self.page_size
+            )));
         }
 
         // Seek to the correct position
@@ -395,9 +393,9 @@ impl MappedPage {
 mod tests {
     use super::Pager;
     use crate::common::PageID;
+    use crate::dcb::DCBError;
     use std::path::PathBuf;
     use tempfile::tempdir;
-    use crate::dcb::{DCBError};
 
     fn temp_file_path(name: &str) -> PathBuf {
         let dir = tempdir().expect("tempdir");
@@ -413,14 +411,7 @@ mod tests {
         let data1 = vec![1u8; 100];
 
         let err = pager.write_page(PageID(0), &data1);
-        assert!(
-            matches!(
-                err,
-                Err(
-                    DCBError::InternalError(_)
-                )
-            )
-        );
+        assert!(matches!(err, Err(DCBError::InternalError(_))));
     }
 
     #[test]
@@ -438,11 +429,19 @@ mod tests {
 
         let r0 = pager.read_page(PageID(0)).expect("read0");
         let r0m = pager.read_page_mmap_slice(PageID(0)).expect("read0m");
-        assert_eq!(r0, r0m.as_slice(), "mmap read should match std read for page 0");
+        assert_eq!(
+            r0,
+            r0m.as_slice(),
+            "mmap read should match std read for page 0"
+        );
 
         let r1 = pager.read_page(PageID(1)).expect("read1");
         let r1m = pager.read_page_mmap_slice(PageID(1)).expect("read1m");
-        assert_eq!(r1, r1m.as_slice(), "mmap read should match std read for page 1");
+        assert_eq!(
+            r1,
+            r1m.as_slice(),
+            "mmap read should match std read for page 1"
+        );
         assert_eq!(&r1[..], &data2[..]);
     }
 
@@ -521,7 +520,9 @@ mod tests {
         pager.flush().expect("flush");
 
         // First read creates first mmap
-        let _ = pager.read_page_mmap_slice(PageID(0)).expect("read first window");
+        let _ = pager
+            .read_page_mmap_slice(PageID(0))
+            .expect("read first window");
         assert_eq!(pager.debug_mmap_count(), 1);
         // Reading the first page in the next window should create a second mmap
         let _ = pager

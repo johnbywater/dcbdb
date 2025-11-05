@@ -46,18 +46,24 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(Some(1), head);
 
     // Read all after 1, expect no events.
-    let (result, head) = event_store.read_with_head(None, Some(2), false, None).unwrap();
+    let (result, head) = event_store
+        .read_with_head(None, Some(2), false, None)
+        .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(1), head);
 
     // Read all limit 1, expect one event.
-    let (result, head) = event_store.read_with_head(None, None, false, Some(1)).unwrap();
+    let (result, head) = event_store
+        .read_with_head(None, None, false, Some(1))
+        .unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event1.data, result[0].event.data);
     assert_eq!(Some(1), head);
 
     // Read all limit 0, expect no events (and head is None).
-    let (result, head) = event_store.read_with_head(None, None, false, Some(0)).unwrap();
+    let (result, head) = event_store
+        .read_with_head(None, None, false, Some(0))
+        .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(None, head);
 
@@ -187,20 +193,26 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(Some(3), head);
 
     // Read all after 1, expect two events.
-    let (result, head) = event_store.read_with_head(None, Some(2), false, None).unwrap();
+    let (result, head) = event_store
+        .read_with_head(None, Some(2), false, None)
+        .unwrap();
     assert_eq!(2, result.len());
     assert_eq!(event2.data, result[0].event.data);
     assert_eq!(event3.data, result[1].event.data);
     assert_eq!(Some(3), head);
 
     // Read all after 2, expect one event.
-    let (result, head) = event_store.read_with_head(None, Some(3), false, None).unwrap();
+    let (result, head) = event_store
+        .read_with_head(None, Some(3), false, None)
+        .unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event3.data, result[0].event.data);
     assert_eq!(Some(3), head);
 
     // Read all after 1, limit 1, expect one event.
-    let (result, head) = event_store.read_with_head(None, Some(2), false, Some(1)).unwrap();
+    let (result, head) = event_store
+        .read_with_head(None, Some(2), false, Some(1))
+        .unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event2.data, result[0].event.data);
     assert_eq!(Some(2), head);
@@ -345,7 +357,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         ],
     });
     let (result, head) = event_store
-        .read_with_head(Some(query_type2_tag_b_or_type3_tagc.clone()), None, false, None)
+        .read_with_head(
+            Some(query_type2_tag_b_or_type3_tagc.clone()),
+            None,
+            false,
+            None,
+        )
         .unwrap();
     assert_eq!(2, result.len());
     assert_eq!(event2.data, result[0].event.data);

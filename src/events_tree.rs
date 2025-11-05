@@ -437,17 +437,17 @@ pub fn event_tree_lookup(
                 }
                 current_page_id = internal.child_ids[idx];
             }
-            Node::EventLeaf(leaf) => return match leaf.keys.binary_search(&position) {
-                Ok(i) => {
-                    let rec = materialize_event_value(mvcc, dirty, &leaf.values[i])?;
-                    Ok(rec)
-                }
-                Err(_) => {
-                    Err(DCBError::DatabaseCorrupted(format!(
+            Node::EventLeaf(leaf) => {
+                return match leaf.keys.binary_search(&position) {
+                    Ok(i) => {
+                        let rec = materialize_event_value(mvcc, dirty, &leaf.values[i])?;
+                        Ok(rec)
+                    }
+                    Err(_) => Err(DCBError::DatabaseCorrupted(format!(
                         "Event at position {position:?} not found",
-                    )))
-                }
-            },
+                    ))),
+                };
+            }
             _ => {
                 return Err(DCBError::DatabaseCorrupted(format!(
                     "Expected EventInternal or EventLeaf node in event tree, got {}",
@@ -463,7 +463,7 @@ pub struct EventIterator<'a> {
     pub dirty: &'a HashMap<PageID, Page>,
     pub stack: Vec<(PageID, Option<usize>)>,
     pub page_cache: HashMap<PageID, Page>,
-    pub start: Option<Position>,  // inclusive position, better for binary search
+    pub start: Option<Position>, // inclusive position, better for binary search
     pub backwards: bool,
 }
 
@@ -529,11 +529,9 @@ impl<'a> EventIterator<'a> {
                             // println!(" - from: {:?}", self.from);
 
                             stacked_idx = match &self.start {
-                                Some(from) => {
-                                    match internal.keys.binary_search(from) {
-                                        Ok(i) => Some(i + 1),
-                                        Err(i) => Some(i),
-                                    }
+                                Some(from) => match internal.keys.binary_search(from) {
+                                    Ok(i) => Some(i + 1),
+                                    Err(i) => Some(i),
                                 },
                                 None => {
                                     if !self.backwards {
@@ -541,7 +539,7 @@ impl<'a> EventIterator<'a> {
                                     } else {
                                         Some(internal.child_ids.len() - 1)
                                     }
-                                },
+                                }
                             };
                         }
 
@@ -583,16 +581,14 @@ impl<'a> EventIterator<'a> {
                             // println!(" - first visit");
                             // println!(" - keys: {:?}", leaf.keys.clone());
                             stacked_idx = match &self.start {
-                                Some(from) => {
-                                    match leaf.keys.binary_search(from) {
-                                        Ok(i) => Some(i),
-                                        Err(i) => {
-                                            if !self.backwards {
-                                                Some(i)
-                                            } else {
-                                                Some(i-1)
-                                            }
-                                        },
+                                Some(from) => match leaf.keys.binary_search(from) {
+                                    Ok(i) => Some(i),
+                                    Err(i) => {
+                                        if !self.backwards {
+                                            Some(i)
+                                        } else {
+                                            Some(i - 1)
+                                        }
                                     }
                                 },
                                 None => {
@@ -601,7 +597,7 @@ impl<'a> EventIterator<'a> {
                                     } else {
                                         Some(leaf.values.len() - 1)
                                     }
-                                },
+                                }
                             };
                         }
 
@@ -1299,7 +1295,8 @@ mod tests {
 
             // Expected are strictly from the chosen 'from' position
             let num_to_skip = i.max(1) - 1;
-            let expected: Vec<(Position, EventRecord)> = appended.clone().into_iter().skip(num_to_skip).collect();
+            let expected: Vec<(Position, EventRecord)> =
+                appended.clone().into_iter().skip(num_to_skip).collect();
             assert_eq!(expected.len(), scanned.len());
             // println!("Get expected number: {}", expected.len());
             for (i, exp) in expected.iter().enumerate() {
@@ -1322,7 +1319,6 @@ mod tests {
                     "TSN should be removed after reader is dropped"
                 );
             }
-
         }
     }
 
@@ -1442,7 +1438,6 @@ mod tests {
                     "TSN should be removed after reader is dropped"
                 );
             }
-
         }
     }
 

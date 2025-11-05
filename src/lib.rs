@@ -21,13 +21,13 @@ mod tags_tree_nodes;
 // Public bench helpers to exercise internal APIs without exposing them in the public surface
 pub mod bench_api {
     use crate::common::{PageID, Position};
+    use crate::db::DEFAULT_PAGE_SIZE;
     use crate::dcb::DCBResult;
     use crate::events_tree_nodes::{EventLeafNode, EventRecord, EventValue};
     use crate::mvcc::{Mvcc, Writer};
     use crate::node::Node;
-    use crate::page::{Page, PAGE_HEADER_SIZE};
+    use crate::page::{PAGE_HEADER_SIZE, Page};
     use std::path::Path;
-    use crate::db::DEFAULT_PAGE_SIZE;
 
     /// Minimal public wrapper to allow Criterion benches to measure commit paths
     pub struct BenchDb {

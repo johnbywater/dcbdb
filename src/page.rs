@@ -1,7 +1,7 @@
-use std::ops::Range;
 use crate::common::PageID;
 use crate::dcb::{DCBError, DCBResult};
 use crate::node::Node;
+use std::ops::Range;
 
 // Page structure
 #[derive(Debug, Clone)]
@@ -46,7 +46,8 @@ impl Page {
         let header = &page_data[..PAGE_HEADER_SIZE];
         let node_type = header[HEADER_LAYOUT_NODE_TYPE_BYTE];
         let crc = u32::from_le_bytes(header[HEADER_LAYOUT_CRC_BYTES].try_into().unwrap());
-        let data_len = u32::from_le_bytes(header[HEADER_LAYOUT_BODY_LEN_BYTES].try_into().unwrap()) as usize;
+        let data_len =
+            u32::from_le_bytes(header[HEADER_LAYOUT_BODY_LEN_BYTES].try_into().unwrap()) as usize;
 
         if PAGE_HEADER_SIZE + data_len > page_data.len() {
             return Err(DCBError::DatabaseCorrupted(

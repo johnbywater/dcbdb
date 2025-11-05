@@ -2,9 +2,9 @@
 
 #[cfg(feature = "flamegraphs")]
 fn main() -> std::io::Result<()> {
+    use pprof::ProfilerGuard;
     use std::fs::File;
     use std::time::{Duration, Instant};
-    use pprof::ProfilerGuard;
     use tempfile::tempdir;
     use umadb::bench_api::BenchDb;
 
@@ -30,7 +30,9 @@ fn main() -> std::io::Result<()> {
             let path = out_dir.join(format!("{name}.svg"));
             let mut opts = pprof::flamegraph::Options::default();
             let file = File::create(&path)?;
-            report.flamegraph_with_options(file, &mut opts).expect("write flamegraph");
+            report
+                .flamegraph_with_options(file, &mut opts)
+                .expect("write flamegraph");
             println!("✅ Wrote {path:?}");
         }
         Ok(())

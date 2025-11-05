@@ -1,5 +1,5 @@
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::cell::RefCell;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use tempfile::tempdir;
 use umadb::bench_api::BenchDb;
 
@@ -31,7 +31,6 @@ pub fn mvcc_commit_benchmarks(c: &mut Criterion) {
     // Benchmark: commit_with_dirty for N in {1, 10, 100}
     for &n in &[1usize, 10, 100] {
         group.bench_function(BenchmarkId::new("commit_with_dirty_reuse_db", n), |b| {
-
             b.iter_batched_ref(
                 || {
                     // Reset dirty pages before each commit
@@ -64,11 +63,11 @@ fn fresh_db(page_size: usize) -> BenchDb {
 
 fn bench_config() -> Criterion {
     Criterion::default()
-        .sample_size(200)                // More samples for stability
+        .sample_size(200) // More samples for stability
         .warm_up_time(std::time::Duration::from_secs(2))
         .measurement_time(std::time::Duration::from_secs(5))
         .noise_threshold(0.05)
-        .configure_from_args()          // Allow CLI overrides (e.g., --sample-size)
+        .configure_from_args() // Allow CLI overrides (e.g., --sample-size)
 }
 
 criterion_group! {

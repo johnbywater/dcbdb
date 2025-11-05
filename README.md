@@ -438,6 +438,10 @@ Explanation:
 
 This one-liner will produce a valid self-signed server certificate usable by the Rust client examples below.
 
+```bash
+cargo run --bin uma -- --path tmp-una.db --addr 127.0.0.1:50051 --cert server.pem --key server.key
+```
+
 ----
 
 ## gRPC API

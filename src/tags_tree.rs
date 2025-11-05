@@ -758,6 +758,7 @@ impl<'a> TagsTreeIterator<'a> {
         // Traverse per-tag subtree like EventIterator: DFS, each TagLeaf yields a batch
         while let Some((page_id, mut stacked_idx)) = self.stack.pop() {
             // Plan pushes and batch under a scoped immutable borrow first
+            let mut remove_page = false;
             let mut push_revisit: Option<(PageID, Option<usize>)> = None;
             let mut push_child: Option<(PageID, Option<usize>)> = None;
             let mut leaf_batch: Option<Vec<Position>> = None;
@@ -797,13 +798,20 @@ impl<'a> TagsTreeIterator<'a> {
                             if !backwards {
                                 if child_idx + 1 < internal.child_ids.len() {
                                     push_revisit = Some((page_id, Some(child_idx + 1)));
+                                } else {
+                                    remove_page = true;
                                 }
                             } else {
                                 if child_idx > 0 {
                                     push_revisit = Some((page_id, Some(child_idx - 1)));
+                                } else {
+                                    remove_page = true;
                                 }
                             }
                             push_child = Some((internal.child_ids[child_idx], None));
+                        } else {
+                            // No valid child at computed index; drop this page from cache
+                            remove_page = true;
                         }
                     }
                     Node::TagLeaf(tleaf) => {
@@ -836,8 +844,13 @@ impl<'a> TagsTreeIterator<'a> {
                                 }
                             }
                         }
+                        // We won't revisit a TagLeaf: remove from cache after processing
+                        remove_page = true;
                     }
-                    _ => {}
+                    _ => {
+                        // Unknown node kind in per-tag subtree; drop it
+                        remove_page = true;
+                    }
                 }
             }
             if let Some(rev) = push_revisit {
@@ -845,6 +858,9 @@ impl<'a> TagsTreeIterator<'a> {
             }
             if let Some(ch) = push_child {
                 self.stack.push(ch);
+            }
+            if remove_page {
+                self.page_cache.remove(&page_id);
             }
             if let Some(batch) = leaf_batch {
                 self.batch = batch;

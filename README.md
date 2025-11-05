@@ -388,13 +388,13 @@ This will create the `uma` UmaDB server executable in `target/release/`.
 You can run the `uma` binary directly after installing or building:
 
 ```bash
-./target/release/uma --path /path/to/event-store --addr 127.0.0.1:50051
+./target/release/uma --path ./uma.db --addr 127.0.0.1:50051
 ```
 
 Or you can use `cargo run` (dev build, builds faster, runs slower):
 
 ```bash
-cargo run --bin uma -- --path /path/to/event-store --addr 127.0.0.1:50051
+cargo run --bin uma -- --path ./uma.db --addr 127.0.0.1:50051
 ```
 
 ### Command-line Options
@@ -410,7 +410,7 @@ The `uma` executable accepts the following command-line options:
 
 ### Self-signed TLS Certificate
 
-For development and testing purposes, you can create a self-signed TSL certification with the following command:
+For development and testing purposes, you can create a self-signed TSL certificate with the following command:
 
 ```bash
 openssl req \
@@ -439,7 +439,7 @@ Explanation:
 This one-liner will produce a valid self-signed server certificate usable by the Rust client examples below.
 
 ```bash
-cargo run --bin uma -- --path tmp-una.db --addr 127.0.0.1:50051 --cert server.pem --key server.key
+cargo run --bin uma -- --path ./uma.db --addr 127.0.0.1:50051 --cert server.pem --key server.key
 ```
 
 ----
@@ -641,6 +641,7 @@ cb = QueryProto(
 read_request = ReadRequestProto(
     query=cb,
     start=None,
+    backwards=False,
     limit=None,
     subscribe=False,
     batch_size=None,

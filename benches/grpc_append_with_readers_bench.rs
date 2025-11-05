@@ -110,7 +110,7 @@ pub fn grpc_append_with_readers_benchmark(c: &mut Criterion) {
         let mut reader_clients: Vec<Arc<AsyncUmaDBClient>> = Vec::with_capacity(READER_COUNT);
         for _ in 0..READER_COUNT {
             let c = readers_rt
-                .block_on(AsyncUmaDBClient::connect_optimized_url(&addr_http))
+                .block_on(AsyncUmaDBClient::connect(&addr_http, None))
                 .expect("connect reader client");
             reader_clients.push(Arc::new(c));
         }
@@ -123,7 +123,7 @@ pub fn grpc_append_with_readers_benchmark(c: &mut Criterion) {
             let handle = readers_rt.spawn(async move {
                 while running.load(Ordering::Relaxed) {
                     let mut resp = match client
-                        .read(None, None, Some(TOTAL_EVENTS), false, Some(READ_BATCH_SIZE))
+                        .read(None, None, false, Some(TOTAL_EVENTS), false, Some(READ_BATCH_SIZE))
                         .await
                     {
                         Ok(s) => s,
@@ -165,7 +165,7 @@ pub fn grpc_append_with_readers_benchmark(c: &mut Criterion) {
         let mut clients: Vec<Arc<AsyncUmaDBClient>> = Vec::with_capacity(threads);
         for _ in 0..threads {
             let c = rt
-                .block_on(AsyncUmaDBClient::connect_optimized_url(&addr_http))
+                .block_on(AsyncUmaDBClient::connect(&addr_http, None))
                 .expect("connect client");
             clients.push(Arc::new(c));
         }

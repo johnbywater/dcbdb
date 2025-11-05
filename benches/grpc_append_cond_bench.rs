@@ -113,7 +113,7 @@ pub fn grpc_append_cond_benchmark(c: &mut Criterion) {
         let mut tags: Vec<String> = Vec::with_capacity(threads);
         for i in 0..threads {
             let c = rt
-                .block_on(AsyncUmaDBClient::connect_optimized_url(&addr_http))
+                .block_on(AsyncUmaDBClient::connect(&addr_http, None))
                 .expect("connect client");
             clients.push(Arc::new(c));
             tags.push(format!("writer-{}", i));

@@ -107,7 +107,7 @@ pub fn grpc_read_with_writers_benchmark(c: &mut Criterion) {
     let mut writer_clients: Vec<Arc<AsyncUmaDBClient>> = Vec::with_capacity(WRITER_COUNT);
     for _ in 0..WRITER_COUNT {
         let c = writers_rt
-            .block_on(AsyncUmaDBClient::connect_optimized_url(&addr_http))
+            .block_on(AsyncUmaDBClient::connect(&addr_http, None))
             .expect("connect writer client");
         writer_clients.push(Arc::new(c));
     }
@@ -161,7 +161,7 @@ pub fn grpc_read_with_writers_benchmark(c: &mut Criterion) {
         let mut clients: Vec<Arc<AsyncUmaDBClient>> = Vec::with_capacity(threads);
         for _ in 0..threads {
             let c = rt
-                .block_on(AsyncUmaDBClient::connect_optimized_url(&addr_http))
+                .block_on(AsyncUmaDBClient::connect(&addr_http, None))
                 .expect("connect client");
             clients.push(Arc::new(c));
         }
@@ -176,7 +176,7 @@ pub fn grpc_read_with_writers_benchmark(c: &mut Criterion) {
                         let client = clients[i].clone();
                         async move {
                             let mut resp = client
-                                .read(None, None, Some(TOTAL_EVENTS), false, Some(READ_BATCH_SIZE))
+                                .read(None, None, false, Some(TOTAL_EVENTS), false, Some(READ_BATCH_SIZE))
                                 .await
                                 .expect("start read response");
                             let mut count = 0usize;

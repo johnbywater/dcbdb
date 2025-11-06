@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 # Keep this in sync with benches/grpc_append_cond_bench.rs
-EVENTS_PER_ITER = 1  # number of events appended per iteration by a single client
+EVENTS_PER_REQUEST = 1  # number of events appended per iteration by a single client
 
 # Thread variants you ran (match the bench). Edit if you change the bench.
 threads = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
@@ -20,7 +20,7 @@ for t in threads:
     mean_ns = est.loc['point_estimate', 'mean']
     mean_sec = mean_ns / 1e9
 
-    events_total = EVENTS_PER_ITER * t  # total across all threads for this variant
+    events_total = EVENTS_PER_REQUEST * t  # total across all threads for this variant
     eps = events_total / mean_sec  # events per second
 
     x.append(t)
@@ -32,7 +32,7 @@ plt.xscale('log')
 plt.yscale('log')
 plt.xlabel('Clients')
 plt.ylabel('Total throughput (events/sec)')
-plt.title('UmaDB gRPC append with conditional (per-writer tag + after=head): throughput vs clients')
+plt.title('UmaDB gRPC conditional append')
 # Show y-axis grid lines and x-axis grid lines only at major ticks (the labeled x ticks)
 plt.grid(True, which='both', axis='y')
 plt.grid(True, which='major', axis='x')
@@ -43,4 +43,5 @@ for t, eps in zip(x, throughputs):
     plt.annotate(f"{eps:,.0f}", (t, eps), textcoords="offset points", xytext=(0, 6), ha='center', fontsize=8)
 
 plt.tight_layout()
+plt.savefig(f"UmaDB-append-bench-cond-{EVENTS_PER_REQUEST}-per-request.png", format="png", dpi=300)
 plt.show()

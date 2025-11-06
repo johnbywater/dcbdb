@@ -126,11 +126,31 @@ async fn start_server_internal<P: AsRef<Path> + Send + 'static>(
 
     let mut server_builder = build_server_builder_with_options(tls);
 
+    // gRPC Health service setup
+    use tonic_health::ServingStatus; // server API expects this enum
+    let (health_reporter, health_service) = tonic_health::server::health_reporter();
+    // Set overall and service-specific health to SERVING
+    health_reporter
+        .set_service_status("", ServingStatus::Serving)
+        .await;
+    health_reporter
+        .set_service_status("umadb.UmaDBService", ServingStatus::Serving)
+        .await;
+    let health_reporter_for_shutdown = health_reporter.clone();
+
     server_builder
+        .add_service(health_service)
         .add_service(server.into_service())
         .serve_with_shutdown(addr, async move {
             // Wait for an external shutdown trigger
             let _ = shutdown_rx.await;
+            // Mark health as NOT_SERVING before shutdown
+            let _ = health_reporter_for_shutdown
+                .set_service_status("", ServingStatus::NotServing)
+                .await;
+            let _ = health_reporter_for_shutdown
+                .set_service_status("umadb.UmaDBService", ServingStatus::NotServing)
+                .await;
             // Broadcast shutdown to all subscription tasks
             let _ = srv_shutdown_tx.send(true);
             println!("UmaDB server shutdown complete");

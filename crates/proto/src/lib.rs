@@ -4,7 +4,6 @@ use crate::umadb::{
 };
 use prost::Message;
 use prost::bytes::Bytes;
-use std::sync::Arc;
 use tonic::{Code, Status};
 use umadb_dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBQuery, DCBQueryItem, DCBResult, DCBSequencedEvent,
@@ -35,9 +34,9 @@ impl TryFrom<EventProto> for DCBEvent {
         };
 
         Ok(DCBEvent {
-            event_type: proto.event_type.clone(),
-            tags: proto.tags.clone(),
-            data: proto.data.clone(),
+            event_type: proto.event_type,
+            tags: proto.tags,
+            data: proto.data,
             uuid,
         })
     }
@@ -63,6 +62,15 @@ impl From<QueryItemProto> for DCBQueryItem {
     }
 }
 
+impl From<DCBQueryItem> for QueryItemProto {
+    fn from(item: DCBQueryItem) -> Self {
+        QueryItemProto {
+            types: item.types,
+            tags: item.tags,
+        }
+    }
+}
+
 impl From<QueryProto> for DCBQuery {
     fn from(proto: QueryProto) -> Self {
         DCBQuery {
@@ -71,22 +79,20 @@ impl From<QueryProto> for DCBQuery {
     }
 }
 
-impl From<QueryProto> for Arc<DCBQuery> {
-    fn from(proto: QueryProto) -> Self {
-        Arc::new(DCBQuery {
-            items: proto.items.into_iter().map(|item| item.into()).collect(),
-        })
+impl From<DCBQuery> for QueryProto {
+    fn from(query: DCBQuery) -> Self {
+        QueryProto {
+            items: query.items.into_iter().map(|item| item.into()).collect(),
+        }
     }
 }
 
 impl From<AppendConditionProto> for DCBAppendCondition {
     fn from(proto: AppendConditionProto) -> Self {
         DCBAppendCondition {
-            fail_if_events_match: Arc::new(
-                proto
+            fail_if_events_match: proto
                     .fail_if_events_match
                     .map_or_else(DCBQuery::default, |q| q.into()),
-            ),
             after: proto.after,
         }
     }

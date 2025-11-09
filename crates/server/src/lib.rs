@@ -180,7 +180,7 @@ impl UmaDbService for UmaDBServer {
         let read_request = request.into_inner();
 
         // Convert protobuf query to DCB types
-        let mut query: Option<Arc<DCBQuery>> = read_request.query.map(|q| q.into());
+        let mut query: Option<DCBQuery> = read_request.query.map(|q| q.into());
         let start = read_request.start;
         let backwards = read_request.backwards.unwrap_or(false);
         let limit = read_request.limit;
@@ -621,61 +621,48 @@ impl RequestHandler {
 
     async fn read(
         &self,
-        query: Option<Arc<DCBQuery>>,
+        query: Option<DCBQuery>,
         start: Option<u64>,
         backwards: bool,
         limit: Option<u32>,
     ) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
-        // Offload blocking read to a dedicated threadpool
-        let db = self.mvcc.clone();
-        tokio::task::spawn_blocking(
-            move || -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
-                let reader = db.reader()?;
-                let last_committed_position = reader.next_position.0.saturating_sub(1);
+        let reader = self.mvcc.reader()?;
+        let last_committed_position = reader.next_position.0.saturating_sub(1);
 
-                let q = query.unwrap_or(Arc::new(DCBQuery { items: vec![] }));
-                let from = start.map(Position);
-                let events = read_conditional(
-                    &db,
-                    &std::collections::HashMap::new(),
-                    reader.events_tree_root_id,
-                    reader.tags_tree_root_id,
-                    q,
-                    from,
-                    backwards,
-                    limit,
-                )
-                .map_err(|e| DCBError::Corruption(format!("{e}")))?;
-
-                let head = if limit.is_none() {
-                    if last_committed_position == 0 {
-                        None
-                    } else {
-                        Some(last_committed_position)
-                    }
-                } else {
-                    events.last().map(|e| e.position)
-                };
-
-                Ok((events, head))
-            },
+        let q = query.unwrap_or(DCBQuery { items: vec![] });
+        let from = start.map(Position);
+        
+        let events = read_conditional(
+            &self.mvcc,
+            &std::collections::HashMap::new(),
+            reader.events_tree_root_id,
+            reader.tags_tree_root_id,
+            q,
+            from,
+            backwards,
+            limit,
         )
-        .await
-        .map_err(|e| DCBError::Io(std::io::Error::other(format!("Join error: {e}"))))?
+        .map_err(|e| DCBError::Corruption(format!("{e}")))?;
+
+        let head = if limit.is_none() {
+            if last_committed_position == 0 {
+                None
+            } else {
+                Some(last_committed_position)
+            }
+        } else {
+            events.last().map(|e| e.position)
+        };
+
+        Ok((events, head))
     }
 
     async fn head(&self) -> DCBResult<Option<u64>> {
-        // Offload blocking head read to a dedicated threadpool
-        let mvcc = self.mvcc.clone();
-        tokio::task::spawn_blocking(move || -> DCBResult<Option<u64>> {
-            let (_, header) = mvcc
-                .get_latest_header()
-                .map_err(|e| DCBError::Corruption(format!("{e}")))?;
-            let last = header.next_position.0.saturating_sub(1);
-            if last == 0 { Ok(None) } else { Ok(Some(last)) }
-        })
-        .await
-        .map_err(|e| DCBError::Io(std::io::Error::other(format!("Join error: {e}"))))?
+        let (_, header) = self.mvcc
+            .get_latest_header()
+            .map_err(|e| DCBError::Corruption(format!("{e}")))?;
+        let last = header.next_position.0.saturating_sub(1);
+        if last == 0 { Ok(None) } else { Ok(Some(last)) }
     }
     pub async fn append(
         &self,

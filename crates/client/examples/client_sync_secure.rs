@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use umadb_client::UmaDBClient;
 use umadb_dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreSync, DCBQuery, DCBQueryItem,
@@ -10,12 +9,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = UmaDBClient::connect("https://localhost:50051", Some("server.pem"))?;
 
     // Define a consistency boundary
-    let cb = Arc::new(DCBQuery {
+    let cb = DCBQuery {
         items: vec![DCBQueryItem {
             types: vec!["example".to_string()],
             tags: vec!["tag1".to_string(), "tag2".to_string()],
         }],
-    });
+    };
 
     // Read events for a decision model
     let mut read_response = client.read(Some(cb.clone()), None, false, None, false, None)?;

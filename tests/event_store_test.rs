@@ -1,6 +1,5 @@
 // gRPC client sync trait support has been removed; tests use the local EventStore
 use std::net::TcpListener;
-use std::sync::Arc;
 use tempfile::tempdir;
 use tokio::runtime::Builder as RtBuilder;
 use umadb_client::UmaDBClient;
@@ -69,12 +68,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(None, head);
 
     // Read events with type1, expect 1 event.
-    let query_type1 = Arc::new(DCBQuery {
+    let query_type1 = DCBQuery {
         items: vec![DCBQueryItem {
             types: vec!["type1".to_string()],
             tags: vec![],
         }],
-    });
+    };
     let (result, head) = event_store
         .read_with_head(Some(query_type1.clone()), None, false, None)
         .unwrap();
@@ -83,12 +82,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(Some(1), head);
 
     // Read events with type2, expect no events.
-    let query_type2 = Arc::new(DCBQuery {
+    let query_type2 = DCBQuery {
         items: vec![DCBQueryItem {
             types: vec!["type2".to_string()],
             tags: vec![],
         }],
-    });
+    };
     let (result, head) = event_store
         .read_with_head(Some(query_type2.clone()), None, false, None)
         .unwrap();
@@ -96,12 +95,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(Some(1), head);
 
     // Read events with tagX, expect one event.
-    let query_tag_x = Arc::new(DCBQuery {
+    let query_tag_x = DCBQuery {
         items: vec![DCBQueryItem {
             types: vec![],
             tags: vec!["tagX".to_string()],
         }],
-    });
+    };
     let (result, head) = event_store
         .read_with_head(Some(query_tag_x.clone()), None, false, None)
         .unwrap();
@@ -110,12 +109,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(Some(1), head);
 
     // Read events with tagY, expect no events.
-    let query_tag_y = Arc::new(DCBQuery {
+    let query_tag_y = DCBQuery {
         items: vec![DCBQueryItem {
             types: vec![],
             tags: vec!["tagY".to_string()],
         }],
-    });
+    };
     let (result, head) = event_store
         .read_with_head(Some(query_tag_y.clone()), None, false, None)
         .unwrap();
@@ -123,12 +122,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(Some(1), head);
 
     // Read events with type1 and tagX, expect one event.
-    let query_type1_tag_x = Arc::new(DCBQuery {
+    let query_type1_tag_x = DCBQuery {
         items: vec![DCBQueryItem {
             types: vec!["type1".to_string()],
             tags: vec!["tagX".to_string()],
         }],
-    });
+    };
     let (result, head) = event_store
         .read_with_head(Some(query_type1_tag_x.clone()), None, false, None)
         .unwrap();
@@ -136,12 +135,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(Some(1), head);
 
     // Read events with type1 and tagY, expect no events.
-    let query_type1_tag_y = Arc::new(DCBQuery {
+    let query_type1_tag_y = DCBQuery {
         items: vec![DCBQueryItem {
             types: vec!["type1".to_string()],
             tags: vec!["tagY".to_string()],
         }],
-    });
+    };
     let (result, head) = event_store
         .read_with_head(Some(query_type1_tag_y), None, false, None)
         .unwrap();
@@ -149,12 +148,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(Some(1), head);
 
     // Read events with type2 and tagX, expect no events.
-    let query_type2_tag_x = Arc::new(DCBQuery {
+    let query_type2_tag_x = DCBQuery {
         items: vec![DCBQueryItem {
             types: vec!["type2".to_string()],
             tags: vec!["tagX".to_string()],
         }],
-    });
+    };
     let (result, head) = event_store
         .read_with_head(Some(query_type2_tag_x), None, false, None)
         .unwrap();
@@ -254,12 +253,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(Some(3), head);
 
     // Read events with tagA, expect two events.
-    let query_tag_a = Arc::new(DCBQuery {
+    let query_tag_a = DCBQuery {
         items: vec![DCBQueryItem {
             types: vec![],
             tags: vec!["tagA".to_string()],
         }],
-    });
+    };
     let (result, head) = event_store
         .read_with_head(Some(query_tag_a.clone()), None, false, None)
         .unwrap();
@@ -269,12 +268,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(Some(3), head);
 
     // Read events with tagA and tagB, expect one event.
-    let query_tag_a_and_b = Arc::new(DCBQuery {
+    let query_tag_a_and_b = DCBQuery {
         items: vec![DCBQueryItem {
             types: vec![],
             tags: vec!["tagA".to_string(), "tagB".to_string()],
         }],
-    });
+    };
     let (result, head) = event_store
         .read_with_head(Some(query_tag_a_and_b.clone()), None, false, None)
         .unwrap();
@@ -283,7 +282,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(Some(3), head);
 
     // Read events with tagB or tagC, expect two events.
-    let query_tag_b_or_c = Arc::new(DCBQuery {
+    let query_tag_b_or_c = DCBQuery {
         items: vec![
             DCBQueryItem {
                 types: vec![],
@@ -294,7 +293,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
                 tags: vec!["tagC".to_string()],
             },
         ],
-    });
+    };
     let (result, head) = event_store
         .read_with_head(Some(query_tag_b_or_c.clone()), None, false, None)
         .unwrap();
@@ -304,7 +303,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(Some(3), head);
 
     // Read events with tagX or tagY, expect one event.
-    let query_tag_x_or_y = Arc::new(DCBQuery {
+    let query_tag_x_or_y = DCBQuery {
         items: vec![
             DCBQueryItem {
                 types: vec![],
@@ -315,7 +314,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
                 tags: vec!["tagY".to_string()],
             },
         ],
-    });
+    };
     let (result, head) = event_store
         .read_with_head(Some(query_tag_x_or_y.clone()), None, false, None)
         .unwrap();
@@ -324,12 +323,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(Some(3), head);
 
     // Read events with type2 and tagA, expect one event.
-    let query_type2_tag_a = Arc::new(DCBQuery {
+    let query_type2_tag_a = DCBQuery {
         items: vec![DCBQueryItem {
             types: vec!["type2".to_string()],
             tags: vec!["tagA".to_string()],
         }],
-    });
+    };
     let (result, head) = event_store
         .read_with_head(Some(query_type2_tag_a.clone()), None, false, None)
         .unwrap();
@@ -345,7 +344,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(Some(3), head);
 
     // Read events with type2 and tagB, or with type3 and tagC, expect two events.
-    let query_type2_tag_b_or_type3_tagc = Arc::new(DCBQuery {
+    let query_type2_tag_b_or_type3_tagc = DCBQuery {
         items: vec![
             DCBQueryItem {
                 types: vec!["type2".to_string()],
@@ -356,7 +355,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
                 tags: vec!["tagC".to_string()],
             },
         ],
-    });
+    };
     let (result, head) = event_store
         .read_with_head(
             Some(query_type2_tag_b_or_type3_tagc.clone()),
@@ -371,7 +370,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(Some(3), head);
 
     // Repeat with query items in different order, expect events in ascending order.
-    let query_type3_tag_c_or_type2_tag_b = Arc::new(DCBQuery {
+    let query_type3_tag_c_or_type2_tag_b = DCBQuery {
         items: vec![
             DCBQueryItem {
                 types: vec!["type3".to_string()],
@@ -382,7 +381,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
                 tags: vec!["tagB".to_string()],
             },
         ],
-    });
+    };
     let (result, head) = event_store
         .read_with_head(Some(query_type3_tag_c_or_type2_tag_b), None, false, None)
         .unwrap();
@@ -408,7 +407,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     let result = event_store.append(
         new.clone(),
         Some(DCBAppendCondition {
-            fail_if_events_match: Arc::new(DCBQuery::default()),
+            fail_if_events_match: DCBQuery::default(),
             after: Some(1),
         }),
     );
@@ -519,12 +518,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(4, position);
 
     // Can append match type_n.
-    let query_type_n = Arc::new(DCBQuery {
+    let query_type_n = DCBQuery {
         items: vec![DCBQueryItem {
             types: vec!["typeN".to_string()],
             tags: vec![],
         }],
-    });
+    };
     let position = event_store
         .append(
             new.clone(),
@@ -628,12 +627,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         .append(
             vec![student_registered.clone()],
             Some(DCBAppendCondition {
-                fail_if_events_match: Arc::new(DCBQuery {
+                fail_if_events_match: DCBQuery {
                     items: vec![DCBQueryItem {
                         types: vec!["StudentRegistered".to_string()],
                         tags: student_registered.tags.clone(),
                     }],
-                }),
+                },
                 after: Some(3),
             }),
         )
@@ -643,12 +642,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         .append(
             vec![course_registered.clone()],
             Some(DCBAppendCondition {
-                fail_if_events_match: Arc::new(DCBQuery {
+                fail_if_events_match: DCBQuery {
                     items: vec![DCBQueryItem {
                         types: vec![],
                         tags: course_registered.tags.clone(),
                     }],
-                }),
+                },
                 after: Some(3),
             }),
         )
@@ -658,12 +657,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         .append(
             vec![student_joined_course.clone()],
             Some(DCBAppendCondition {
-                fail_if_events_match: Arc::new(DCBQuery {
+                fail_if_events_match: DCBQuery {
                     items: vec![DCBQueryItem {
                         types: vec![],
                         tags: student_joined_course.tags.clone(),
                     }],
-                }),
+                },
                 after: Some(3),
             }),
         )
@@ -687,12 +686,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
 
     let (result, head) = event_store
         .read_with_head(
-            Some(Arc::new(DCBQuery {
+            Some(DCBQuery {
                 items: vec![DCBQueryItem {
                     types: vec![],
                     tags: vec![student_id.clone()],
                 }],
-            })),
+            }),
             None,
             false,
             None,
@@ -703,12 +702,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
 
     let (result, head) = event_store
         .read_with_head(
-            Some(Arc::new(DCBQuery {
+            Some(DCBQuery {
                 items: vec![DCBQueryItem {
                     types: vec![],
                     tags: vec![course_id.clone()],
                 }],
-            })),
+            }),
             None,
             false,
             None,
@@ -719,7 +718,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
 
     let (result, head) = event_store
         .read_with_head(
-            Some(Arc::new(DCBQuery {
+            Some(DCBQuery {
                 items: vec![DCBQueryItem {
                     types: vec![],
                     tags: vec![
@@ -727,7 +726,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
                         student_joined_course.tags[1].clone(),
                     ],
                 }],
-            })),
+            }),
             None,
             false,
             None,
@@ -738,12 +737,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
 
     let (result, head) = event_store
         .read_with_head(
-            Some(Arc::new(DCBQuery {
+            Some(DCBQuery {
                 items: vec![DCBQueryItem {
                     types: vec![],
                     tags: vec![student_id.clone()],
                 }],
-            })),
+            }),
             Some(3),
             false,
             None,
@@ -754,12 +753,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
 
     let (result, head) = event_store
         .read_with_head(
-            Some(Arc::new(DCBQuery {
+            Some(DCBQuery {
                 items: vec![DCBQueryItem {
                     types: vec![],
                     tags: vec![course_id.clone()],
                 }],
-            })),
+            }),
             Some(3),
             false,
             None,
@@ -770,7 +769,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
 
     let (result, head) = event_store
         .read_with_head(
-            Some(Arc::new(DCBQuery {
+            Some(DCBQuery {
                 items: vec![DCBQueryItem {
                     types: vec![],
                     tags: vec![
@@ -778,7 +777,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
                         student_joined_course.tags[1].clone(),
                     ],
                 }],
-            })),
+            }),
             Some(3),
             false,
             None,
@@ -789,12 +788,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
 
     let (result, head) = event_store
         .read_with_head(
-            Some(Arc::new(DCBQuery {
+            Some(DCBQuery {
                 items: vec![DCBQueryItem {
                     types: vec![],
                     tags: vec![student_id.clone()],
                 }],
-            })),
+            }),
             Some(3),
             false,
             Some(1),
@@ -805,12 +804,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
 
     let (result, head) = event_store
         .read_with_head(
-            Some(Arc::new(DCBQuery {
+            Some(DCBQuery {
                 items: vec![DCBQueryItem {
                     types: vec![],
                     tags: vec![course_id.clone()],
                 }],
-            })),
+            }),
             Some(3),
             false,
             Some(1),
@@ -821,7 +820,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
 
     let (result, head) = event_store
         .read_with_head(
-            Some(Arc::new(DCBQuery {
+            Some(DCBQuery {
                 items: vec![DCBQueryItem {
                     types: vec![],
                     tags: vec![
@@ -829,7 +828,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
                         student_joined_course.tags[1].clone(),
                     ],
                 }],
-            })),
+            }),
             Some(3),
             false,
             Some(1),
@@ -838,7 +837,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(1, result.len());
     assert_eq!(Some(13), head);
 
-    let consistency_boundary = Arc::new(DCBQuery {
+    let consistency_boundary = DCBQuery {
         items: vec![
             DCBQueryItem {
                 types: vec![
@@ -855,7 +854,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
                 tags: vec![course_id.clone()],
             },
         ],
-    });
+    };
     let (result, head) = event_store
         .read_with_head(Some(consistency_boundary), None, false, None)
         .unwrap();
@@ -878,12 +877,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         .append(
             vec![event5.clone()],
             Some(DCBAppendCondition {
-                fail_if_events_match: Arc::new(DCBQuery {
+                fail_if_events_match: DCBQuery {
                     items: vec![DCBQueryItem {
                         types: vec![],
                         tags: event5.tags.clone(),
                     }],
-                }),
+                },
                 after: Some(13),
             }),
         )
@@ -891,12 +890,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
 
     let (result, head) = event_store
         .read_with_head(
-            Some(Arc::new(DCBQuery {
+            Some(DCBQuery {
                 items: vec![DCBQueryItem {
                     types: vec![],
                     tags: event5.tags.clone(),
                 }],
-            })),
+            }),
             Some(14),
             false,
             None,
@@ -912,12 +911,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         .append(
             vec![event5.clone()],
             Some(DCBAppendCondition {
-                fail_if_events_match: Arc::new(DCBQuery {
+                fail_if_events_match: DCBQuery {
                     items: vec![DCBQueryItem {
                         types: vec![],
                         tags: event5.tags.clone(),
                     }],
-                }),
+                },
                 after: Some(13),
             }),
         )
@@ -927,12 +926,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
 
     let (result, head) = event_store
         .read_with_head(
-            Some(Arc::new(DCBQuery {
+            Some(DCBQuery {
                 items: vec![DCBQueryItem {
                     types: vec![],
                     tags: event5.tags.clone(),
                 }],
-            })),
+            }),
             Some(14),
             false,
             None,
@@ -1030,12 +1029,12 @@ fn test_tag_hash_collision() {
     // Query by student tag: should return only the student event
     let (result, _head) = store
         .read_with_head(
-            Some(Arc::new(DCBQuery {
+            Some(DCBQuery {
                 items: vec![DCBQueryItem {
                     types: vec![],
                     tags: vec![student_tag.clone()],
                 }],
-            })),
+            }),
             None,
             false,
             None,
@@ -1052,12 +1051,12 @@ fn test_tag_hash_collision() {
     // Query by course tag: should return only the course event
     let (result, _head) = store
         .read_with_head(
-            Some(Arc::new(DCBQuery {
+            Some(DCBQuery {
                 items: vec![DCBQueryItem {
                     types: vec![],
                     tags: vec![course_tag.clone()],
                 }],
-            })),
+            }),
             None,
             false,
             None,
@@ -1074,7 +1073,7 @@ fn test_tag_hash_collision() {
     // Query with two items (student tag OR course tag): should return both events
     let (result, _head) = store
         .read_with_head(
-            Some(Arc::new(DCBQuery {
+            Some(DCBQuery {
                 items: vec![
                     DCBQueryItem {
                         types: vec![],
@@ -1085,7 +1084,7 @@ fn test_tag_hash_collision() {
                         tags: vec![course_tag.clone()],
                     },
                 ],
-            })),
+            }),
             None,
             false,
             None,

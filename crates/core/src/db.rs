@@ -142,7 +142,7 @@ impl UmaDB {
 impl DCBEventStoreSync for UmaDB {
     fn read(
         &self,
-        query: Option<Arc<DCBQuery>>,
+        query: Option<DCBQuery>,
         start: Option<u64>,
         backwards: bool,
         limit: Option<u32>,
@@ -156,7 +156,7 @@ impl DCBEventStoreSync for UmaDB {
         let last_committed_position = reader.next_position.0.saturating_sub(1);
 
         // Build query and after
-        let q = query.unwrap_or(Arc::new(DCBQuery { items: vec![] }));
+        let q = query.unwrap_or(DCBQuery { items: vec![] });
         let from = start.map(Position);
 
         // Delegate to read_conditional
@@ -265,19 +265,18 @@ pub fn unconditional_append(
     for ev in events.into_iter() {
         let position = writer.issue_position();
         last_pos_u64 = position.0;
+        // Index tags before moving an event record into event_tree_append
+        for tag in ev.tags.iter() {
+            let tag_hash: TagHash = tag_to_hash(tag);
+            tags_tree_insert(mvcc, writer, tag_hash, position)?;
+        }
         let record = EventRecord {
             event_type: ev.event_type,
             data: ev.data,
             tags: ev.tags,
             uuid: ev.uuid,
         };
-        // Clone tags so we can index them after moving record into event_tree_append
-        let tags = record.tags.clone();
         event_tree_append(mvcc, writer, record, position)?;
-        for tag in tags.iter() {
-            let tag_hash: TagHash = tag_to_hash(tag);
-            tags_tree_insert(mvcc, writer, tag_hash, position)?;
-        }
     }
 
     Ok(last_pos_u64)
@@ -290,7 +289,7 @@ pub fn read_conditional(
     dirty: &HashMap<PageID, Page>,
     events_tree_root_id: PageID,
     tags_tree_root_id: PageID,
-    query: Arc<DCBQuery>,
+    query: DCBQuery,
     start: Option<Position>,
     backwards: bool,
     limit: Option<u32>,
@@ -579,7 +578,7 @@ pub fn is_request_idempotent(
     events_tree_root_id: PageID,
     tags_tree_root_id: PageID,
     events: &Vec<DCBEvent>,
-    fail_if_events_match: Arc<DCBQuery>,
+    fail_if_events_match: DCBQuery,
     start: Option<Position>,
 ) -> DCBResult<Option<u64>> {
     // Check events for event IDs. If all have events IDs then
@@ -662,7 +661,7 @@ mod tests {
             &HashMap::<PageID, Page>::new(),
             events_tree_root_id,
             tags_tree_root_id,
-            Arc::new(query),
+            query,
             start,
             backwards,
             limit,
@@ -1173,12 +1172,12 @@ mod tests {
         assert_eq!(head_lim1, Some(only_one[0].position));
 
         // Tag-filtered read ("foo")
-        let query = Arc::new(DCBQuery {
+        let query = DCBQuery {
             items: vec![DCBQueryItem {
                 types: vec![],
                 tags: vec!["foo".to_string()],
             }],
-        });
+        };
         let mut resp2 = store
             .read(Some(query), None, false, None, false, None)
             .unwrap();
@@ -1197,12 +1196,12 @@ mod tests {
 
         // Append with a condition that should PASS: query matches existing 'foo' but after = last
         let cond_pass = DCBAppendCondition {
-            fail_if_events_match: Arc::new(DCBQuery {
+            fail_if_events_match: DCBQuery {
                 items: vec![DCBQueryItem {
                     types: vec![],
                     tags: vec!["foo".to_string()],
                 }],
-            }),
+            },
             after: Some(last),
         };
         let ok_last = store
@@ -1221,12 +1220,12 @@ mod tests {
 
         // Append with a condition that should FAIL: same query but after = 0
         let cond_fail = DCBAppendCondition {
-            fail_if_events_match: Arc::new(DCBQuery {
+            fail_if_events_match: DCBQuery {
                 items: vec![DCBQueryItem {
                     types: vec![],
                     tags: vec!["foo".to_string()],
                 }],
-            }),
+            },
             after: Some(0),
         };
         let before_head = store.head().unwrap();
@@ -1277,14 +1276,14 @@ mod tests {
             (
                 vec![e2.clone()],
                 Some(DCBAppendCondition {
-                    fail_if_events_match: Arc::new(DCBQuery::default()),
+                    fail_if_events_match: DCBQuery::default(),
                     after: None,
                 }),
             ),
             (
                 vec![e3.clone()],
                 Some(DCBAppendCondition {
-                    fail_if_events_match: Arc::new(DCBQuery::default()),
+                    fail_if_events_match: DCBQuery::default(),
                     after: Some(10),
                 }),
             ),
@@ -1342,12 +1341,12 @@ mod tests {
             uuid: None,
         };
 
-        let query_tag_x = Arc::new(DCBQuery {
+        let query_tag_x = DCBQuery {
             items: vec![DCBQueryItem {
                 types: vec![],
                 tags: vec!["x".into()],
             }],
-        });
+        };
 
         let items = vec![
             // 1) Append e1 (tag x)
@@ -1441,18 +1440,18 @@ mod tests {
         };
 
         // Queries by type only (no tags) to force fallback path over events tree (which reads from dirty pages)
-        let q_type_s = Arc::new(DCBQuery {
+        let q_type_s = DCBQuery {
             items: vec![DCBQueryItem {
                 types: vec!["S".into()],
                 tags: vec![],
             }],
-        });
-        let q_type_b = Arc::new(DCBQuery {
+        };
+        let q_type_b = DCBQuery {
             items: vec![DCBQueryItem {
                 types: vec!["B".into()],
                 tags: vec![],
             }],
-        });
+        };
 
         let items = vec![
             // 1) Append small S
@@ -1573,18 +1572,18 @@ mod tests {
         };
 
         // Conditions combining tags and types so the tags index is used and the type filter applies after lookup
-        let q_s_and_x = Arc::new(DCBQuery {
+        let q_s_and_x =DCBQuery {
             items: vec![DCBQueryItem {
                 types: vec!["S".into()],
                 tags: vec!["x".into()],
             }],
-        });
-        let q_b_and_y = Arc::new(DCBQuery {
+        };
+        let q_b_and_y = DCBQuery {
             items: vec![DCBQueryItem {
                 types: vec!["B".into()],
                 tags: vec!["y".into()],
             }],
-        });
+        };
 
         let items = vec![
             // 1) Append small S@x
@@ -1672,7 +1671,7 @@ mod tests {
         let store = UmaDB::new(temp_dir.path()).unwrap();
 
         let condition1 = Some(DCBAppendCondition {
-            fail_if_events_match: Arc::new(DCBQuery { items: vec![] }),
+            fail_if_events_match: DCBQuery { items: vec![] },
             after: None,
         });
 

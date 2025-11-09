@@ -6,7 +6,6 @@
 use async_trait::async_trait;
 use futures_core::Stream;
 use std::iter::Iterator;
-use std::sync::Arc;
 use thiserror::Error;
 use uuid::Uuid;
 use futures_util::StreamExt;
@@ -23,7 +22,7 @@ pub trait DCBEventStoreSync {
     /// there are no item types, and if all the item tags are in the event tags.
     fn read(
         &self,
-        query: Option<Arc<DCBQuery>>,
+        query: Option<DCBQuery>,
         start: Option<u64>,
         backwards: bool,
         limit: Option<u32>,
@@ -34,7 +33,7 @@ pub trait DCBEventStoreSync {
     /// Reads events from the store and returns them as a tuple of (Vec<DCBSequencedEvent>, Option<u64>)
     fn read_with_head(
         &self,
-        query: Option<Arc<DCBQuery>>,
+        query: Option<DCBQuery>,
         start: Option<u64>,
         backwards: bool,
         limit: Option<u32>,
@@ -80,7 +79,7 @@ pub trait DCBEventStoreAsync: Send + Sync {
     /// there are no item types, and if all the item tags are in the event tags.
     async fn read<'a>(
         &'a self,
-        query: Option<Arc<DCBQuery>>,
+        query: Option<DCBQuery>,
         start: Option<u64>,
         backwards: bool,
         limit: Option<u32>,
@@ -91,7 +90,7 @@ pub trait DCBEventStoreAsync: Send + Sync {
     /// Reads events from the store and returns them as a tuple of (Vec<DCBSequencedEvent>, Option<u64>)
     async fn read_with_head<'a>(
         &'a self,
-        query: Option<Arc<DCBQuery>>,
+        query: Option<DCBQuery>,
         after: Option<u64>,
         backwards: bool,
         limit: Option<u32>,
@@ -155,7 +154,7 @@ pub struct DCBQuery {
 #[derive(Debug, Clone, Default)]
 pub struct DCBAppendCondition {
     /// Query that, if matching any events, will cause the append to fail
-    pub fail_if_events_match: Arc<DCBQuery>,
+    pub fail_if_events_match: DCBQuery,
     /// Position after which to append; if None, append at the end
     pub after: Option<u64>,
 }

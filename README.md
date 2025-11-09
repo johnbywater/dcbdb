@@ -856,10 +856,10 @@ Represents a single **query clause** for filtering events.
 
 Conditions that must be satisfied before an append operation succeeds.
 
-| Field                  | Type            | Description                                                                                                    |
-|------------------------|-----------------|----------------------------------------------------------------------------------------------------------------|
-| `fail_if_events_match` | `Arc<DCBQuery>` | If this query matches **any** existing events, the append operation will fail.                                 |
-| `after`                | `Option<u64>`   | Optional position constraint. If set, the append will only succeed if no events exist **after** this position. |
+| Field                  | Type           | Description                                                                                                    |
+|------------------------|----------------|----------------------------------------------------------------------------------------------------------------|
+| `fail_if_events_match` | `DCBQuery` | If this query matches **any** existing events, the append operation will fail.                                 |
+| `after`                | `Option<u64>`  | Optional position constraint. If set, the append will only succeed if no events exist **after** this position. |
 
 ### `enum DCBError`
 
@@ -896,7 +896,6 @@ All the client methods return this type, which yields either a successful result
 Here's an example of how to use the synchronous Rust client for UmaDB:
 
 ```rust
-use std::sync::Arc;
 use umadb::dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreSync, DCBQuery, DCBQueryItem,
 };
@@ -908,12 +907,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = UmaDBClient::connect("http://localhost:50051", None)?;
 
     // Define a consistency boundary
-    let cb = Arc::new(DCBQuery {
+    let cb = DCBQuery {
         items: vec![DCBQueryItem {
             types: vec!["example".to_string()],
             tags: vec!["tag1".to_string(), "tag2".to_string()],
         }],
-    });
+    };
 
     // Read events for a decision model
     let mut read_response = client.read(Some(cb.clone()), None, false, None, false, None)?;
@@ -1025,7 +1024,6 @@ Here's an example of how to use the asynchronous Rust client for UmaDB:
 
 ```rust
 use futures::StreamExt;
-use std::sync::Arc;
 use umadb::dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreAsync, DCBQuery, DCBQueryItem,
 };
@@ -1038,12 +1036,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = AsyncUmaDBClient::connect("https://localhost:50051", None).await?;
 
     // Define a consistency boundary
-    let cb = Arc::new(DCBQuery {
+    let cb = DCBQuery {
         items: vec![DCBQueryItem {
             types: vec!["example".to_string()],
             tags: vec!["tag1".to_string(), "tag2".to_string()],
         }],
-    });
+    };
 
     // Read events for a decision model
     let mut read_response = client

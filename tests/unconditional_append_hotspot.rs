@@ -1,6 +1,5 @@
 use std::env;
 use std::hint::black_box;
-use std::sync::Arc;
 use std::time::Instant;
 use tempfile::tempdir;
 use umadb_core::db::UmaDB;
@@ -82,12 +81,12 @@ fn profile_event_store_append() {
             events.push(event);
         }
         let condition = DCBAppendCondition {
-            fail_if_events_match: Arc::new(DCBQuery {
+            fail_if_events_match: DCBQuery {
                 items: vec![DCBQueryItem {
                     types: vec![],
                     tags: vec!["foo".to_string()],
                 }],
-            }),
+            },
             after: Some(0),
         };
 

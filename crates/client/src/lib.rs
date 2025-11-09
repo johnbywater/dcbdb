@@ -5,7 +5,6 @@ use std::collections::VecDeque;
 use std::fs;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 
@@ -117,7 +116,7 @@ impl DCBEventStoreAsync for AsyncUmaDBClient {
     // Async inherent methods: use the gRPC client directly (no trait required)
     async fn read<'a>(
         &'a self,
-        query: Option<Arc<DCBQuery>>,
+        query: Option<DCBQuery>,
         start: Option<u64>,
         backwards: bool,
         limit: Option<u32>,
@@ -125,15 +124,7 @@ impl DCBEventStoreAsync for AsyncUmaDBClient {
         batch_size: Option<u32>,
     ) -> DCBResult<Box<dyn DCBReadResponseAsync + Send>> {
         // Convert API types to protobuf types
-        let query_proto = query.map(|q| QueryProto {
-            items: <Vec<DCBQueryItem> as Clone>::clone(&q.items)
-                .into_iter()
-                .map(|item| QueryItemProto {
-                    types: item.types,
-                    tags: item.tags,
-                })
-                .collect(),
-        });
+        let query_proto = query.map(|q| q.into());
         let request = ReadRequestProto {
             query: query_proto,
             start,
@@ -373,7 +364,7 @@ impl UmaDBClient {
 impl DCBEventStoreSync for UmaDBClient {
     fn read(
         &self,
-        query: Option<Arc<DCBQuery>>,
+        query: Option<DCBQuery>,
         start: Option<u64>,
         backwards: bool,
         limit: Option<u32>,

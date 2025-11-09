@@ -7,6 +7,7 @@ license = { workspace = true }
 [dependencies]
 umadb-dcb = { path = "../dcb" }
 crc32fast = "1"
+dashmap = "6"
 itertools = "0.14"
 uuid = { workspace = true }
 libc = { workspace = true }

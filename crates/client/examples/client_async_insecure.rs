@@ -1,5 +1,4 @@
 use futures::StreamExt;
-use std::sync::Arc;
 use umadb_client::AsyncUmaDBClient;
 use umadb_dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreAsync, DCBQuery, DCBQueryItem,
@@ -12,12 +11,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = AsyncUmaDBClient::connect("https://localhost:50051", None).await?;
 
     // Define a consistency boundary
-    let cb = Arc::new(DCBQuery {
+    let cb = DCBQuery {
         items: vec![DCBQueryItem {
             types: vec!["example".to_string()],
             tags: vec!["tag1".to_string(), "tag2".to_string()],
         }],
-    });
+    };
 
     // Read events for a decision model
     let mut read_response = client

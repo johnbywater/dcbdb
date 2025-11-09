@@ -185,7 +185,7 @@ impl UmaDbService for UmaDBServer {
         let backwards = read_request.backwards.unwrap_or(false);
         let limit = read_request.limit;
         // Cap requested batch size.
-        let capped_batch_size = read_request
+        let batch_size = read_request
             .batch_size
             .unwrap_or(READ_RESPONSE_BATCH_SIZE_DEFAULT)
             .clamp(1, READ_RESPONSE_BATCH_SIZE_MAX);
@@ -204,12 +204,12 @@ impl UmaDbService for UmaDBServer {
             let query_clone = query.take();
             let mut next_start = start;
             let mut sent_any = false;
-            let mut remaining = limit;
+            let mut remaining_limit = limit;
             // Create a watch receiver for head updates (for subscriptions)
             // TODO: Make this an Option and only do this for subscriptions?
             let mut head_rx = request_handler.watch_head();
-            // If overall read is unlimited, compute global head once to preserve semantics
-            let global_head = if remaining.is_none() && !subscribe {
+            // If non-subscription read, capture head to preserve point-in-time semantics
+            let captured_head = if !subscribe {
                 request_handler.head().await.unwrap_or(None)
             } else {
                 None
@@ -226,11 +226,11 @@ impl UmaDbService for UmaDBServer {
                     }
                 }
                 // Determine per-iteration limit.
-                let per_iter_limit = remaining.unwrap_or(u32::MAX).min(capped_batch_size);
+                let read_limit = remaining_limit.unwrap_or(u32::MAX).min(batch_size);
                 // If subscription and remaining exhausted (limit reached), terminate
                 if subscribe
-                    && let Some(rem) = remaining
-                    && rem == 0
+                    && let Some(remaining_limit) = remaining_limit
+                    && remaining_limit == 0
                 {
                     break;
                 }
@@ -239,19 +239,23 @@ impl UmaDbService for UmaDBServer {
                         query_clone.clone(),
                         next_start,
                         backwards,
-                        Some(per_iter_limit),
+                        Some(read_limit),
                     )
                     .await
                 {
-                    Ok((events, head)) => {
-                        if events.is_empty() {
+                    Ok((dcb_sequenced_events, head)) => {
+                        if dcb_sequenced_events.is_empty() {
                             // Only send an empty response to communicate head if this is the first
                             if !sent_any {
-                                // For unlimited overall reads, use precomputed global head (non-subscribe)
-                                let head_to_send = if remaining.is_none() && !subscribe {
-                                    global_head
-                                } else {
+                                // For unlimited non-subscription reads, use global_head
+                                // For limited reads, use None (no events means no head to report)
+                                // For subscriptions, use current head
+                                let head_to_send = if subscribe {
                                     head
+                                } else if remaining_limit.is_none() {
+                                    captured_head
+                                } else {
+                                    None
                                 };
                                 let response = ReadResponseProto {
                                     events: vec![],
@@ -268,9 +272,8 @@ impl UmaDbService for UmaDBServer {
                                         break;
                                     }
                                     let current_head = *head_rx.borrow();
-                                    let na = next_start.unwrap_or(1);
-                                    if current_head.map(|h| h >= na).unwrap_or(false) {
-                                        break; // new events available
+                                    if current_head.map(|h| h >= next_start.unwrap_or(1)).unwrap_or(false) {
+                                        break;  // Break out of waiting, new events are available.
                                     }
                                     // Wait for either a new head or a server shutdown signal
                                     tokio::select! {
@@ -292,33 +295,44 @@ impl UmaDbService for UmaDBServer {
                             break;
                         }
 
-                        // For unlimited overall reads, clamp events to the starting global head without cloning
-                        let (slice_start, slice_len, reached_end) = if remaining.is_none() {
-                            if let Some(h) = global_head {
-                                // find first index > h
-                                let idx = events
-                                    .iter()
-                                    .position(|e| e.position > h)
-                                    .unwrap_or(events.len())
-                                    as u32;
-                                (0u32, idx, idx < events.len() as u32)
-                            } else {
-                                (0u32, events.len() as u32, false)
-                            }
+                        // Capture the original length before consuming events
+                        let original_len = dcb_sequenced_events.len();
+                        
+                        // Filter and map events, discarding those with position > global_head
+                        let sequenced_event_protos: Vec<SequencedEventProto> = dcb_sequenced_events
+                            .into_iter()
+                            .filter(|e| {
+                                if let Some(h) = captured_head {
+                                    e.position <= h
+                                } else {
+                                    true
+                                }
+                            })
+                            .map(|e| SequencedEventProto::from(e))
+                            .collect();
+                        
+                        let reached_captured_head = if captured_head.is_some() {
+                            // Check if we filtered out any events
+                            sequenced_event_protos.len() < original_len
                         } else {
-                            (0u32, events.len() as u32, false)
+                            false
                         };
 
-                        if slice_len == 0 {
+                        if sequenced_event_protos.is_empty() {
                             // If we haven't sent anything yet, still send an empty batch with head to convey metadata
                             if !sent_any {
-                                let head_to_send = if remaining.is_none() {
-                                    global_head
-                                } else {
+                                // For unlimited non-subscription reads, use global_head
+                                // For limited reads, use None (no events means no head to report)
+                                // For subscriptions, use current head
+                                let head_to_send = if subscribe {
                                     head
+                                } else if remaining_limit.is_none() {
+                                    captured_head
+                                } else {
+                                    None
                                 };
                                 let response = ReadResponseProto {
-                                    events: vec![],
+                                    events: sequenced_event_protos,
                                     head: head_to_send,
                                 };
                                 let _ = tx.send(Ok(response)).await;
@@ -326,21 +340,22 @@ impl UmaDbService for UmaDBServer {
                             break;
                         }
 
-                        // Prepare and send this non-empty (possibly trimmed) batch
-                        let batch_head = if remaining.is_none() {
-                            global_head
-                        } else {
+                        // Capture values needed after ev_out is moved
+                        let sent_count = sequenced_event_protos.len() as u32;
+                        let last_event_position = sequenced_event_protos.last().map(|e| e.position);
+                        
+                        // Prepare and send this batch
+                        // For unlimited reads, use global_head; for limited reads, use last event position
+                        let batch_head = if subscribe {
                             head
+                        } else if remaining_limit.is_none() {
+                            captured_head
+                        } else {
+                            last_event_position
                         };
-                        let mut ev_out = Vec::with_capacity(slice_len as usize);
-                        for e in events
-                            [slice_start as usize..slice_start as usize + slice_len as usize]
-                            .iter()
-                        {
-                            ev_out.push(SequencedEventProto::from(e.clone()));
-                        }
+
                         let response = ReadResponseProto {
-                            events: ev_out,
+                            events: sequenced_event_protos,
                             head: batch_head,
                         };
 
@@ -350,22 +365,20 @@ impl UmaDbService for UmaDBServer {
                         sent_any = true;
 
                         // Advance the cursor (use a new reader on the next loop iteration)
-                        next_start = events
-                            .get(slice_start as usize + slice_len as usize - 1)
-                            .map(|e| e.position + 1);
+                        next_start = last_event_position.map(|p| p + 1);
 
-                        // Stop streaming further If we reached the
+                        // Stop streaming further if we reached the
                         // captured head boundary (non-subscriber only).
-                        if reached_end && remaining.is_none() && !subscribe {
+                        if reached_captured_head && !subscribe {
                             break;
                         }
 
                         // Decrease the remaining overall limit if any, and stop if reached
-                        if let Some(rem) = remaining.as_mut() {
-                            if *rem <= slice_len {
+                        if let Some(rem) = remaining_limit.as_mut() {
+                            if *rem <= sent_count {
                                 *rem = 0;
                             } else {
-                                *rem -= slice_len;
+                                *rem -= sent_count;
                             }
                             if *rem == 0 {
                                 break;

@@ -2113,11 +2113,27 @@ dependencies = [
  "tokio",
  "tonic",
  "tonic-health",
+ "umadb-benches",
  "umadb-client",
  "umadb-core",
  "umadb-dcb",
  "umadb-server",
  "uuid",
+]
+
+[[package]]
+name = "umadb-benches"
+version = "0.1.0"
+dependencies = [
+ "criterion 0.7.0",
+ "futures",
+ "pprof",
+ "tempfile",
+ "tokio",
+ "umadb-client",
+ "umadb-core",
+ "umadb-dcb",
+ "umadb-server",
 ]
 
 [[package]]

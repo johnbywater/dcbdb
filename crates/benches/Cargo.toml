@@ -1,0 +1,54 @@
+[package]
+name = "umadb-benches"
+version = {workspace = true}
+edition = { workspace = true }
+license = { workspace = true }
+publish = false
+
+[dependencies]
+umadb-dcb = { path = "../dcb"}
+umadb-core = { path = "../core"}
+umadb-client = { path = "../client"}
+umadb-server = { path = "../server"}
+futures = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+criterion = { version = "0.7.0", features = ["html_reports", "csv_output"] }
+pprof = { version = "0.15.0", features = ["criterion", "flamegraph"] }
+
+[[bench]]
+name = "grpc_read_bench"
+harness = false
+
+[[bench]]
+name = "grpc_append_bench"
+harness = false
+
+[[bench]]
+name = "grpc_read_with_writers_bench"
+harness = false
+
+[[bench]]
+name = "grpc_append_with_readers_bench"
+harness = false
+
+[[bench]]
+name = "grpc_append_cond_bench"
+harness = false
+
+[[bench]]
+name = "header_node_bench"
+harness = false
+
+[[bench]]
+name = "mvcc_commit_bench"
+harness = false
+
+[[bench]]
+name = "mvcc_commit_flame"
+harness = false
+
+[[bench]]
+name = "event_leaf_node_bench"
+harness = false
+

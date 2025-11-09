@@ -1,12 +1,11 @@
 // cargo bench --bench mvcc_commit_flame --features flamegraphs
 
-#[cfg(feature = "flamegraphs")]
 fn main() -> std::io::Result<()> {
     use pprof::ProfilerGuard;
     use std::fs::File;
     use std::time::{Duration, Instant};
     use tempfile::tempdir;
-    use umadb::bench_api::BenchDb;
+    use umadb_benches::bench_api::BenchDb;
 
     fn fresh_db(page_size: usize) -> BenchDb {
         let dir = tempdir().expect("tempdir");
@@ -25,7 +24,7 @@ fn main() -> std::io::Result<()> {
         }
 
         if let Ok(report) = guard.report().build() {
-            let out_dir = std::path::Path::new("../target/flamegraphs");
+            let out_dir = std::path::Path::new("../../../../target/flamegraphs");
             std::fs::create_dir_all(out_dir)?;
             let path = out_dir.join(format!("{name}.svg"));
             let mut opts = pprof::flamegraph::Options::default();
@@ -58,9 +57,4 @@ fn main() -> std::io::Result<()> {
     }
 
     generate_flamegraphs()
-}
-
-#[cfg(not(feature = "flamegraphs"))]
-fn main() {
-    eprintln!("Rebuild with --features flamegraphs to enable profiling");
 }

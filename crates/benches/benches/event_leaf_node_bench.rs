@@ -1,6 +1,6 @@
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
-use umadb::bench_api::{BenchEventLeafInline, BenchEventLeafOverflow};
+use umadb_benches::bench_api::{BenchEventLeafInline, BenchEventLeafOverflow};
 
 pub fn event_leaf_node_benchmark(c: &mut Criterion) {
     // Inline values: small payloads fully in the leaf

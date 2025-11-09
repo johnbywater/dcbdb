@@ -1,10 +1,8 @@
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use futures::future::join_all;
 use std::net::TcpListener;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use tempfile::tempdir;
@@ -44,11 +42,9 @@ fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
     (dir, path)
 }
 
-pub fn grpc_read_with_writers_benchmark(c: &mut Criterion) {
+pub fn grpc_read_benchmark(c: &mut Criterion) {
     const TOTAL_EVENTS: u32 = 10_000;
     const READ_BATCH_SIZE: u32 = 1000;
-    const WRITER_COUNT: usize = 4;
-    const WRITER_EVENTS_PER_APPEND: usize = 1; // small continuous appends
 
     // Initialize DB and server with some events
     let (_tmp_dir, db_path) = init_db_with_events(TOTAL_EVENTS as usize);
@@ -83,6 +79,7 @@ pub fn grpc_read_with_writers_benchmark(c: &mut Criterion) {
 
     // Wait until the server is actually accepting connections (avoid race with startup)
     {
+        use std::time::Duration;
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         loop {
             if std::net::TcpStream::connect(&addr).is_ok() {
@@ -95,52 +92,7 @@ pub fn grpc_read_with_writers_benchmark(c: &mut Criterion) {
         }
     }
 
-    // Start background writers that continuously append while reads are benchmarked
-    let writers_running = Arc::new(AtomicBool::new(true));
-    let writers_rt = RtBuilder::new_multi_thread()
-        .worker_threads(WRITER_COUNT)
-        .enable_all()
-        .build()
-        .expect("build tokio rt (writers)");
-
-    // Create independent writer clients
-    let mut writer_clients: Vec<Arc<AsyncUmaDBClient>> = Vec::with_capacity(WRITER_COUNT);
-    for _ in 0..WRITER_COUNT {
-        let c = writers_rt
-            .block_on(AsyncUmaDBClient::connect(&addr_http, None))
-            .expect("connect writer client");
-        writer_clients.push(Arc::new(c));
-    }
-
-    // Prebuild a tiny event batch for each append
-    let writer_batch: Vec<DCBEvent> = (0..WRITER_EVENTS_PER_APPEND)
-        .map(|i| DCBEvent {
-            event_type: "writer".to_string(),
-            data: format!("w-{}", i).into_bytes(),
-            tags: vec!["w".to_string()],
-            uuid: None,
-        })
-        .collect();
-    let writer_batch = Arc::new(writer_batch);
-
-    // Spawn continuous writer tasks
-    let mut writer_handles = Vec::with_capacity(WRITER_COUNT);
-    for i in 0..WRITER_COUNT {
-        let client = writer_clients[i].clone();
-        let running = writers_running.clone();
-        let batch = writer_batch.clone();
-        let handle = writers_rt.spawn(async move {
-            while running.load(Ordering::Relaxed) {
-                // ignore result intentionally; if an error occurs, just break
-                let _ = client.append(batch.as_ref().clone(), None).await;
-                // Yield a bit to avoid starving the system
-                tokio::task::yield_now().await;
-            }
-        });
-        writer_handles.push(handle);
-    }
-
-    let mut group = c.benchmark_group("grpc_read_4writers");
+    let mut group = c.benchmark_group("grpc_read");
     group.sample_size(10);
     group.measurement_time(Duration::from_secs(10));
 
@@ -196,6 +148,9 @@ pub fn grpc_read_with_writers_benchmark(c: &mut Criterion) {
                                     let _evt = black_box(item);
                                     count += 1;
                                 }
+                                // if count % 1000 == 0 {
+                                //     tokio::time::sleep(Duration::from_millis(90)).await;
+                                // }
                             }
                             assert_eq!(
                                 count, TOTAL_EVENTS as usize,
@@ -211,18 +166,10 @@ pub fn grpc_read_with_writers_benchmark(c: &mut Criterion) {
 
     group.finish();
 
-    // Stop writers and shutdown server
-    writers_running.store(false, Ordering::Relaxed);
-    // Wait briefly to let writer tasks exit
-    writers_rt.block_on(async {
-        for h in writer_handles {
-            let _ = h.await;
-        }
-    });
-
+    // Shutdown server
     let _ = shutdown_tx.send(());
     let _ = server_thread.join();
 }
 
-criterion_group!(benches, grpc_read_with_writers_benchmark);
+criterion_group!(benches, grpc_read_benchmark);
 criterion_main!(benches);

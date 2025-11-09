@@ -1,15 +1,3 @@
-[package]
-name = "umadb"
-version = "0.1.0"
-edition = "2024"
-license = "MIT OR Apache-2.0"
-
-# Exclude specific files from the published package
-exclude = [
-  "server.key",
-  "server.pem",
-]
-
 [workspace]
 members = [
   ".",
@@ -17,7 +5,8 @@ members = [
   "crates/core",
   "crates/proto",
   "crates/server",
-  "crates/client"
+  "crates/client",
+  "crates/benches"
 ]
 resolver = "2"
 
@@ -27,6 +16,7 @@ default-members = [
 ]
 
 [workspace.package]
+version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
@@ -42,11 +32,23 @@ tokio = { version = "1.46.0", features = ["full"] }
 uuid = { version = "1.17.0", features = ["v4"] }
 serial_test = "3.2.0"
 
+[package]
+name = "umadb"
+version = { workspace = true }
+edition = { workspace = true }
+
+# Exclude specific files from the published package
+exclude = [
+  "server.key",
+  "server.pem",
+]
+
 [dependencies]
 umadb-dcb = { path = "crates/dcb" }
 umadb-core = { path = "crates/core" }
 umadb-client = { path = "crates/client" }
 umadb-server = { path = "crates/server" }
+umadb-benches = { path = "crates/benches" }
 futures = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
@@ -92,42 +94,6 @@ strip = "none"      # requires a sufficiently recent Rust toolchain
 ## - macOS: emit a .dSYM bundle (unpacked) so Instruments/dtrace can find it
 ##split-debuginfo = "off"       # Linux
 split-debuginfo = "unpacked" # macOS
-
-[[bench]]
-name = "grpc_read_bench"
-harness = false
-
-[[bench]]
-name = "grpc_append_bench"
-harness = false
-
-[[bench]]
-name = "grpc_read_with_writers_bench"
-harness = false
-
-[[bench]]
-name = "grpc_append_with_readers_bench"
-harness = false
-
-[[bench]]
-name = "grpc_append_cond_bench"
-harness = false
-
-[[bench]]
-name = "header_node_bench"
-harness = false
-
-[[bench]]
-name = "mvcc_commit_bench"
-harness = false
-
-[[bench]]
-name = "mvcc_commit_flame"
-harness = false
-
-[[bench]]
-name = "event_leaf_node_bench"
-harness = false
 
 [features]
 default = []

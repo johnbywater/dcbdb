@@ -1,7 +1,7 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::cell::RefCell;
 use tempfile::tempdir;
-use umadb::bench_api::BenchDb;
+use umadb_benches::bench_api::BenchDb;
 
 pub fn mvcc_commit_benchmarks(c: &mut Criterion) {
     let page_size = 4096usize;

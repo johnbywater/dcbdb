@@ -24,7 +24,7 @@ fn main() -> std::io::Result<()> {
         }
 
         if let Ok(report) = guard.report().build() {
-            let out_dir = std::path::Path::new("../../../../target/flamegraphs");
+            let out_dir = std::path::Path::new("../../target/flamegraphs");
             std::fs::create_dir_all(out_dir)?;
             let path = out_dir.join(format!("{name}.svg"));
             let mut opts = pprof::flamegraph::Options::default();
@@ -32,7 +32,7 @@ fn main() -> std::io::Result<()> {
             report
                 .flamegraph_with_options(file, &mut opts)
                 .expect("write flamegraph");
-            println!("✅ Wrote {path:?}");
+            println!("✅ Wrote {}", path.canonicalize()?.display());
         }
         Ok(())
     }

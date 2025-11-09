@@ -4,15 +4,15 @@ use memmap2::{Mmap, MmapOptions};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io;
-use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::os::fd::{AsRawFd, RawFd};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 // use memmap2::{Advice, Mmap, MmapOptions};
 
 // Pager for file I/O
 pub struct Pager {
-    pub reader: Mutex<File>,
+    pub reader: Arc<File>,
     // pub writer: Arc<File>,
     pub writer: Mutex<BufWriter<File>>,
     pub writer_raw_fd: RawFd,
@@ -21,7 +21,7 @@ pub struct Pager {
     // Number of logical database pages contained in a single mmap window.
     mmap_pages_per_map: usize,
     // Cache of memory maps, keyed by map identifier (floor(page_id / mmap_pages_per_map)).
-    mmaps: Mutex<HashMap<u64, Arc<Mmap>>>,
+    mmaps: RwLock<HashMap<u64, Arc<Mmap>>>,
 }
 
 // Implementation for Pager
@@ -73,13 +73,13 @@ impl Pager {
         let mmap_pages_per_map = align_pages * usize::max(1, k);
 
         Ok(Self {
-            reader: Mutex::new(reader_file),
+            reader: Arc::new(reader_file),
             writer: Mutex::new(BufWriter::with_capacity(100 * page_size, writer_file)),
             writer_raw_fd,
             page_size,
             is_file_new,
             mmap_pages_per_map,
-            mmaps: Mutex::new(HashMap::new()),
+            mmaps: RwLock::new(HashMap::new()),
         })
     }
 
@@ -106,11 +106,11 @@ impl Pager {
     }
 
     pub fn read_page(&self, page_id: PageID) -> io::Result<Vec<u8>> {
-        let mut file = self.reader.lock().unwrap();
+        use std::os::unix::fs::FileExt;
+        let file = self.reader.clone();
         let offset = page_id.0 * (self.page_size as u64);
-        file.seek(SeekFrom::Start(offset))?;
         let mut page = vec![0u8; self.page_size];
-        let bytes_read = file.read(&mut page)?;
+        let bytes_read = file.read_at(&mut page, offset)?;
         if bytes_read < self.page_size {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
@@ -229,7 +229,7 @@ impl Pager {
 
         // Fast path: if mapping exists, do not obtain file lock; take Arc clone and release map lock
         if let Some(mmap_arc) = {
-            let maps = self.mmaps.lock().unwrap();
+            let maps = self.mmaps.read().unwrap();
             maps.get(&map_id).cloned()
         } {
             let start = within;
@@ -248,12 +248,12 @@ impl Pager {
         }
 
         // Slow path: need to create the mapping with double-checked locking
-        let file = self.reader.lock().unwrap();
+        let file = self.reader.clone();
         let file_len = file.metadata()?.len();
 
         // Re-check if mapping appeared while we acquired the file lock
         if let Some(mmap_arc) = {
-            let maps = self.mmaps.lock().unwrap();
+            let maps = self.mmaps.read().unwrap();
             maps.get(&map_id).cloned()
         } {
             let start = within;
@@ -299,7 +299,7 @@ impl Pager {
         // mmap_new.advise(Advice::Random)?;
         // mmap_new.advise(Advice::WillNeed)?;
         let mmap_arc = {
-            let mut maps = self.mmaps.lock().unwrap();
+            let mut maps = self.mmaps.write().unwrap();
             // Another thread could have inserted meanwhile
             if let Some(existing) = maps.get(&map_id) {
                 existing.clone()
@@ -366,7 +366,7 @@ impl Pager {
 
     #[cfg(test)]
     pub fn debug_mmap_count(&self) -> usize {
-        self.mmaps.lock().unwrap().len()
+        self.mmaps.read().unwrap().len()
     }
 
     #[cfg(test)]

@@ -1135,7 +1135,7 @@ mod tests {
 
         // Ensure the reader's tsn is registered while the iterator is alive
         {
-            let map = db.reader_tsns.lock().unwrap();
+            let map = db.reader_tsns.read().unwrap();
             assert!(
                 map.values().any(|&tsn| tsn == reader_tsn),
                 "TSN should remain registered until reader is dropped"
@@ -1152,7 +1152,7 @@ mod tests {
             scanned.extend(batch);
 
             // The reader should remain registered throughout iteration
-            let map = db.reader_tsns.lock().unwrap();
+            let map = db.reader_tsns.read().unwrap();
             assert!(
                 map.values().any(|&tsn| tsn == reader_tsn),
                 "TSN should remain registered until reader is dropped"
@@ -1180,7 +1180,7 @@ mod tests {
 
         // While iterator is still alive, the reader should still be registered
         {
-            let map = db.reader_tsns.lock().unwrap();
+            let map = db.reader_tsns.read().unwrap();
             assert!(
                 map.values().any(|&tsn| tsn == reader_tsn),
                 "TSN should remain registered until reader is dropped"
@@ -1190,7 +1190,7 @@ mod tests {
         // Drop the reader and ensure the reader tsn is removed
         drop(reader);
         {
-            let map = db.reader_tsns.lock().unwrap();
+            let map = db.reader_tsns.read().unwrap();
             assert!(
                 map.values().all(|&tsn| tsn != reader_tsn),
                 "TSN should be removed after reader is dropped"
@@ -1265,7 +1265,7 @@ mod tests {
 
             // Ensure the reader's tsn is registered while the iterator is alive
             {
-                let map = db.reader_tsns.lock().unwrap();
+                let map = db.reader_tsns.read().unwrap();
                 assert!(
                     map.values().any(|&tsn| tsn == reader_tsn),
                     "TSN should remain registered until reader is dropped"
@@ -1282,7 +1282,7 @@ mod tests {
                 scanned.extend(batch);
 
                 // The reader should remain registered throughout iteration
-                let map = db.reader_tsns.lock().unwrap();
+                let map = db.reader_tsns.read().unwrap();
                 assert!(
                     map.values().any(|&tsn| tsn == reader_tsn),
                     "TSN should remain registered until reader is dropped"
@@ -1309,7 +1309,7 @@ mod tests {
             // Drop the reader and ensure the reader tsn is removed
             drop(reader);
             {
-                let map = db.reader_tsns.lock().unwrap();
+                let map = db.reader_tsns.read().unwrap();
                 assert!(
                     map.values().all(|&tsn| tsn != reader_tsn),
                     "TSN should be removed after reader is dropped"
@@ -1384,7 +1384,7 @@ mod tests {
 
             // Ensure the reader's tsn is registered while the iterator is alive
             {
-                let map = db.reader_tsns.lock().unwrap();
+                let map = db.reader_tsns.read().unwrap();
                 assert!(
                     map.values().any(|&tsn| tsn == reader_tsn),
                     "TSN should remain registered until reader is dropped"
@@ -1401,7 +1401,7 @@ mod tests {
                 scanned.extend(batch);
 
                 // The reader should remain registered throughout iteration
-                let map = db.reader_tsns.lock().unwrap();
+                let map = db.reader_tsns.read().unwrap();
                 assert!(
                     map.values().any(|&tsn| tsn == reader_tsn),
                     "TSN should remain registered until reader is dropped"
@@ -1428,7 +1428,7 @@ mod tests {
             // Drop the reader and ensure the reader tsn is removed
             drop(reader);
             {
-                let map = db.reader_tsns.lock().unwrap();
+                let map = db.reader_tsns.read().unwrap();
                 assert!(
                     map.values().all(|&tsn| tsn != reader_tsn),
                     "TSN should be removed after reader is dropped"

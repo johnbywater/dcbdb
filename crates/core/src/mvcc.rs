@@ -16,7 +16,8 @@ use crate::tags_tree_nodes::TagsLeafNode;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Mutex, RwLock};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::sleep;
 use std::time::Duration;
 // use crate::db::DEFAULT_PAGE_SIZE;
@@ -33,7 +34,7 @@ const HEADER_PAGE_ID_1: PageID = PageID(1);
 // Main MVCC structure
 pub struct Mvcc {
     pub pager: Pager,
-    pub reader_tsns: Mutex<HashMap<usize, Tsn>>,
+    pub reader_tsns: RwLock<HashMap<usize, Tsn>>,
     pub writer_lock: Mutex<()>,
     pub page_size: usize,
     pub max_node_size: usize,
@@ -43,7 +44,7 @@ pub struct Mvcc {
     pub header_page_buf: Mutex<Vec<u8>>,
     // Reusable buffer for general page serialization
     pub page_buf: Mutex<Vec<u8>>,
-    reader_id_counter: Mutex<usize>,
+    reader_id_counter: AtomicUsize,
     pub verbose: bool,
 }
 
@@ -53,7 +54,7 @@ impl Mvcc {
 
         let mvcc = Self {
             pager,
-            reader_tsns: Mutex::new(HashMap::new()),
+            reader_tsns: RwLock::new(HashMap::new()),
             writer_lock: Mutex::new(()),
             page_size,
             max_node_size: page_size - PAGE_HEADER_SIZE,
@@ -69,7 +70,7 @@ impl Mvcc {
             ]),
             header_page_buf: Mutex::new(vec![0u8; page_size]),
             page_buf: Mutex::new(vec![0u8; page_size]),
-            reader_id_counter: Mutex::new(0),
+            reader_id_counter: AtomicUsize::new(0),
             verbose,
         };
 
@@ -238,12 +239,8 @@ impl Mvcc {
     pub fn reader(&self) -> DCBResult<Reader> {
         let (header_page_id, header_node) = self.get_latest_header()?;
 
-        // Generate a unique ID for this reader using the counter
-        let reader_id = {
-            let mut counter = self.reader_id_counter.lock().unwrap();
-            *counter += 1;
-            *counter
-        };
+        // Generate a unique ID for this reader using the counter (lock-free)
+        let reader_id = self.reader_id_counter.fetch_add(1, Ordering::Relaxed) + 1;
 
         // Create the reader with the unique ID
         let reader = Reader {
@@ -258,7 +255,7 @@ impl Mvcc {
 
         // Register the reader TSN
         self.reader_tsns
-            .lock()
+            .write()
             .unwrap()
             .insert(reader_id, reader.tsn);
 
@@ -603,7 +600,7 @@ impl Writer {
         }
 
         // Find the smallest reader TSN
-        let smallest_reader_tsn = { mvcc.reader_tsns.lock().unwrap().values().min().cloned() };
+        let smallest_reader_tsn = { mvcc.reader_tsns.read().unwrap().values().min().cloned() };
         if verbose {
             println!("Smallest reader TSN: {smallest_reader_tsn:?}");
         }
@@ -1768,16 +1765,16 @@ pub struct Reader {
     pub tags_tree_root_id: PageID,
     pub next_position: Position,
     reader_id: usize,
-    reader_tsns: *const Mutex<HashMap<usize, Tsn>>,
+    reader_tsns: *const RwLock<HashMap<usize, Tsn>>,
 }
 
 impl Drop for Reader {
     fn drop(&mut self) {
-        // Safety: The Mutex is valid as long as the Db instance is valid,
+        // Safety: The RwLock is valid as long as the Db instance is valid,
         // and the Reader doesn't outlive the Db instance.
         unsafe {
             if !self.reader_tsns.is_null()
-                && let Ok(mut map) = (*self.reader_tsns).lock()
+                && let Ok(mut map) = (*self.reader_tsns).write()
             {
                 map.remove(&self.reader_id);
             }
@@ -1863,13 +1860,13 @@ mod tests {
 
         // Initial reader should see TSN 0
         {
-            assert_eq!(0, db.reader_tsns.lock().unwrap().len());
+            assert_eq!(0, db.reader_tsns.read().unwrap().len());
             let reader = db.reader().unwrap();
-            assert_eq!(1, db.reader_tsns.lock().unwrap().len());
+            assert_eq!(1, db.reader_tsns.read().unwrap().len());
             assert_eq!(
                 vec![Tsn(0)],
                 db.reader_tsns
-                    .lock()
+                    .read()
                     .unwrap()
                     .values()
                     .cloned()
@@ -1878,7 +1875,7 @@ mod tests {
             assert_eq!(PageID(0), reader.header_page_id);
             assert_eq!(Tsn(0), reader.tsn);
         }
-        assert_eq!(0, db.reader_tsns.lock().unwrap().len());
+        assert_eq!(0, db.reader_tsns.read().unwrap().len());
 
         // Multiple nested readers
         {
@@ -1886,7 +1883,7 @@ mod tests {
             assert_eq!(
                 vec![Tsn(0)],
                 db.reader_tsns
-                    .lock()
+                    .read()
                     .unwrap()
                     .values()
                     .cloned()
@@ -1900,7 +1897,7 @@ mod tests {
                 assert_eq!(
                     vec![Tsn(0), Tsn(0)],
                     db.reader_tsns
-                        .lock()
+                        .read()
                         .unwrap()
                         .values()
                         .cloned()
@@ -1914,7 +1911,7 @@ mod tests {
                     assert_eq!(
                         vec![Tsn(0), Tsn(0), Tsn(0)],
                         db.reader_tsns
-                            .lock()
+                            .read()
                             .unwrap()
                             .values()
                             .cloned()
@@ -1925,12 +1922,12 @@ mod tests {
                 }
             }
         }
-        assert_eq!(0, db.reader_tsns.lock().unwrap().len());
+        assert_eq!(0, db.reader_tsns.read().unwrap().len());
 
         // Writer transaction
         {
             let mut writer = db.writer().unwrap();
-            assert_eq!(0, db.reader_tsns.lock().unwrap().len());
+            assert_eq!(0, db.reader_tsns.read().unwrap().len());
             assert_eq!(Tsn(1), writer.tsn);
             assert_eq!(PageID(0), writer.header_page_id);
             db.commit(&mut writer).unwrap();
@@ -1942,7 +1939,7 @@ mod tests {
             assert_eq!(
                 vec![Tsn(1)],
                 db.reader_tsns
-                    .lock()
+                    .read()
                     .unwrap()
                     .values()
                     .cloned()
@@ -2695,7 +2692,7 @@ mod tests {
 
             // Block inserted page IDs from being reused
             {
-                db.reader_tsns.lock().unwrap().insert(0, Tsn(0));
+                db.reader_tsns.write().unwrap().insert(0, Tsn(0));
             }
 
             // Start a new writer to remove inserted freed page ID
@@ -2872,7 +2869,7 @@ mod tests {
 
             // Block inserted page IDs from being reused
             {
-                db.reader_tsns.lock().unwrap().insert(0, Tsn(0));
+                db.reader_tsns.write().unwrap().insert(0, Tsn(0));
             }
 
             let mut has_split_leaf = false;
@@ -3548,12 +3545,12 @@ mod tests {
             }
 
             // Get all the free page IDs.
-            db.reader_tsns.lock().unwrap().remove(&0);
+            db.reader_tsns.write().unwrap().remove(&0);
             let writer = db.writer().unwrap();
             let reusable_page_ids = writer.reusable_page_ids.clone();
 
             // Block inserted page IDs from being reused
-            db.reader_tsns.lock().unwrap().insert(0, Tsn(0));
+            db.reader_tsns.write().unwrap().insert(0, Tsn(0));
 
             // Remove each free page ID.
             for (page_id, tsn) in reusable_page_ids {

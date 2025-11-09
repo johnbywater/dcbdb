@@ -67,6 +67,7 @@ pub fn grpc_read_benchmark(c: &mut Criterion) {
             .unwrap_or(1);
         let rt = RtBuilder::new_multi_thread()
             .worker_threads(server_threads)
+            .max_blocking_threads(2048)
             .enable_all()
             .build()
             .expect("build tokio rt for server");

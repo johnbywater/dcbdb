@@ -138,7 +138,7 @@ impl DCBEventStoreAsync for AsyncUmaDBClient {
         let response = client.read(request).await.map_err(dcb_error_from_status)?;
         let stream = response.into_inner();
 
-        Ok(Box::new(AsyncReadResponse::new(stream)))
+        Ok(Box::new(AsyncClientReadResponse::new(stream)))
     }
 
     async fn head(&self) -> DCBResult<Option<u64>> {
@@ -182,20 +182,18 @@ impl DCBEventStoreAsync for AsyncUmaDBClient {
 }
 
 /// Async read response wrapper that provides batched access and head metadata
-pub struct AsyncReadResponse {
+pub struct AsyncClientReadResponse {
     stream: tonic::Streaming<ReadResponseProto>,
-    buffered: Vec<DCBSequencedEvent>,
-    buf_idx: usize,
+    buffered: VecDeque<DCBSequencedEvent>,
     last_head: Option<Option<u64>>, // None = unknown yet; Some(x) = known
     ended: bool,
 }
 
-impl AsyncReadResponse {
+impl AsyncClientReadResponse {
     pub fn new(stream: tonic::Streaming<ReadResponseProto>) -> Self {
         Self {
             stream,
-            buffered: Vec::new(),
-            buf_idx: 0,
+            buffered: VecDeque::new(),
             last_head: None,
             ended: false,
         }
@@ -203,7 +201,7 @@ impl AsyncReadResponse {
 
     /// Fetches the next batch if needed, filling the buffer
     async fn fetch_next_if_needed(&mut self) -> DCBResult<()> {
-        if self.buf_idx < self.buffered.len() || self.ended {
+        if !self.buffered.is_empty() || self.ended {
             return Ok(());
         }
 
@@ -211,11 +209,11 @@ impl AsyncReadResponse {
             Ok(Some(resp)) => {
                 self.last_head = Some(resp.head);
 
-                let mut buffered = Vec::with_capacity(resp.events.len());
+                let mut buffered = VecDeque::with_capacity(resp.events.len());
                 for e in resp.events {
                     if let Some(ev) = e.event {
                         let event = DCBEvent::try_from(ev)?; // propagate error
-                        buffered.push(DCBSequencedEvent {
+                        buffered.push_back(DCBSequencedEvent {
                             position: e.position,
                             event,
                         });
@@ -223,7 +221,6 @@ impl AsyncReadResponse {
                 }
 
                 self.buffered = buffered;
-                self.buf_idx = 0;
                 Ok(())
             }
             Ok(None) => {
@@ -236,7 +233,7 @@ impl AsyncReadResponse {
 }
 
 #[async_trait]
-impl DCBReadResponseAsync for AsyncReadResponse {
+impl DCBReadResponseAsync for AsyncClientReadResponse {
     async fn head(&mut self) -> DCBResult<Option<u64>> {
         if let Some(h) = self.last_head {
             return Ok(h);
@@ -247,25 +244,21 @@ impl DCBReadResponseAsync for AsyncReadResponse {
     }
 
     async fn next_batch(&mut self) -> DCBResult<Vec<DCBSequencedEvent>> {
-        if self.buf_idx < self.buffered.len() {
-            let out = self.buffered[self.buf_idx..].to_vec();
-            self.buf_idx = self.buffered.len();
-            return Ok(out);
+        if !self.buffered.is_empty() {
+            return Ok(self.buffered.drain(..).collect());
         }
 
         self.fetch_next_if_needed().await?;
 
-        if self.buf_idx < self.buffered.len() {
-            let out = self.buffered[self.buf_idx..].to_vec();
-            self.buf_idx = self.buffered.len();
-            return Ok(out);
+        if !self.buffered.is_empty() {
+            return Ok(self.buffered.drain(..).collect());
         }
 
         Ok(Vec::new())
     }
 }
 
-impl Stream for AsyncReadResponse {
+impl Stream for AsyncClientReadResponse {
     type Item = DCBResult<DCBSequencedEvent>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -273,9 +266,7 @@ impl Stream for AsyncReadResponse {
 
         loop {
             // Return buffered event if available
-            if this.buf_idx < this.buffered.len() {
-                let ev = this.buffered[this.buf_idx].clone();
-                this.buf_idx += 1;
+            if let Some(ev) = this.buffered.pop_front() {
                 return Poll::Ready(Some(Ok(ev)));
             }
 
@@ -289,7 +280,7 @@ impl Stream for AsyncReadResponse {
                 Some(Ok(resp)) => {
                     this.last_head = Some(resp.head);
 
-                    let mut buffered = Vec::with_capacity(resp.events.len());
+                    let mut buffered = VecDeque::with_capacity(resp.events.len());
                     for e in resp.events {
                         if let Some(ev) = e.event {
                             // Propagate any conversion error using DCBResult.
@@ -297,7 +288,7 @@ impl Stream for AsyncReadResponse {
                                 Ok(event) => event,
                                 Err(err) => return Poll::Ready(Some(Err(err))),
                             };
-                            buffered.push(DCBSequencedEvent {
+                            buffered.push_back(DCBSequencedEvent {
                                 position: e.position,
                                 event,
                             });
@@ -305,7 +296,6 @@ impl Stream for AsyncReadResponse {
                     }
 
                     this.buffered = buffered;
-                    this.buf_idx = 0;
 
                     // If the batch is empty, loop again to poll the next message
                     if this.buffered.is_empty() {
@@ -313,8 +303,7 @@ impl Stream for AsyncReadResponse {
                     }
 
                     // Otherwise, return the first event
-                    let ev = this.buffered[this.buf_idx].clone();
-                    this.buf_idx += 1;
+                    let ev = this.buffered.pop_front().unwrap();
                     Poll::Ready(Some(Ok(ev)))
                 }
                 Some(Err(status)) => {

@@ -12,7 +12,7 @@ use crate::page::Page;
 use crate::tags_tree::{TagsTreeIterator, tags_tree_insert};
 use crate::tags_tree_nodes::TagHash;
 use itertools::Itertools;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -183,8 +183,7 @@ impl DCBEventStoreSync for UmaDB {
         };
 
         Ok(Box::new(ReadResponse {
-            events,
-            idx: 0,
+            events: VecDeque::from(events),
             head,
         }))
     }
@@ -216,20 +215,14 @@ impl DCBEventStoreSync for UmaDB {
 }
 
 struct ReadResponse {
-    events: Vec<DCBSequencedEvent>,
-    idx: usize,
+    events: VecDeque<DCBSequencedEvent>,
     head: Option<u64>,
 }
 
 impl Iterator for ReadResponse {
     type Item = DCBResult<DCBSequencedEvent>;
     fn next(&mut self) -> Option<Self::Item> {
-        if self.idx >= self.events.len() {
-            return None;
-        }
-        let item = self.events[self.idx].clone();
-        self.idx += 1;
-        Some(Ok(item))
+        self.events.pop_front().map(Ok)
     }
 }
 
@@ -238,11 +231,11 @@ impl DCBReadResponseSync for ReadResponse {
         Ok(self.head)
     }
     fn collect_with_head(&mut self) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
-        Ok((self.events.clone(), self.head))
+        let events = self.events.drain(..).collect();
+        Ok((events, self.head))
     }
     fn next_batch(&mut self) -> DCBResult<Vec<DCBSequencedEvent>> {
-        let batch = self.events[self.idx..].to_vec();
-        self.idx = self.events.len();
+        let batch = self.events.drain(..).collect();
         Ok(batch)
     }
 }

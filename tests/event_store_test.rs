@@ -951,6 +951,55 @@ fn test_direct_event_store() {
     dcb_event_store_test(&event_store);
 }
 
+// Also test gRPC by wrapping the async client with a small sync adapter used only in tests.
+#[test]
+fn test_grpc_event_store_client() {
+    // Pick a free port
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    let addr_noscheme = format!("{}", addr);
+    let addr_with_scheme = format!("http://{}", addr);
+
+    // Build a multi-threaded runtime for server and client
+    let rt = RtBuilder::new_multi_thread().enable_all().build().unwrap();
+
+    // Prepare shutdown channel for the server
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+
+    // Temporary directory for the database server
+    let temp_dir = tempdir().unwrap();
+
+    // Start the server
+    let data_dir = temp_dir.path().to_path_buf();
+    rt.spawn(async move {
+        let _ = start_server(data_dir, &addr_noscheme, shutdown_rx).await;
+    });
+
+    // Connect the client (retry until server is ready)
+    let client = {
+        use std::{thread, time::Duration};
+        let mut attempts = 0;
+        loop {
+            match UmaDBClient::connect(&addr_with_scheme.clone(), None) {
+                Ok(c) => break c,
+                Err(e) => {
+                    attempts += 1;
+                    if attempts >= 50 {
+                        panic!("failed to connect to grpc server after retries: {:?}", e);
+                    }
+                    thread::sleep(Duration::from_millis(50));
+                }
+            }
+        }
+    };
+
+    dcb_event_store_test(&client);
+
+    // Shutdown server
+    let _ = shutdown_tx.send(());
+}
+
 #[test]
 fn test_tag_hash_collision() {
     // Known colliding tags (by the system's tag hashing scheme)
@@ -1050,53 +1099,4 @@ fn test_tag_hash_collision() {
     let types: Vec<String> = result.into_iter().map(|e| e.event.event_type).collect();
     assert!(types.contains(&"StudentEvent".to_string()));
     assert!(types.contains(&"CourseEvent".to_string()));
-}
-
-// Also test gRPC by wrapping the async client with a small sync adapter used only in tests.
-#[test]
-fn test_grpc_event_store_client() {
-    // Pick a free port
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
-    let addr_noscheme = format!("{}", addr);
-    let addr_with_scheme = format!("http://{}", addr);
-
-    // Build a multi-threaded runtime for server and client
-    let rt = RtBuilder::new_multi_thread().enable_all().build().unwrap();
-
-    // Prepare shutdown channel for the server
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-
-    // Temporary directory for the database server
-    let temp_dir = tempdir().unwrap();
-
-    // Start the server
-    let data_dir = temp_dir.path().to_path_buf();
-    rt.spawn(async move {
-        let _ = start_server(data_dir, &addr_noscheme, shutdown_rx).await;
-    });
-
-    // Connect the client (retry until server is ready)
-    let client = {
-        use std::{thread, time::Duration};
-        let mut attempts = 0;
-        loop {
-            match UmaDBClient::connect(&addr_with_scheme.clone(), None) {
-                Ok(c) => break c,
-                Err(e) => {
-                    attempts += 1;
-                    if attempts >= 50 {
-                        panic!("failed to connect to grpc server after retries: {:?}", e);
-                    }
-                    thread::sleep(Duration::from_millis(50));
-                }
-            }
-        }
-    };
-
-    dcb_event_store_test(&client);
-
-    // Shutdown server
-    let _ = shutdown_tx.send(());
 }

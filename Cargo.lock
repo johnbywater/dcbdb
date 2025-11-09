@@ -1703,12 +1703,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sha1_smol"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
-
-[[package]]
 name = "shlex"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2121,6 +2115,7 @@ dependencies = [
  "tonic-health",
  "umadb-client",
  "umadb-core",
+ "umadb-dcb",
  "umadb-server",
  "uuid",
 ]
@@ -2133,7 +2128,7 @@ dependencies = [
  "futures",
  "tokio",
  "tonic",
- "umadb-core",
+ "umadb-dcb",
  "umadb-proto",
  "uuid",
 ]
@@ -2142,18 +2137,26 @@ dependencies = [
 name = "umadb-core"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "bitflags 2.9.1",
  "byteorder",
  "crc32fast",
- "futures-core",
- "futures-util",
  "itertools 0.14.0",
  "libc",
  "memmap2",
  "rand",
  "serial_test",
  "tempfile",
+ "umadb-dcb",
+ "uuid",
+]
+
+[[package]]
+name = "umadb-dcb"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures-core",
+ "futures-util",
  "thiserror",
  "uuid",
 ]
@@ -2166,7 +2169,7 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
- "umadb-core",
+ "umadb-dcb",
  "uuid",
 ]
 
@@ -2182,6 +2185,7 @@ dependencies = [
  "tonic",
  "tonic-health",
  "umadb-core",
+ "umadb-dcb",
  "umadb-proto",
 ]
 
@@ -2217,7 +2221,6 @@ checksum = "3cf4199d1e5d15ddd86a694e4d0dffa9c323ce759fea589f00fef9d81cc1931d"
 dependencies = [
  "getrandom 0.3.3",
  "js-sys",
- "sha1_smol",
  "wasm-bindgen",
 ]
 

@@ -1,4 +1,4 @@
-use crate::dcb::{DCBError, DCBResult};
+use umadb_dcb::{DCBError, DCBResult};
 use crate::events_tree_nodes::{EventInternalNode, EventLeafNode, EventOverflowNode};
 use crate::free_lists_tree_nodes::{
     FreeListInternalNode, FreeListLeafNode, FreeListTsnInternalNode, FreeListTsnLeafNode,

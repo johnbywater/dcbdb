@@ -1,5 +1,5 @@
 use crate::common::{PageID, Position};
-use crate::dcb::{DCBError, DCBResult};
+use umadb_dcb::{DCBError, DCBResult};
 use crate::mvcc::{Mvcc, Writer};
 use crate::node::Node;
 use crate::page::Page;
@@ -291,7 +291,7 @@ pub fn tags_tree_insert(
                 if tag_root_id == old_id {
                     tag_root_id = new_id;
                 } else {
-                    return Err(DCBError::RootIDMismatch(old_id, new_id));
+                    return Err(DCBError::RootIDMismatch(old_id.0, new_id.0));
                 }
             }
 
@@ -557,7 +557,7 @@ pub fn tags_tree_insert(
                 println!("Replaced Tags root {old_id:?} -> {new_id:?}");
             }
         } else {
-            return Err(DCBError::RootIDMismatch(old_id, new_id));
+            return Err(DCBError::RootIDMismatch(old_id.0, new_id.0));
         }
     }
 

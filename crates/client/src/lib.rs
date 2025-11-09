@@ -10,7 +10,7 @@ use std::task::{Context, Poll};
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 
 use tokio::runtime::{Handle, Runtime};
-use umadb_core::dcb::{
+use umadb_dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreAsync, DCBEventStoreSync, DCBQuery,
     DCBQueryItem, DCBReadResponseAsync, DCBReadResponseSync, DCBResult, DCBSequencedEvent,
 };

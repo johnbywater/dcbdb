@@ -13,6 +13,7 @@ exclude = [
 [workspace]
 members = [
   ".",
+  "crates/dcb",
   "crates/core",
   "crates/proto",
   "crates/server",
@@ -38,10 +39,11 @@ thiserror = "2.0.12"
 tonic = { version = "0.14.2", features = ["tls-native-roots", "tls-ring"] }
 tonic-health = "0.14.2"
 tokio = { version = "1.46.0", features = ["full"] }
-uuid = { version = "1.17.0", features = ["v5", "v4"] }
+uuid = { version = "1.17.0", features = ["v4"] }
 serial_test = "3.2.0"
 
 [dependencies]
+umadb-dcb = { path = "crates/dcb" }
 umadb-core = { path = "crates/core" }
 umadb-client = { path = "crates/client" }
 umadb-server = { path = "crates/server" }

@@ -9,7 +9,7 @@ use tokio::runtime::Builder as RtBuilder;
 use tokio::sync::{Mutex, oneshot};
 use umadb_client::AsyncUmaDBClient;
 use umadb_core::db::UmaDB;
-use umadb_core::dcb::{
+use umadb_dcb::{
     DCBAppendCondition, DCBEvent, DCBEventStoreAsync, DCBEventStoreSync, DCBQuery, DCBQueryItem,
 };
 use umadb_server::start_server;

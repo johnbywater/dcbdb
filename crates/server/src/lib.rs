@@ -9,7 +9,7 @@ use tonic::transport::{Identity, ServerTlsConfig};
 use tonic::{Request, Response, Status, transport::Server};
 
 use umadb_core::db::{DEFAULT_PAGE_SIZE, UmaDB, is_request_idempotent, read_conditional};
-use umadb_core::dcb::{
+use umadb_dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBQuery, DCBResult, DCBSequencedEvent,
 };
 use umadb_core::mvcc::Mvcc;

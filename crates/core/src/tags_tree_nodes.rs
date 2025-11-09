@@ -1,5 +1,5 @@
 use crate::common::{PageID, Position};
-use crate::dcb::{DCBError, DCBResult};
+use umadb_dcb::{DCBError, DCBResult};
 use byteorder::{ByteOrder, LittleEndian};
 
 /// Length in bytes of the hashed tag key used in tag index leaf/internal nodes

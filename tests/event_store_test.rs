@@ -5,7 +5,7 @@ use tempfile::tempdir;
 use tokio::runtime::Builder as RtBuilder;
 use umadb_client::UmaDBClient;
 use umadb_core::db::UmaDB;
-use umadb_core::dcb::{
+use umadb_dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreSync, DCBQuery, DCBQueryItem,
 };
 use umadb_server::start_server;

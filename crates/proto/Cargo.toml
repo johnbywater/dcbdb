@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-umadb-core = { path = "../core" }
+umadb-dcb = { path = "../dcb" }
 prost = "0.14.1"
 tonic-prost = "0.14.2"
 tonic = { workspace = true }

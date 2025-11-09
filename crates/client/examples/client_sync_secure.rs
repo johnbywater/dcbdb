@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use umadb_client::UmaDBClient;
-use umadb_core::dcb::{
+use umadb_dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreSync, DCBQuery, DCBQueryItem,
 };
 use uuid::Uuid;

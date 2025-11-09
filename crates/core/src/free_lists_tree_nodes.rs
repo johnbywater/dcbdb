@@ -1,5 +1,5 @@
 use crate::common::{PageID, Tsn};
-use crate::dcb::{DCBError, DCBResult};
+use umadb_dcb::{DCBError, DCBResult};
 use byteorder::{ByteOrder, LittleEndian};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

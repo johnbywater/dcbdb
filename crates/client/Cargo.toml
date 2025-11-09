@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-umadb-core = { path = "../core" }
+umadb-dcb = { path = "../dcb" }
 umadb-proto = { path = "../proto" }
 uuid = { workspace = true }
 tokio = { workspace = true }

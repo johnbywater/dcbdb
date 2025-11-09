@@ -1,0 +1,11 @@
+[package]
+name = "umadb-dcb"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+thiserror = { workspace = true }
+uuid = { workspace = true }
+futures-core = "0.3"
+futures-util = "0.3"
+async-trait = { workspace = true }

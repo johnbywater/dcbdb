@@ -5,7 +5,7 @@ use rcgen::generate_simple_self_signed;
 use tempfile::tempdir;
 use tokio::time::sleep;
 use umadb_client::{AsyncUmaDBClient, ClientTlsOptions};
-use umadb_core::dcb::{DCBEvent, DCBEventStoreAsync};
+use umadb_dcb::{DCBEvent, DCBEventStoreAsync};
 use umadb_server::start_server_secure;
 
 // Helper to pick a free localhost port

@@ -1,6 +1,6 @@
 use crate::common::PageID;
 use crate::common::Position;
-use crate::dcb::{DCBError, DCBResult};
+use umadb_dcb::{DCBError, DCBResult};
 use crate::events_tree_nodes::{
     EventInternalNode, EventLeafNode, EventOverflowNode, EventRecord, EventValue,
 };
@@ -382,7 +382,7 @@ pub fn event_tree_append(
                 println!("Replaced root {old_id:?} with {new_id:?}");
             }
         } else {
-            return Err(DCBError::RootIDMismatch(old_id, new_id));
+            return Err(DCBError::RootIDMismatch(old_id.0, new_id.0));
         }
     }
 

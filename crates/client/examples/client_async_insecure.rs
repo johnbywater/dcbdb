@@ -1,7 +1,7 @@
 use futures::StreamExt;
 use std::sync::Arc;
 use umadb_client::AsyncUmaDBClient;
-use umadb_core::dcb::{
+use umadb_dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreAsync, DCBQuery, DCBQueryItem,
 };
 use uuid::Uuid;

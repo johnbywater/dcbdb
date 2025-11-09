@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::common::{PageID, Position};
-use crate::dcb::{
+use umadb_dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreSync, DCBQuery, DCBReadResponseSync,
     DCBResult, DCBSequencedEvent,
 };
@@ -636,7 +636,7 @@ pub fn is_request_idempotent(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dcb::{
+    use umadb_dcb::{
         DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreSync, DCBQuery, DCBQueryItem,
     };
     use crate::page::Page;

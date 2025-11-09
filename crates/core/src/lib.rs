@@ -2,7 +2,6 @@
 
 pub mod common;
 pub mod db;
-pub mod dcb;
 pub mod events_tree;
 pub mod events_tree_nodes;
 pub mod free_lists_tree_nodes;

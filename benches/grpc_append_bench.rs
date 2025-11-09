@@ -10,7 +10,7 @@ use tokio::runtime::Builder as RtBuilder;
 use tokio::sync::oneshot;
 use umadb_client::AsyncUmaDBClient;
 use umadb_core::db::UmaDB;
-use umadb_core::dcb::{DCBEvent, DCBEventStoreAsync, DCBEventStoreSync};
+use umadb_dcb::{DCBEvent, DCBEventStoreAsync, DCBEventStoreSync};
 use umadb_server::start_server;
 
 const EVENTS_PER_REQUEST: usize = 1;

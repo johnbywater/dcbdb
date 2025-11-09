@@ -3,13 +3,14 @@
 //! This module provides the core interfaces and data structures for working with
 //! an event store that supports dynamic consistency boundaries.
 
-use crate::common::PageID;
 use async_trait::async_trait;
 use futures_core::Stream;
 use std::iter::Iterator;
 use std::sync::Arc;
 use thiserror::Error;
 use uuid::Uuid;
+use futures_util::StreamExt;
+
 
 /// Non-async Rust interface for recording and retrieving events
 pub trait DCBEventStoreSync {
@@ -122,8 +123,6 @@ pub trait DCBReadResponseAsync: Stream<Item = DCBResult<DCBSequencedEvent>> + Se
     async fn head(&mut self) -> DCBResult<Option<u64>>;
 
     async fn collect_with_head(&mut self) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
-        use futures_util::StreamExt;
-
         let mut events = Vec::new();
         while let Some(result) = self.next().await {
             events.push(result?); // propagate error from stream
@@ -198,11 +197,11 @@ pub enum DCBError {
 
     // LMDB/Storage domain errors (unified into DCBError)
     #[error("Page not found: {0:?}")]
-    PageNotFound(PageID),
+    PageNotFound(u64),
     #[error("Dirty page not found: {0:?}")]
-    DirtyPageNotFound(PageID),
+    DirtyPageNotFound(u64),
     #[error("Root ID mismatched: old {0:?} new {1:?}")]
-    RootIDMismatch(PageID, PageID),
+    RootIDMismatch(u64, u64),
     #[error("Database corrupted: {0}")]
     DatabaseCorrupted(String),
     #[error("Internal error: {0}")]
@@ -212,9 +211,9 @@ pub enum DCBError {
     #[error("Deserialization error: {0}")]
     DeserializationError(String),
     #[error("Page already freed: {0:?}")]
-    PageAlreadyFreed(PageID),
+    PageAlreadyFreed(u64),
     #[error("Page already dirty: {0:?}")]
-    PageAlreadyDirty(PageID),
+    PageAlreadyDirty(u64),
     #[error("Transport error: {0}")]
     TransportError(String),
 }

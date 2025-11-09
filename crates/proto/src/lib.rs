@@ -6,13 +6,11 @@ use prost::Message;
 use prost::bytes::Bytes;
 use std::sync::Arc;
 use tonic::{Code, Status};
-use umadb_core::dcb::{
+use umadb_dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBQuery, DCBQueryItem, DCBResult, DCBSequencedEvent,
 };
 use uuid::Uuid;
 
-// Placeholder proto crate. We'll wire in generated code later without breaking the build.
-// For now, export nothing to keep the workspace compiling.
 // Include the generated proto code
 pub mod umadb {
     tonic::include_proto!("umadb");

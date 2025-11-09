@@ -1,5 +1,5 @@
 use crate::common::PageID;
-use crate::dcb::{DCBError, DCBResult};
+use umadb_dcb::{DCBError, DCBResult};
 use memmap2::{Mmap, MmapOptions};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -393,7 +393,7 @@ impl MappedPage {
 mod tests {
     use super::Pager;
     use crate::common::PageID;
-    use crate::dcb::DCBError;
+    use umadb_dcb::DCBError;
     use std::path::PathBuf;
     use tempfile::tempdir;
 

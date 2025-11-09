@@ -1,5 +1,5 @@
 use crate::common::PageID;
-use crate::dcb::{DCBError, DCBResult};
+use umadb_dcb::{DCBError, DCBResult};
 use crate::node::Node;
 use std::ops::Range;
 

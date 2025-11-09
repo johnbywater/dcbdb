@@ -1,7 +1,7 @@
 use crate::common::PageID;
 use crate::common::Position;
-use crate::dcb::DCBError;
-use crate::dcb::DCBResult;
+use umadb_dcb::DCBError;
+use umadb_dcb::DCBResult;
 use bitflags::bitflags;
 use byteorder::{ByteOrder, LittleEndian};
 use uuid::Uuid;

@@ -1,6 +1,6 @@
 use crate::common::Position;
 use crate::common::{PageID, Tsn};
-use crate::dcb::{DCBError, DCBResult};
+use umadb_dcb::{DCBError, DCBResult};
 use byteorder::{ByteOrder, LittleEndian};
 
 // Node type definitions

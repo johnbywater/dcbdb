@@ -1,7 +1,7 @@
 // use std::cell::RefCell;
 use crate::common::Position;
 use crate::common::{PageID, Tsn};
-use crate::dcb::{DCBError, DCBResult};
+use umadb_dcb::{DCBError, DCBResult};
 use crate::events_tree_nodes::EventLeafNode;
 use crate::free_lists_tree_nodes::{
     FreeListInternalNode, FreeListLeafNode, FreeListLeafValue, FreeListTsnLeafNode,
@@ -514,7 +514,7 @@ impl Writer {
         if let Some(page) = self.dirty.get_mut(&page_id) {
             Ok(page)
         } else {
-            Err(DCBError::DirtyPageNotFound(page_id))
+            Err(DCBError::DirtyPageNotFound(page_id.0))
         }
     }
 
@@ -524,10 +524,10 @@ impl Writer {
 
     pub fn insert_dirty(&mut self, page: Page) -> DCBResult<()> {
         if self.freed_page_ids.contains(&page.page_id) {
-            return Err(DCBError::PageAlreadyFreed(page.page_id));
+            return Err(DCBError::PageAlreadyFreed(page.page_id.0));
         }
         if self.dirty.contains_key(&page.page_id) {
-            return Err(DCBError::PageAlreadyDirty(page.page_id));
+            return Err(DCBError::PageAlreadyDirty(page.page_id.0));
         }
         self.dirty.insert(page.page_id, page);
         Ok(())
@@ -570,7 +570,7 @@ impl Writer {
                 println!("{page_id:?} is already dirty");
             }
         } else {
-            return Err(DCBError::PageAlreadyFreed(page_id));
+            return Err(DCBError::PageAlreadyFreed(page_id.0));
         }
         Ok(dirty_page_id)
     }
@@ -1114,7 +1114,7 @@ impl Writer {
                     println!("Replaced root {old_id:?} with {new_id:?}");
                 }
             } else {
-                return Err(DCBError::RootIDMismatch(old_id, new_id));
+                return Err(DCBError::RootIDMismatch(old_id.0, new_id.0));
             }
         }
 
@@ -1743,7 +1743,7 @@ impl Writer {
                     println!("Replaced root {old_id:?} with {new_id:?}");
                 }
             } else {
-                return Err(DCBError::RootIDMismatch(old_id, new_id));
+                return Err(DCBError::RootIDMismatch(old_id.0, new_id.0));
             }
         }
 

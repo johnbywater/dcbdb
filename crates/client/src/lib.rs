@@ -11,13 +11,12 @@ use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 use tokio::runtime::{Handle, Runtime};
 use umadb_dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreAsync, DCBEventStoreSync, DCBQuery,
-    DCBQueryItem, DCBReadResponseAsync, DCBReadResponseSync, DCBResult, DCBSequencedEvent,
+    DCBReadResponseAsync, DCBReadResponseSync, DCBResult, DCBSequencedEvent,
 };
 use umadb_proto::dcb_error_from_status;
 use umadb_proto::umadb::uma_db_service_client;
 use umadb_proto::umadb::{
-    AppendConditionProto, AppendRequestProto, EventProto, HeadRequestProto, QueryItemProto,
-    QueryProto, ReadRequestProto, ReadResponseProto,
+    AppendConditionProto, AppendRequestProto, EventProto, HeadRequestProto, ReadRequestProto, ReadResponseProto,
 };
 
 // Async client implementation
@@ -157,15 +156,7 @@ impl DCBEventStoreAsync for AsyncUmaDBClient {
         let events_proto: Vec<EventProto> = events.into_iter().map(EventProto::from).collect();
 
         let condition_proto = condition.map(|c| AppendConditionProto {
-            fail_if_events_match: Some(QueryProto {
-                items: <Vec<DCBQueryItem> as Clone>::clone(&c.fail_if_events_match.items)
-                    .into_iter()
-                    .map(|item| QueryItemProto {
-                        types: item.types,
-                        tags: item.tags,
-                    })
-                    .collect(),
-            }),
+            fail_if_events_match: Some(c.fail_if_events_match.into()),
             after: c.after,
         });
 

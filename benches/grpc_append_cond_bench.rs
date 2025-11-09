@@ -1,17 +1,18 @@
-use std::hint::black_box;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use futures::future::join_all;
+use std::hint::black_box;
 use std::net::TcpListener;
 use std::sync::Arc;
 use std::thread;
 use tempfile::tempdir;
 use tokio::runtime::Builder as RtBuilder;
 use tokio::sync::{Mutex, oneshot};
-use umadb::db::UmaDB;
-use umadb::dcb::{
+use umadb_client::AsyncUmaDBClient;
+use umadb_core::db::UmaDB;
+use umadb_core::dcb::{
     DCBAppendCondition, DCBEvent, DCBEventStoreAsync, DCBEventStoreSync, DCBQuery, DCBQueryItem,
 };
-use umadb::grpc::{AsyncUmaDBClient, start_server};
+use umadb_server::start_server;
 
 fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
     let dir = tempdir().expect("tempdir");

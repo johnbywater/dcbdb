@@ -1,4 +1,5 @@
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use futures::future::join_all;
 use std::net::TcpListener;
 use std::sync::{
     Arc,
@@ -9,11 +10,10 @@ use std::time::Duration;
 use tempfile::tempdir;
 use tokio::runtime::Builder as RtBuilder;
 use tokio::sync::oneshot;
-use umadb::db::UmaDB;
-use umadb::dcb::{DCBEvent, DCBEventStoreAsync, DCBEventStoreSync};
-use umadb::grpc::{AsyncUmaDBClient, start_server};
-// use futures::StreamExt;
-use futures::future::join_all;
+use umadb_client::AsyncUmaDBClient;
+use umadb_core::db::UmaDB;
+use umadb_core::dcb::{DCBEvent, DCBEventStoreAsync, DCBEventStoreSync};
+use umadb_server::start_server;
 
 fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
     let dir = tempdir().expect("tempdir");
@@ -176,7 +176,14 @@ pub fn grpc_read_with_writers_benchmark(c: &mut Criterion) {
                         let client = clients[i].clone();
                         async move {
                             let mut resp = client
-                                .read(None, None, false, Some(TOTAL_EVENTS), false, Some(READ_BATCH_SIZE))
+                                .read(
+                                    None,
+                                    None,
+                                    false,
+                                    Some(TOTAL_EVENTS),
+                                    false,
+                                    Some(READ_BATCH_SIZE),
+                                )
                                 .await
                                 .expect("start read response");
                             let mut count = 0usize;

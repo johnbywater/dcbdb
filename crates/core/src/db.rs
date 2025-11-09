@@ -155,7 +155,7 @@ impl DCBEventStoreSync for UmaDB {
 
         // Build query and after
         let q = query.unwrap_or(Arc::new(DCBQuery { items: vec![] }));
-        let from = start.map(|after| Position(after));
+        let from = start.map(Position);
 
         // Delegate to read_conditional
         let events = read_conditional(

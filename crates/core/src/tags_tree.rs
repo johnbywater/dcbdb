@@ -801,12 +801,10 @@ impl<'a> TagsTreeIterator<'a> {
                                 } else {
                                     remove_page = true;
                                 }
+                            } else if child_idx > 0 {
+                                push_revisit = Some((page_id, Some(child_idx - 1)));
                             } else {
-                                if child_idx > 0 {
-                                    push_revisit = Some((page_id, Some(child_idx - 1)));
-                                } else {
-                                    remove_page = true;
-                                }
+                                remove_page = true;
                             }
                             push_child = Some((internal.child_ids[child_idx], None));
                         } else {
@@ -827,21 +825,19 @@ impl<'a> TagsTreeIterator<'a> {
                                     // No lower bound: entire leaf in forward order
                                     leaf_batch = Some(tleaf.positions.clone());
                                 }
-                            } else {
-                                if let Some(f) = from {
-                                    let end_idx = tleaf.positions.partition_point(|p| *p <= f);
-                                    if end_idx > 0 {
-                                        let mut batch: Vec<Position> =
-                                            tleaf.positions[..end_idx].to_vec();
-                                        batch.reverse();
-                                        leaf_batch = Some(batch);
-                                    }
-                                } else {
-                                    // No upper bound: entire leaf reversed
-                                    let mut batch = tleaf.positions.clone();
+                            } else if let Some(f) = from {
+                                let end_idx = tleaf.positions.partition_point(|p| *p <= f);
+                                if end_idx > 0 {
+                                    let mut batch: Vec<Position> =
+                                        tleaf.positions[..end_idx].to_vec();
                                     batch.reverse();
                                     leaf_batch = Some(batch);
                                 }
+                            } else {
+                                // No upper bound: entire leaf reversed
+                                let mut batch = tleaf.positions.clone();
+                                batch.reverse();
+                                leaf_batch = Some(batch);
                             }
                         }
                         // We won't revisit a TagLeaf: remove from cache after processing

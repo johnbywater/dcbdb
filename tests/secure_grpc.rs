@@ -4,9 +4,9 @@ use std::time::Duration;
 use rcgen::generate_simple_self_signed;
 use tempfile::tempdir;
 use tokio::time::sleep;
-
-use umadb::dcb::{DCBEvent, DCBEventStoreAsync};
-use umadb::grpc::{AsyncUmaDBClient, ClientTlsOptions, start_server_secure};
+use umadb_client::{AsyncUmaDBClient, ClientTlsOptions};
+use umadb_core::dcb::{DCBEvent, DCBEventStoreAsync};
+use umadb_server::start_server_secure;
 
 // Helper to pick a free localhost port
 fn get_free_port() -> u16 {

@@ -2111,32 +2111,78 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 name = "umadb"
 version = "0.1.0"
 dependencies = [
+ "criterion 0.7.0",
+ "futures",
+ "pprof",
+ "rcgen",
+ "tempfile",
+ "tokio",
+ "tonic",
+ "tonic-health",
+ "umadb-client",
+ "umadb-core",
+ "umadb-server",
+ "uuid",
+]
+
+[[package]]
+name = "umadb-client"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "tokio",
+ "tonic",
+ "umadb-core",
+ "umadb-proto",
+ "uuid",
+]
+
+[[package]]
+name = "umadb-core"
+version = "0.1.0"
+dependencies = [
  "async-trait",
  "bitflags 2.9.1",
  "byteorder",
- "clap",
  "crc32fast",
- "criterion 0.7.0",
- "futures",
  "futures-core",
  "futures-util",
  "itertools 0.14.0",
  "libc",
  "memmap2",
- "pprof",
- "prost",
  "rand",
- "rcgen",
  "serial_test",
  "tempfile",
  "thiserror",
+ "uuid",
+]
+
+[[package]]
+name = "umadb-proto"
+version = "0.1.0"
+dependencies = [
+ "prost",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "umadb-core",
+ "uuid",
+]
+
+[[package]]
+name = "umadb-server"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "clap",
+ "futures",
  "tokio",
  "tokio-stream",
  "tonic",
  "tonic-health",
- "tonic-prost",
- "tonic-prost-build",
- "uuid",
+ "umadb-core",
+ "umadb-proto",
 ]
 
 [[package]]

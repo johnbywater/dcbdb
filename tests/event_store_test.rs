@@ -1,13 +1,14 @@
-use umadb::dcb::{
-    DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreSync, DCBQuery, DCBQueryItem,
-};
 // gRPC client sync trait support has been removed; tests use the local EventStore
 use std::net::TcpListener;
 use std::sync::Arc;
 use tempfile::tempdir;
 use tokio::runtime::Builder as RtBuilder;
-use umadb::db::UmaDB;
-use umadb::grpc::{UmaDBClient, start_server};
+use umadb_client::UmaDBClient;
+use umadb_core::db::UmaDB;
+use umadb_core::dcb::{
+    DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreSync, DCBQuery, DCBQueryItem,
+};
+use umadb_server::start_server;
 use uuid::Uuid;
 // Import the EventStore and related types from the main crate
 

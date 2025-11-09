@@ -1,0 +1,123 @@
+use std::sync::Arc;
+use umadb_client::UmaDBClient;
+use umadb_core::dcb::{
+    DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreSync, DCBQuery, DCBQueryItem,
+};
+use uuid::Uuid;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Connect to the gRPC server
+    let client = UmaDBClient::connect("http://localhost:50051", None)?;
+
+    // Define a consistency boundary
+    let cb = Arc::new(DCBQuery {
+        items: vec![DCBQueryItem {
+            types: vec!["example".to_string()],
+            tags: vec!["tag1".to_string(), "tag2".to_string()],
+        }],
+    });
+
+    // Read events for a decision model
+    let mut read_response = client.read(Some(cb.clone()), None, false, None, false, None)?;
+
+    // Build decision model
+    while let Some(result) = read_response.next() {
+        match result {
+            Ok(event) => {
+                println!(
+                    "Got event at position {}: {:?}",
+                    event.position, event.event
+                );
+            }
+            Err(status) => panic!("gRPC stream error: {}", status),
+        }
+    }
+
+    // Remember the last-known position
+    let last_known_position = read_response.head().unwrap();
+    println!("Last known position is: {:?}", last_known_position);
+
+    // Produce new event
+    let event = DCBEvent {
+        event_type: "example".to_string(),
+        tags: vec!["tag1".to_string(), "tag2".to_string()],
+        data: b"Hello, world!".to_vec(),
+        uuid: Some(Uuid::new_v4()),
+    };
+
+    // Append event in consistency boundary
+    let commit_position1 = client.append(
+        vec![event.clone()],
+        Some(DCBAppendCondition {
+            fail_if_events_match: cb.clone(),
+            after: last_known_position,
+        }),
+    )?;
+
+    println!("Appended event at position: {}", commit_position1);
+
+    // Append conflicting event - expect an error
+    let conflicting_event = DCBEvent {
+        event_type: "example".to_string(),
+        tags: vec!["tag1".to_string(), "tag2".to_string()],
+        data: b"Hello, world!".to_vec(),
+        uuid: Some(Uuid::new_v4()), // different UUID
+    };
+
+    let conflicting_result = client.append(
+        vec![conflicting_event],
+        Some(DCBAppendCondition {
+            fail_if_events_match: cb.clone(),
+            after: last_known_position,
+        }),
+    );
+
+    // Expect an integrity error
+    match conflicting_result {
+        Err(DCBError::IntegrityError(integrity_error)) => {
+            println!("Conflicting event was rejected: {:?}", integrity_error);
+        }
+        other => panic!("Expected IntegrityError, got {:?}", other),
+    }
+
+    // Appending with identical event IDs and append condition is idempotent.
+    println!(
+        "Retrying to append event at position: {:?}",
+        last_known_position
+    );
+    let commit_position2 = client.append(
+        vec![event.clone()],
+        Some(DCBAppendCondition {
+            fail_if_events_match: cb.clone(),
+            after: last_known_position,
+        }),
+    )?;
+
+    if commit_position1 == commit_position2 {
+        println!(
+            "Append method returned same commit position: {}",
+            commit_position2
+        );
+    } else {
+        panic!("Expected idempotent retry!")
+    }
+
+    // Subscribe to all events for a projection
+    let mut subscription = client.read(None, None, false, None, true, None)?;
+
+    // Build an up-to-date view
+    while let Some(result) = subscription.next() {
+        match result {
+            Ok(ev) => {
+                println!("Processing event at {}: {:?}", ev.position, ev.event);
+                if ev.position == commit_position2 {
+                    println!("Projection has processed new event!");
+                    break;
+                }
+            }
+            Err(status) => panic!("gRPC stream error: {}", status),
+        }
+    }
+
+    Ok(())
+}

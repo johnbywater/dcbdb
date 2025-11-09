@@ -3,8 +3,8 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Instant;
 use tempfile::tempdir;
-use umadb::db::UmaDB;
-use umadb::dcb::{DCBAppendCondition, DCBEvent, DCBEventStoreSync, DCBQuery, DCBQueryItem};
+use umadb_core::db::UmaDB;
+use umadb_core::dcb::{DCBAppendCondition, DCBEvent, DCBEventStoreSync, DCBQuery, DCBQueryItem};
 
 // This test is intended for profiling hotspots when appending events.
 // It can append one event per call or many events per call, to profile both per-call overhead

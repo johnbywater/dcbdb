@@ -559,16 +559,14 @@ impl<'a> EventIterator<'a> {
                                     remove_page = true;
                                     // println!(" - will remove");
                                 }
+                            } else if child_ids_idx > 0 {
+                                // Will revisit this internal node.
+                                // println!(" - will revisit");
+                                push_revisit = Some((page_id, Some(child_ids_idx - 1)));
                             } else {
-                                if child_ids_idx > 0 {
-                                    // Will revisit this internal node.
-                                    // println!(" - will revisit");
-                                    push_revisit = Some((page_id, Some(child_ids_idx - 1)));
-                                } else {
-                                    // Don't revisit this internal node.
-                                    remove_page = true;
-                                    // println!(" - will remove");
-                                }
+                                // Don't revisit this internal node.
+                                remove_page = true;
+                                // println!(" - will remove");
                             }
                         } else {
                             // TODO: Clarify if this is always because internal node is empty?
@@ -623,16 +621,14 @@ impl<'a> EventIterator<'a> {
                                         remove_page = true;
                                         // println!(" - last value, will remove");
                                     }
-                                } else {
-                                    if values_idx > 0 {
+                                } else if values_idx > 0 {
                                         // Revisit this leaf.
                                         push_revisit = Some((page_id, Some(values_idx - 1)));
                                         // println!(" - not last value, will revisit");
-                                    } else {
-                                        // The last value.
-                                        remove_page = true;
-                                        // println!(" - last value, will remove");
-                                    }
+                                } else {
+                                    // The last value.
+                                    remove_page = true;
+                                    // println!(" - last value, will remove");
                                 }
                             } else {
                                 // No key greater or equal to 'from' in this leaf

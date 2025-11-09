@@ -1,0 +1,22 @@
+[package]
+name = "umadb-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+thiserror = { workspace = true }
+crc32fast = "1"
+itertools = "0.14"
+uuid = { workspace = true }
+libc = { workspace = true }
+memmap2 = "0.9"
+rand = "0.9"
+byteorder = "1"
+bitflags = "2"
+futures-core = "0.3"
+futures-util = "0.3"
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+serial_test = { workspace = true }

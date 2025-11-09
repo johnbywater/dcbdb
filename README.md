@@ -375,36 +375,34 @@ The benchmark plots above were produced on an Apple MacBook Pro M4 (10 performan
 Other distribution options are planned, but currently the only way to run UmaDB is to clone the Git repository
 and build the project.
 
-To build the project, you need to have Rust and Cargo installed. If you don't have them installed, you can get them from [rustup.rs](https://rustup.rs/).
+To build the UmaDB server binary executable, you need to have Rust and Cargo installed. If you don't have them installed, you can get them from [rustup.rs](https://rustup.rs/).
 
-Once you have Rust and Cargo installed, you can build the project with:
+Once you have Rust and Cargo installed, you can build `umadb` with:
 
 ```bash
 cargo build --release
 ```
 
-This will create the `uma` UmaDB server executable in `target/release/`.
-
-You can run the `uma` binary directly after installing or building:
+This will create `umadb` in `target/release/`.
 
 ```bash
-./target/release/uma --path ./uma.db --addr 127.0.0.1:50051
+./target/release/umadb --listen 127.0.0.1:50051 --db-path ./uma.db
 ```
 
 Or you can use `cargo run` (dev build, builds faster, runs slower):
 
 ```bash
-cargo run --bin uma -- --path ./uma.db --addr 127.0.0.1:50051
+cargo run --bin umadb -- --listen 127.0.0.1:50051 --db-path ./uma.db
 ```
 
 ### Command-line Options
 
-The `uma` executable accepts the following command-line options:
+The `umadb` executable accepts the following command-line options:
 
-- `-p, --path <PATH>`: Path to the event store directory (required)
-- `-a, --addr <ADDR>`: Address to listen on (default: "127.0.0.1:50051")
-- `-c, --cert <PATH>`: Path to PEM-encoded server certificate chain (enable TLS when used with --key)
-- `-k, --key <PATH>`: Path to PEM-encoded private key (enable TLS when used with --cert)
+- `    --listen`:  Listen address, e.g. 127.0.0.1:50051
+- `    --db-path`: Path to database file or folder
+- `-c, --tls-cert`: Optional TLS server certificate (PEM)
+- `-k, --tls-key`: Optional TLS server private key (PEM)
 - `-h, --help`: Print help information
 - `-V, --version`: Print version information
 
@@ -439,7 +437,7 @@ Explanation:
 This one-liner will produce a valid self-signed server certificate usable by the Rust client examples below.
 
 ```bash
-cargo run --bin uma -- --path ./uma.db --addr 127.0.0.1:50051 --cert server.pem --key server.key
+umadb --listen 127.0.0.1:50051 --db-path ./uma.db  --tls-cert server.pem --tls-key server.key
 ```
 
 ----

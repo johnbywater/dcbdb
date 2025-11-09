@@ -1,0 +1,19 @@
+[package]
+name = "umadb-server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+umadb-core = { path = "../core" }
+umadb-proto = { path = "../proto" }
+clap = { version = "4.5.6", features = ["derive"] }
+tokio = { workspace = true }
+tonic = { workspace = true }
+tonic-health = { workspace = true }
+futures = { workspace = true }
+tokio-stream = "0.1.14"
+async-trait = { workspace = true }
+
+[[bin]]
+name = "umadb"
+path = "src/bin/umadb.rs"

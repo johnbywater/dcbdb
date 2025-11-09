@@ -1,6 +1,6 @@
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use umadb::common::{PageID, Position, Tsn};
-use umadb::header_node::HeaderNode;
+use umadb_core::common::{PageID, Position, Tsn};
+use umadb_core::header_node::HeaderNode;
 
 // Build the sample header once, outside of the measured benchmark closures
 static HEADER: HeaderNode = HeaderNode {

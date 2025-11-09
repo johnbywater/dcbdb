@@ -1,5 +1,6 @@
-use umadb::dcb::{DCBEvent, DCBEventStoreAsync};
-use umadb::grpc::{AsyncUmaDBClient, start_server};
+use umadb_client::AsyncUmaDBClient;
+use umadb_core::dcb::{DCBEvent, DCBEventStoreAsync};
+use umadb_server::start_server;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn grpc_async_streams_large_reads_total_count() {

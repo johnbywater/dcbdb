@@ -4,12 +4,11 @@ use std::time::Duration;
 use tempfile::tempdir;
 use tokio::time::sleep;
 
-use umadb::grpc::start_server;
-
 // tonic-health client API
-use tonic_health::pb::health_client::HealthClient;
 use tonic_health::pb::HealthCheckRequest;
 use tonic_health::pb::health_check_response::ServingStatus as PbServingStatus;
+use tonic_health::pb::health_client::HealthClient;
+use umadb_server::start_server;
 
 // Helper to pick a free localhost port
 fn get_free_port() -> u16 {
@@ -39,7 +38,8 @@ async fn grpc_health_check_serving() {
     // Retry connect loop to avoid race with server startup
     let mut client: Option<HealthClient<tonic::transport::Channel>> = None;
     let mut last_err: Option<tonic::transport::Error> = None;
-    for _ in 0..40 { // up to ~2s
+    for _ in 0..40 {
+        // up to ~2s
         match tonic::transport::Channel::from_shared(url.clone())
             .unwrap()
             .connect()
@@ -64,14 +64,18 @@ async fn grpc_health_check_serving() {
 
     // Act + Assert: overall service (empty service name) should be SERVING
     let resp = client
-        .check(HealthCheckRequest { service: "".to_string() })
+        .check(HealthCheckRequest {
+            service: "".to_string(),
+        })
         .await
         .expect("health check overall");
     assert_eq!(resp.into_inner().status, PbServingStatus::Serving as i32);
 
     // Act + Assert: named UmaDB service should be SERVING
     let resp = client
-        .check(HealthCheckRequest { service: "umadb.UmaDBService".to_string() })
+        .check(HealthCheckRequest {
+            service: "umadb.UmaDBService".to_string(),
+        })
         .await
         .expect("health check UmaDB");
     assert_eq!(resp.into_inner().status, PbServingStatus::Serving as i32);

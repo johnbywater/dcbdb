@@ -2,3 +2,6 @@
 /.idea
 /data
 /test-data
+/server.key
+/server.pem
+/UmaDB-append-bench-cond-1-per-request.png

@@ -1,0 +1,18 @@
+[package]
+name = "umadb-proto"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+umadb-core = { path = "../core" }
+prost = "0.14.1"
+tonic-prost = "0.14.2"
+tonic = { workspace = true }
+uuid = { workspace = true }
+
+[build-dependencies]
+tonic-prost-build = "0.14.2"
+
+[features]
+default = []
+rustls = []

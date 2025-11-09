@@ -8,9 +8,10 @@ use std::time::Duration;
 use tempfile::tempdir;
 use tokio::runtime::Builder as RtBuilder;
 use tokio::sync::oneshot;
-use umadb::db::UmaDB;
-use umadb::dcb::{DCBEvent, DCBEventStoreAsync, DCBEventStoreSync};
-use umadb::grpc::{AsyncUmaDBClient, start_server};
+use umadb_client::AsyncUmaDBClient;
+use umadb_core::db::UmaDB;
+use umadb_core::dcb::{DCBEvent, DCBEventStoreAsync, DCBEventStoreSync};
+use umadb_server::start_server;
 
 const EVENTS_PER_REQUEST: usize = 1;
 

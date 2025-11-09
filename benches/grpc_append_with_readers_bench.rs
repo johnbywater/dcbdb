@@ -6,14 +6,14 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use std::thread;
+use std::time::Duration;
 use tempfile::tempdir;
 use tokio::runtime::Builder as RtBuilder;
 use tokio::sync::oneshot;
-use umadb::db::UmaDB;
-use umadb::dcb::{DCBEvent, DCBEventStoreAsync, DCBEventStoreSync};
-use umadb::grpc::{AsyncUmaDBClient, start_server};
-// use futures::StreamExt;
-use std::time::Duration;
+use umadb_client::AsyncUmaDBClient;
+use umadb_core::db::UmaDB;
+use umadb_core::dcb::{DCBEvent, DCBEventStoreAsync, DCBEventStoreSync};
+use umadb_server::start_server;
 
 fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
     let dir = tempdir().expect("tempdir");
@@ -123,7 +123,14 @@ pub fn grpc_append_with_readers_benchmark(c: &mut Criterion) {
             let handle = readers_rt.spawn(async move {
                 while running.load(Ordering::Relaxed) {
                     let mut resp = match client
-                        .read(None, None, false, Some(TOTAL_EVENTS), false, Some(READ_BATCH_SIZE))
+                        .read(
+                            None,
+                            None,
+                            false,
+                            Some(TOTAL_EVENTS),
+                            false,
+                            Some(READ_BATCH_SIZE),
+                        )
                         .await
                     {
                         Ok(s) => s,

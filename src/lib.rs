@@ -3,31 +3,16 @@
 //! This library provides an event store implementation with support for
 //! dynamic consistency boundaries.
 
-pub mod common;
-pub mod db;
-pub mod dcb;
-mod events_tree;
-mod events_tree_nodes;
-mod free_lists_tree_nodes;
-pub mod grpc;
-pub mod header_node;
-mod mvcc;
-mod node;
-mod page;
-mod pager;
-mod tags_tree;
-mod tags_tree_nodes;
-
 // Public bench helpers to exercise internal APIs without exposing them in the public surface
 pub mod bench_api {
-    use crate::common::{PageID, Position};
-    use crate::db::DEFAULT_PAGE_SIZE;
-    use crate::dcb::DCBResult;
-    use crate::events_tree_nodes::{EventLeafNode, EventRecord, EventValue};
-    use crate::mvcc::{Mvcc, Writer};
-    use crate::node::Node;
-    use crate::page::{PAGE_HEADER_SIZE, Page};
     use std::path::Path;
+    use umadb_core::common::{PageID, Position};
+    use umadb_core::db::DEFAULT_PAGE_SIZE;
+    use umadb_core::dcb::DCBResult;
+    use umadb_core::events_tree_nodes::{EventLeafNode, EventRecord, EventValue};
+    use umadb_core::mvcc::{Mvcc, Writer};
+    use umadb_core::node::Node;
+    use umadb_core::page::{PAGE_HEADER_SIZE, Page};
 
     /// Minimal public wrapper to allow Criterion benches to measure commit paths
     pub struct BenchDb {

@@ -204,7 +204,7 @@ impl UmaDbService for UmaDBServer {
             let query_clone = query.take();
             let mut next_start = start;
             let mut sent_any = false;
-            let mut remaining_limit = limit;
+            let mut remaining_limit = limit.unwrap_or(u32::MAX);
             // Create a watch receiver for head updates (for subscriptions)
             // TODO: Make this an Option and only do this for subscriptions?
             let mut head_rx = request_handler.watch_head();
@@ -226,12 +226,9 @@ impl UmaDbService for UmaDBServer {
                     }
                 }
                 // Determine per-iteration limit.
-                let read_limit = remaining_limit.unwrap_or(u32::MAX).min(batch_size);
+                let read_limit = remaining_limit.min(batch_size);
                 // If subscription and remaining exhausted (limit reached), terminate
-                if subscribe
-                    && let Some(remaining_limit) = remaining_limit
-                    && remaining_limit == 0
-                {
+                if subscribe && limit.is_some() && remaining_limit == 0 {
                     break;
                 }
                 match request_handler
@@ -247,15 +244,15 @@ impl UmaDbService for UmaDBServer {
                         if dcb_sequenced_events.is_empty() {
                             // Only send an empty response to communicate head if this is the first
                             if !sent_any {
-                                // For unlimited non-subscription reads, use global_head
-                                // For limited reads, use None (no events means no head to report)
                                 // For subscriptions, use current head
+                                // For unlimited non-subscription reads, use captured_head
+                                // For limited reads, use None (no events means no head to report)
                                 let head_to_send = if subscribe {
                                     head
-                                } else if remaining_limit.is_none() {
+                                } else if limit.is_none() {
                                     captured_head
                                 } else {
-                                    None
+                                    head
                                 };
                                 let response = ReadResponseProto {
                                     events: vec![],
@@ -298,7 +295,7 @@ impl UmaDbService for UmaDBServer {
                         // Capture the original length before consuming events
                         let original_len = dcb_sequenced_events.len();
                         
-                        // Filter and map events, discarding those with position > global_head
+                        // Filter and map events, discarding those with position > captured_head
                         let sequenced_event_protos: Vec<SequencedEventProto> = dcb_sequenced_events
                             .into_iter()
                             .filter(|e| {
@@ -321,12 +318,12 @@ impl UmaDbService for UmaDBServer {
                         if sequenced_event_protos.is_empty() {
                             // If we haven't sent anything yet, still send an empty batch with head to convey metadata
                             if !sent_any {
-                                // For unlimited non-subscription reads, use global_head
-                                // For limited reads, use None (no events means no head to report)
                                 // For subscriptions, use current head
+                                // For unlimited non-subscription reads, use captured_head
+                                // For limited reads, use None (no events means no head to report)
                                 let head_to_send = if subscribe {
                                     head
-                                } else if remaining_limit.is_none() {
+                                } else if limit.is_none() {
                                     captured_head
                                 } else {
                                     None
@@ -345,10 +342,12 @@ impl UmaDbService for UmaDBServer {
                         let last_event_position = sequenced_event_protos.last().map(|e| e.position);
                         
                         // Prepare and send this batch
-                        // For unlimited reads, use global_head; for limited reads, use last event position
-                        let batch_head = if subscribe {
+                        // For subscriptions, use current head
+                        // For unlimited non-subscription reads, use captured_head
+                        // For limited reads, use None (no events means no head to report)
+                        let head_to_send = if subscribe {
                             head
-                        } else if remaining_limit.is_none() {
+                        } else if limit.is_none() {
                             captured_head
                         } else {
                             last_event_position
@@ -356,7 +355,7 @@ impl UmaDbService for UmaDBServer {
 
                         let response = ReadResponseProto {
                             events: sequenced_event_protos,
-                            head: batch_head,
+                            head: head_to_send,
                         };
 
                         if tx.send(Ok(response)).await.is_err() {
@@ -374,13 +373,13 @@ impl UmaDbService for UmaDBServer {
                         }
 
                         // Decrease the remaining overall limit if any, and stop if reached
-                        if let Some(rem) = remaining_limit.as_mut() {
-                            if *rem <= sent_count {
-                                *rem = 0;
+                        if limit.is_some() {
+                            if remaining_limit <= sent_count {
+                                remaining_limit = 0;
                             } else {
-                                *rem -= sent_count;
+                                remaining_limit -= sent_count;
                             }
-                            if *rem == 0 {
+                            if remaining_limit == 0 {
                                 break;
                             }
                         }

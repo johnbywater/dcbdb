@@ -241,19 +241,45 @@ impl UmaDbService for UmaDBServer {
                     .await
                 {
                     Ok((dcb_sequenced_events, head)) => {
-                        if dcb_sequenced_events.is_empty() {
+                        // Capture the original length before consuming events
+                        let original_len = dcb_sequenced_events.len();
+                        
+                        // Filter and map events, discarding those with position > captured_head
+                        let sequenced_event_protos: Vec<SequencedEventProto> = dcb_sequenced_events
+                            .into_iter()
+                            .filter(|e| {
+                                if let Some(h) = captured_head {
+                                    e.position <= h
+                                } else {
+                                    true
+                                }
+                            })
+                            .map(|e| SequencedEventProto::from(e))
+                            .collect();
+                        
+                        let reached_captured_head = if captured_head.is_some() {
+                            // Check if we filtered out any events
+                            sequenced_event_protos.len() < original_len
+                        } else {
+                            false
+                        };
+
+                        // Calculate head to send based on context
+                        // For subscriptions: use current head
+                        // For unlimited non-subscription reads: use captured_head
+                        // For limited reads: use last event position (or current head if empty)
+                        let last_event_position = sequenced_event_protos.last().map(|e| e.position);
+                        let head_to_send = if subscribe {
+                            head
+                        } else if limit.is_none() {
+                            captured_head
+                        } else {
+                            last_event_position.or(head)
+                        };
+
+                        if sequenced_event_protos.is_empty() {
                             // Only send an empty response to communicate head if this is the first
                             if !sent_any {
-                                // For subscriptions, use current head
-                                // For unlimited non-subscription reads, use captured_head
-                                // For limited reads, use None (no events means no head to report)
-                                let head_to_send = if subscribe {
-                                    head
-                                } else if limit.is_none() {
-                                    captured_head
-                                } else {
-                                    head
-                                };
                                 let response = ReadResponseProto {
                                     events: vec![],
                                     head: head_to_send,
@@ -292,66 +318,8 @@ impl UmaDbService for UmaDBServer {
                             break;
                         }
 
-                        // Capture the original length before consuming events
-                        let original_len = dcb_sequenced_events.len();
-                        
-                        // Filter and map events, discarding those with position > captured_head
-                        let sequenced_event_protos: Vec<SequencedEventProto> = dcb_sequenced_events
-                            .into_iter()
-                            .filter(|e| {
-                                if let Some(h) = captured_head {
-                                    e.position <= h
-                                } else {
-                                    true
-                                }
-                            })
-                            .map(|e| SequencedEventProto::from(e))
-                            .collect();
-                        
-                        let reached_captured_head = if captured_head.is_some() {
-                            // Check if we filtered out any events
-                            sequenced_event_protos.len() < original_len
-                        } else {
-                            false
-                        };
-
-                        if sequenced_event_protos.is_empty() {
-                            // If we haven't sent anything yet, still send an empty batch with head to convey metadata
-                            if !sent_any {
-                                // For subscriptions, use current head
-                                // For unlimited non-subscription reads, use captured_head
-                                // For limited reads, use None (no events means no head to report)
-                                let head_to_send = if subscribe {
-                                    head
-                                } else if limit.is_none() {
-                                    captured_head
-                                } else {
-                                    None
-                                };
-                                let response = ReadResponseProto {
-                                    events: sequenced_event_protos,
-                                    head: head_to_send,
-                                };
-                                let _ = tx.send(Ok(response)).await;
-                            }
-                            break;
-                        }
-
-                        // Capture values needed after ev_out is moved
+                        // Capture values needed after sequenced_event_protos is moved
                         let sent_count = sequenced_event_protos.len() as u32;
-                        let last_event_position = sequenced_event_protos.last().map(|e| e.position);
-                        
-                        // Prepare and send this batch
-                        // For subscriptions, use current head
-                        // For unlimited non-subscription reads, use captured_head
-                        // For limited reads, use None (no events means no head to report)
-                        let head_to_send = if subscribe {
-                            head
-                        } else if limit.is_none() {
-                            captured_head
-                        } else {
-                            last_event_position
-                        };
 
                         let response = ReadResponseProto {
                             events: sequenced_event_protos,

@@ -17,6 +17,8 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 pub static DEFAULT_PAGE_SIZE: usize = 4096;
+pub const DEFAULT_DB_FILENAME: &str = "uma.db";
+
 
 /// EventStore implementing the DCBEventStoreSync interface
 pub struct UmaDB {
@@ -29,7 +31,7 @@ impl UmaDB {
     pub fn new<P: AsRef<Path>>(path: P) -> DCBResult<Self> {
         let p = path.as_ref();
         let file_path = if p.is_dir() {
-            p.join("uma.db")
+            p.join(DEFAULT_DB_FILENAME)
         } else {
             p.to_path_buf()
         };

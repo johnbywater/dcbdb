@@ -8,7 +8,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::{Identity, ServerTlsConfig};
 use tonic::{Request, Response, Status, transport::Server};
 
-use umadb_core::db::{DEFAULT_PAGE_SIZE, UmaDB, is_request_idempotent, read_conditional};
+use umadb_core::db::{DEFAULT_PAGE_SIZE, UmaDB, is_request_idempotent, read_conditional, DEFAULT_DB_FILENAME};
 use umadb_dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBQuery, DCBResult, DCBSequencedEvent,
 };
@@ -451,7 +451,7 @@ impl RequestHandler {
         // Build a shared Mvcc instance (Arc) upfront so reads can proceed concurrently
         let p = path.as_ref();
         let file_path = if p.is_dir() {
-            p.join("dcb.db")
+            p.join(DEFAULT_DB_FILENAME)
         } else {
             p.to_path_buf()
         };

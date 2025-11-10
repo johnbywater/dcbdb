@@ -389,12 +389,12 @@ clients concurrently appending events. This plot shows reading is not drasticall
 
 ![UmaDB benchmark](UmaDB-read-with-writers-bench.png)
 
+
 ----
 
-## Running the UmaDB Server
+## Building the UmaDB Server
 
-Other distribution options are planned, but currently the only way to run UmaDB is to clone the Git repository
-and build the project.
+UmaDB provides pre-built binary executables for both amd64 and arm64 architectures. The files are available on [GitHub Releases](https://github.com/pyeventsourcing/umadb/releases).
 
 To build the UmaDB server binary executable, you need to have Rust and Cargo installed. If you don't have them installed, you can get them from [rustup.rs](https://rustup.rs/).
 
@@ -426,6 +426,12 @@ The `umadb` executable accepts the following command-line options:
 - `--tls-key`: Optional TLS server private key (PEM)
 - `-h, --help`: Print help information
 - `-V, --version`: Print version information
+
+
+Environment variable `UMADB_TLS_CERT` can be used to indicate a file system path to a server TLS certificate file.
+
+Environment variable `UMADB_TLS_KEY` can be used to indicate a file system path to a server TLS private key file.
+
 
 ### Self-signed TLS Certificate
 
@@ -462,6 +468,93 @@ umadb --listen 127.0.0.1:50051 --db-path ./uma.db  --tls-cert server.pem --tls-k
 ```
 
 ----
+
+## Running UmaDB with Docker
+
+UmaDB provides pre-built Docker images for both amd64 and arm64 architectures. The images are available on [GitHub Container Registry](https://github.com/pyeventsourcing/umadb/pkgs/container/umadb).
+
+### Pulling the Docker Image
+
+```bash
+# From GitHub Container Registry
+docker pull ghcr.io/pyeventsourcing/umadb:latest
+```
+
+### Running the Container
+
+The UmaDB server listens on **port 50051** by default. To run the container:
+
+```bash
+# Basic run (ephemeral storage)
+docker run -p 50051:50051 ghcr.io/pyeventsourcing/umadb:latest
+```
+
+### Persistent Storage with Local File
+
+To persist the database file on your local filesystem, mount a local directory to `/data` in the container:
+
+```bash
+# Create a local directory for the database
+mkdir -p ./umadb-data
+
+# Run with persistent storage
+docker run -p 50051:50051 -v $(pwd)/umadb-data:/data ghcr.io/pyeventsourcing/umadb:latest
+```
+
+The container runs as a non-root user (uid 1000) and stores data in `/data` by default. Make sure the mounted directory has appropriate permissions.
+
+### Activating TLS
+
+Environment variable `UMADB_TLS_CERT` can be used to indicate a file system path to a server TLS certificate file.
+
+Environment variable `UMADB_TLS_KEY` can be used to indicate a file system path to a server TLS private key file.
+
+
+### Connecting to the Server
+
+Once the container is running, you can connect to it from your application using the gRPC endpoint:
+
+```rust
+let url = "http://localhost:50051".to_string();
+let client = UmaDBClient::new(url).connect()?;
+```
+
+### Custom Port Mapping
+
+To use a different host port while keeping the container's internal port at 50051:
+
+```bash
+# Map host port 8080 to container port 50051
+docker run -p 8080:50051 -v $(pwd)/umadb-data:/data ghcr.io/pyeventsourcing/umadb:latest
+```
+
+Then connect using:
+```rust
+let url = "http://localhost:8080".to_string();
+let client = UmaDBClient::new(url).connect()?;
+```
+
+### Docker Compose Example
+
+For convenience, you can use Docker Compose:
+
+```yaml
+version: '3.8'
+services:
+  umadb:
+    image: ghcr.io/pyeventsourcing/umadb:latest
+    ports:
+      - "50051:50051"
+    volumes:
+      - ./umadb-data:/data
+```
+
+Run with:
+```bash
+docker-compose up -d
+```
+----
+
 
 ## gRPC API
 
@@ -1195,86 +1288,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     Ok(())
 }
-```
-
-----
-
-## Running UmaDB with Docker
-
-UmaDB provides pre-built Docker images for both amd64 and arm64 architectures. The images are available on Docker Hub and GitHub Container Registry.
-
-### Pulling the Docker Image
-
-```bash
-# From GitHub Container Registry
-docker pull ghcr.io/pyeventsourcing/umadb:latest
-```
-
-### Running the Container
-
-The UmaDB server listens on **port 50051** by default. To run the container:
-
-```bash
-# Basic run (ephemeral storage)
-docker run -p 50051:50051 ghcr.io/pyeventsourcing/umadb:latest
-```
-
-### Persistent Storage with Local File
-
-To persist the database file on your local filesystem, mount a local directory to `/data` in the container:
-
-```bash
-# Create a local directory for the database
-mkdir -p ./umadb-data
-
-# Run with persistent storage
-docker run -p 50051:50051 -v $(pwd)/umadb-data:/data ghcr.io/pyeventsourcing/umadb:latest
-```
-
-The container runs as a non-root user (uid 1000) and stores data in `/data` by default. Make sure the mounted directory has appropriate permissions.
-
-### Connecting to the Server
-
-Once the container is running, you can connect to it from your application using the gRPC endpoint:
-
-```rust
-let url = "http://localhost:50051".to_string();
-let client = UmaDBClient::new(url).connect()?;
-```
-
-### Custom Port Mapping
-
-To use a different host port while keeping the container's internal port at 50051:
-
-```bash
-# Map host port 8080 to container port 50051
-docker run -p 8080:50051 -v $(pwd)/umadb-data:/data ghcr.io/pyeventsourcing/umadb:latest
-```
-
-Then connect using:
-```rust
-let url = "http://localhost:8080".to_string();
-let client = UmaDBClient::new(url).connect()?;
-```
-
-### Docker Compose Example
-
-For convenience, you can use Docker Compose:
-
-```yaml
-version: '3.8'
-services:
-  umadb:
-    image: ghcr.io/pyeventsourcing/umadb:latest
-    ports:
-      - "50051:50051"
-    volumes:
-      - ./umadb-data:/data
-```
-
-Run with:
-```bash
-docker-compose up -d
 ```
 
 ----

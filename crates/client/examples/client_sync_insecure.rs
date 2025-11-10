@@ -10,15 +10,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = UmaDBClient::new(url).connect()?;
 
     // Define a consistency boundary
-    let cb = DCBQuery {
-        items: vec![DCBQueryItem {
-            types: vec!["example".to_string()],
-            tags: vec!["tag1".to_string(), "tag2".to_string()],
-        }],
-    };
+    let boundary = DCBQuery::new().item(
+        DCBQueryItem::new()
+            .types(["example"])
+            .tags(["tag1", "tag2"]),
+    );
 
     // Read events for a decision model
-    let mut read_response = client.read(Some(cb.clone()), None, false, None, false)?;
+    let mut read_response = client.read(Some(boundary.clone()), None, false, None, false)?;
 
     // Build decision model
     while let Some(result) = read_response.next() {
@@ -38,39 +37,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Last known position is: {:?}", last_known_position);
 
     // Produce new event
-    let event = DCBEvent {
-        event_type: "example".to_string(),
-        tags: vec!["tag1".to_string(), "tag2".to_string()],
-        data: b"Hello, world!".to_vec(),
-        uuid: Some(Uuid::new_v4()),
-    };
+    let event = DCBEvent::new()
+        .event_type("example")
+        .tags(["tag1", "tag2"])
+        .data(b"Hello, world!")
+        .uuid(Uuid::new_v4());
 
     // Append event in consistency boundary
-    let commit_position1 = client.append(
-        vec![event.clone()],
-        Some(DCBAppendCondition {
-            fail_if_events_match: cb.clone(),
-            after: last_known_position,
-        }),
-    )?;
+    let append_condition = DCBAppendCondition::new(boundary.clone()).after(last_known_position);
+    let position1 = client.append(vec![event.clone()], Some(append_condition.clone()))?;
 
-    println!("Appended event at position: {}", commit_position1);
+    println!("Appended event at position: {}", position1);
 
     // Append conflicting event - expect an error
-    let conflicting_event = DCBEvent {
-        event_type: "example".to_string(),
-        tags: vec!["tag1".to_string(), "tag2".to_string()],
-        data: b"Hello, world!".to_vec(),
-        uuid: Some(Uuid::new_v4()), // different UUID
-    };
+    let conflicting_event = DCBEvent::new()
+        .event_type("example")
+        .tags(["tag1", "tag2"])
+        .data(b"Hello, world!")
+        .uuid(Uuid::new_v4()); // different UUID
 
-    let conflicting_result = client.append(
-        vec![conflicting_event],
-        Some(DCBAppendCondition {
-            fail_if_events_match: cb.clone(),
-            after: last_known_position,
-        }),
-    );
+    let conflicting_result = client.append(vec![conflicting_event], Some(append_condition.clone()));
 
     // Expect an integrity error
     match conflicting_result {
@@ -85,18 +71,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Retrying to append event at position: {:?}",
         last_known_position
     );
-    let commit_position2 = client.append(
-        vec![event.clone()],
-        Some(DCBAppendCondition {
-            fail_if_events_match: cb.clone(),
-            after: last_known_position,
-        }),
-    )?;
+    let position2 = client.append(vec![event.clone()], Some(append_condition.clone()))?;
 
-    if commit_position1 == commit_position2 {
+    if position1 == position2 {
         println!(
             "Append method returned same commit position: {}",
-            commit_position2
+            position2
         );
     } else {
         panic!("Expected idempotent retry!")
@@ -110,7 +90,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         match result {
             Ok(ev) => {
                 println!("Processing event at {}: {:?}", ev.position, ev.event);
-                if ev.position == commit_position2 {
+                if ev.position == position2 {
                     println!("Projection has processed new event!");
                     break;
                 }

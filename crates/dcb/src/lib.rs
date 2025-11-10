@@ -138,11 +138,73 @@ pub struct DCBQueryItem {
     pub tags: Vec<String>,
 }
 
+impl DCBQueryItem {
+    /// Creates a new query item
+    pub fn new() -> Self {
+        Self {
+            types: vec![],
+            tags: vec![],
+        }
+    }
+
+    /// Sets the types for this query item
+    pub fn types<I, S>(mut self, types: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.types = types.into_iter().map(|s| s.into()).collect();
+        self
+    }
+
+    /// Sets the tags for this query item
+    pub fn tags<I, S>(mut self, tags: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.tags = tags.into_iter().map(|s| s.into()).collect();
+        self
+    }
+}
+
 /// A query composed of multiple query items
 #[derive(Debug, Clone, Default)]
 pub struct DCBQuery {
     /// List of query items, where events matching any item are included in results
     pub items: Vec<DCBQueryItem>,
+}
+
+impl DCBQuery {
+    /// Creates a new empty query
+    pub fn new() -> Self {
+        Self { items: Vec::new() }
+    }
+
+    /// Creates a query with the specified items
+    pub fn with_items<I>(items: I) -> Self
+    where
+        I: IntoIterator<Item = DCBQueryItem>,
+    {
+        Self {
+            items: items.into_iter().collect(),
+        }
+    }
+
+    /// Adds a query item to this query
+    pub fn item(mut self, item: DCBQueryItem) -> Self {
+        self.items.push(item);
+        self
+    }
+
+    /// Adds multiple query items to this query
+    pub fn items<I>(mut self, items: I) -> Self
+    where
+        I: IntoIterator<Item = DCBQueryItem>,
+    {
+        self.items.extend(items);
+        self
+    }
 }
 
 /// Conditions that must be satisfied for an append operation to succeed
@@ -152,6 +214,21 @@ pub struct DCBAppendCondition {
     pub fail_if_events_match: DCBQuery,
     /// Position after which to append; if None, append at the end
     pub after: Option<u64>,
+}
+
+impl DCBAppendCondition {
+    /// Creates a new empty append condition
+    pub fn new(fail_if_events_match: DCBQuery) -> Self {
+        Self {
+            fail_if_events_match,
+            after: None,
+        }
+    }
+
+    pub fn after(mut self, after: Option<u64>) -> Self {
+        self.after = after;
+        self
+    }
 }
 
 /// Represents an event in the event store
@@ -165,6 +242,46 @@ pub struct DCBEvent {
     pub tags: Vec<String>,
     /// Unique event ID
     pub uuid: Option<Uuid>,
+}
+
+impl DCBEvent {
+    /// Creates a new event
+    pub fn new() -> Self {
+        Self {
+            event_type: "".to_string(),
+            data: Vec::new(),
+            tags: Vec::new(),
+            uuid: None,
+        }
+    }
+
+    /// Sets the type for this event
+    pub fn event_type<S: Into<String>>(mut self, event_type: S) -> Self {
+        self.event_type = event_type.into();
+        self
+    }
+
+    /// Sets the data for this event
+    pub fn data<D: Into<Vec<u8>>>(mut self, data: D) -> Self {
+        self.data = data.into();
+        self
+    }
+
+    /// Sets the tags for this event
+    pub fn tags<I, S>(mut self, tags: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.tags = tags.into_iter().map(|s| s.into()).collect();
+        self
+    }
+
+    /// Sets the UUID for this event
+    pub fn uuid(mut self, uuid: Uuid) -> Self {
+        self.uuid = Some(uuid);
+        self
+    }
 }
 
 /// An event with its position in the event sequence

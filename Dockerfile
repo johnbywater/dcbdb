@@ -2,7 +2,7 @@
 # Supports both amd64 and arm64 architectures
 
 # Build stage
-FROM --platform=$BUILDPLATFORM rust:1.90-slim as builder
+FROM --platform=$BUILDPLATFORM rust:1.90-slim AS builder
 
 # Install build dependencies
 RUN apt-get update && \
@@ -24,7 +24,7 @@ COPY src ./src
 RUN cargo build --release -p umadb-server
 
 # Runtime stage
-FROM --platform=$TARGETPLATFORM debian:bookworm-slim
+FROM debian:bookworm-slim
 
 # Install runtime dependencies
 RUN apt-get update && \

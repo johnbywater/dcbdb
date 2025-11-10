@@ -1,5 +1,5 @@
-use std::hint::black_box;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use std::hint::black_box;
 use umadb_core::common::{PageID, Position, Tsn};
 use umadb_core::header_node::HeaderNode;
 

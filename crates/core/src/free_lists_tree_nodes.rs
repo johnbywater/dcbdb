@@ -1,6 +1,6 @@
 use crate::common::{PageID, Tsn};
-use umadb_dcb::{DCBError, DCBResult};
 use byteorder::{ByteOrder, LittleEndian};
+use umadb_dcb::{DCBError, DCBResult};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FreeListLeafNode {

@@ -26,11 +26,15 @@ struct Args {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Build a custom runtime with increased blocking thread pool for high concurrency
     let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4))
+        .worker_threads(
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4),
+        )
         .max_blocking_threads(2048)
         .enable_all()
         .build()?;
-    
+
     rt.block_on(async_main())
 }
 

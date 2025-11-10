@@ -131,13 +131,13 @@ event store. Each layer has a clear responsibility, from client communication at
 at the bottom. Requests typically flow *down* the stack, from client calls through the API and core logic into the
 storage and persistence layers, while query results and acknowledgements flow *back up* the same path.
 
-| **Layer**             | **Component**                   | **Responsibility**                                                    |
-|-----------------------|---------------------------------|-----------------------------------------------------------------------|
-| **Client Layer**      | gRPC Clients                    | Provides application-facing interfaces for reading and writing events |
-| **API Layer**         | gRPC Server                     | Defines the public API surface (gRPC service)                         |
-| **Logic Layer**       | UmaDB                           | Implements transaction logic, batching, and concurrency control       |
-| **Storage Layer**     | B+ Trees                        | Indexes events, tags, and free pages for efficient lookups            |
-| **Persistence Layer** | LMDB-like Pager and File System | Manages MVCC, page allocation, and durable file I/O                   |
+| **Layer**             | **Component**           | **Responsibility**                                                    |
+|-----------------------|-------------------------|-----------------------------------------------------------------------|
+| **Client Layer**      | gRPC Clients            | Provides application-facing interfaces for reading and writing events |
+| **API Layer**         | gRPC Server             | Defines the public API surface (gRPC service)                         |
+| **Logic Layer**       | UmaDB Core              | Implements transaction logic, batching, and concurrency control       |
+| **Storage Layer**     | B+ Trees                | Indexes events, tags, and free pages for efficient lookups            |
+| **Persistence Layer** | Pager and File System   | Durable paged file I/O                                                |
 
 ### Data Flow Summary
 
@@ -729,41 +729,93 @@ an embedded database.
 
 The client methods and DCB object types are described below, followed by some examples.
 
-### `fn connect()`
+### `struct UmaDCBClient`
 
-Connects to an UmaDB server, with or without TLS.
+Builds configuration for connecting to an UmaDB server, and constructs synchronous and asynchronous client instances.
 
-If the required `url` argument has protocol `https` or `grpcs` a secure gRPC channel will used. In
-this case, if the server's root certificate is not installed locally, then the path
-to a file containing the certificate must be provided with the optional `ca_path` argument.
+
+| Fields       | Type             | Description                                                                                  |
+|--------------|------------------|----------------------------------------------------------------------------------------------|
+| `url`        | `String`         | Database URL                                                                                 |
+| `ca_path`    | `Option<String>` | Path to server certificate (default `None`)                                                  |
+| `batch_size` | `Option<u32>`    | Optional hint for how many events to buffer per batch when reading events (default `None`).  |
+
+
+### `fn new()`
+
+Returns a new `UmaDCBClient` config object with the optional `ca_path` and `batch_size` fields set to `None`.
 
 Arguments:
 
-| Parameter | Type           | Description                                                                                                                                                               |
-|-----------|----------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `url`     | `&str`         | Database URL, for example: `"http://localhost:50051"` for an UmaDB server running without TLS or `"https://localhost:50051"` for an UmaDB server running with TLS enabled |
-| `ca_path` | `Option<&str>` | Path to PEM-encoded server root certificate, for example: `None` or `Some("server.pem")`                                                                                  |
+| Parameter | Type     | Description                                                                                                                                                                                       |
+|-----------|----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `url`     | `String` | Database URL, for example: `"http://localhost:50051".to_string()` for an UmaDB server running without TLS or `"https://localhost:50051".to_string()` for an UmaDB server running with TLS enabled |
 
-Returns an instance of the client.
+If the required `url` argument has protocol `https` or `grpcs` a secure gRPC channel will created when `connect()` or `connect_async()` is called. In
+this case, if the server's root certificate is not installed locally, then the path to a file containing the certificate must be provided by calling `ca_path()`.
+
+### `fn ca_path()`
+
+Returns a copy of the `UmaDCBClient` config object with the optional `ca_path` field set to `Some(String)`.
+
+Arguments:
+
+| Parameter | Type     | Description                                                                          |
+|-----------|----------|--------------------------------------------------------------------------------------|
+| `ca_path` | `String` | Path to PEM-encoded server root certificate, for example: `"server.pem".to_string()` |
+
+
+### `fn batch_size()`
+
+Returns a copy of the `UmaDCBClient` config object with the optional `batch_size` field set to a `Some(u32)`.
+
+Arguments:
+
+| Parameter    | Type  | Description                                                                          |
+|--------------|-------|--------------------------------------------------------------------------------------|
+| `batch_size` | `u32` | Hint for how many events to buffer per batch when reading events, for example: `100` |
+
+This value can modestly affect latency and throughput. If unset, a sensible default value will be used by the
+server. The server will also cap this value at a reasonable level.
+
+### `fn connect()`
+
+Returns an instance of `SyncUmaDbClient`, the synchronous UmaDB client.
+
+### `async fn connect_async()`
+
+Returns an instance of `AsyncUmaDbClient`, the asynchronous UmaDB client.
+
 
 Examples:
 
 ```rust
-use umadb::grpc::UmaDBClient;
+use umadb_client::UmaDBClient;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-   // Synchronous client, without TLS
-   let client = UmaDBClient::connect("http://localhost:50051", None)?;
+   // Synchronous client without TLS (insecure connection)
+   let client = UmaDBClient::new("http://localhost:50051".to_string()).connect()?;
 
-   // Synchronous client, with TLS
-   let client = UmaDBClient::connect("https://localhost:50051", Some("server.pem"))?;
+   // Synchronous client with TLS (secure connection)
+   let client = UmaDBClient::new("https://example.com:50051".to_string()).connect()?;
+  
+   // Synchronous client with TLS (self-signed server certificate)
+   let client = UmaDBClient::new("https://localhost:50051".to_string()).ca_path("server.pem".to_string()).connect()?;
+  
+   // Asynchronous client without TLS (insecure connection)
+   let client = UmaDBClient::new("http://localhost:50051".to_string()).connect_async().await?;
 
-   // Asynchronous client, without TLS
-   let client = UmaDBClient::connect("http://localhost:50051", None).await?;
+   // Asynchronous client with TLS (secure connection)
+   let client = UmaDBClient::new("https://example.com:50051".to_string()).connect_async().await?;
 
-   // Asynchronous client, with TLS
-   let client = UmaDBClient::connect("https://localhost:50051", Some("server.pem")).await?;
+   // Asynchronous client with TLS (self-signed server certificate)
+   let client = UmaDBClient::new("https://localhost:50051".to_string()).ca_path("server.pem".to_string()).connect_async().await?;
+
 ```
+
+### `struct SyncUmaDCBClient`
+
+The synchronous UmaDB client.
 
 ### `fn read()`
 
@@ -781,7 +833,6 @@ Arguments:
 | `backwards`  | `bool`             | If `true` events will be read backwards, either from the given position or from the last recorded event.                                                     |
 | `limit`      | `Option<u32>`      | Optional cap on the number of events to retrieve.                                                                                                            |
 | `subscribe`  | `bool`             | If `true`, keeps the stream open to deliver future events as they arrive.                                                                                    |
-| `batch_size` | `Option<u32>`      | Optional hint for how many events to buffer per batch from the server.                                                                                       |
 
 Returns a "read response" instance from which `DCBSequencedEvent` instances, and the most relevant "last known" sequence number, can be obtained.
 
@@ -811,6 +862,22 @@ a CQRS system to become up-to-date.
 ### `fn head()`
 
 Returns the **sequence number** (`u64`) of the very last successfully appended event in the database.
+
+### `struct AsyncUmaDCBClient`
+
+The asynchronous UmaDB client.
+
+### `async fn read()`
+
+See `fn read()` above. 
+
+### `async fn append()`
+
+See `fn append()` above.
+
+### `async fn head()`
+
+See `fn head()` above.
 
 ### `struct DCBSequencedEvent`
 
@@ -896,15 +963,16 @@ All the client methods return this type, which yields either a successful result
 Here's an example of how to use the synchronous Rust client for UmaDB:
 
 ```rust
-use umadb::dcb::{
+use umadb_client::UmaDBClient;
+use umadb_dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreSync, DCBQuery, DCBQueryItem,
 };
-use umadb::grpc::UmaDBClient;
 use uuid::Uuid;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Connect to the gRPC server
-    let client = UmaDBClient::connect("http://localhost:50051", None)?;
+    let url = "http://localhost:50051".to_string();
+    let client = UmaDBClient::new(url).connect()?;
 
     // Define a consistency boundary
     let cb = DCBQuery {
@@ -1024,16 +1092,17 @@ Here's an example of how to use the asynchronous Rust client for UmaDB:
 
 ```rust
 use futures::StreamExt;
-use umadb::dcb::{
+use umadb_client::UmaDBClient;
+use umadb_dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreAsync, DCBQuery, DCBQueryItem,
 };
-use umadb::grpc::AsyncUmaDBClient;
 use uuid::Uuid;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Connect to the gRPC server
-    let client = AsyncUmaDBClient::connect("https://localhost:50051", None).await?;
+    let url = "http://localhost:50051".to_string();
+    let client = UmaDBClient::new(url).connect_async().await?;
 
     // Define a consistency boundary
     let cb = DCBQuery {

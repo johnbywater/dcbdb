@@ -1,6 +1,6 @@
-use std::hint::black_box;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use futures::future::join_all;
+use std::hint::black_box;
 use std::net::TcpListener;
 use std::sync::{
     Arc,
@@ -11,7 +11,7 @@ use std::time::Duration;
 use tempfile::tempdir;
 use tokio::runtime::Builder as RtBuilder;
 use tokio::sync::oneshot;
-use umadb_client::AsyncUmaDBClient;
+use umadb_client::{AsyncUmaDBClient, UmaDBClient};
 use umadb_core::db::UmaDB;
 use umadb_dcb::{DCBEvent, DCBEventStoreAsync, DCBEventStoreSync};
 use umadb_server::start_server;
@@ -109,7 +109,7 @@ pub fn grpc_read_with_writers_benchmark(c: &mut Criterion) {
     let mut writer_clients: Vec<Arc<AsyncUmaDBClient>> = Vec::with_capacity(WRITER_COUNT);
     for _ in 0..WRITER_COUNT {
         let c = writers_rt
-            .block_on(AsyncUmaDBClient::connect(&addr_http, None))
+            .block_on(UmaDBClient::new(addr_http.clone()).connect_async())
             .expect("connect writer client");
         writer_clients.push(Arc::new(c));
     }
@@ -163,7 +163,11 @@ pub fn grpc_read_with_writers_benchmark(c: &mut Criterion) {
         let mut clients: Vec<Arc<AsyncUmaDBClient>> = Vec::with_capacity(threads);
         for _ in 0..threads {
             let c = rt
-                .block_on(AsyncUmaDBClient::connect(&addr_http, None))
+                .block_on(
+                    UmaDBClient::new(addr_http.clone())
+                        .batch_size(READ_BATCH_SIZE)
+                        .connect_async(),
+                )
                 .expect("connect client");
             clients.push(Arc::new(c));
         }
@@ -178,14 +182,7 @@ pub fn grpc_read_with_writers_benchmark(c: &mut Criterion) {
                         let client = clients[i].clone();
                         async move {
                             let mut resp = client
-                                .read(
-                                    None,
-                                    None,
-                                    false,
-                                    Some(TOTAL_EVENTS),
-                                    false,
-                                    Some(READ_BATCH_SIZE),
-                                )
+                                .read(None, None, false, Some(TOTAL_EVENTS), false)
                                 .await
                                 .expect("start read response");
                             let mut count = 0usize;

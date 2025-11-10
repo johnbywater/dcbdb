@@ -63,7 +63,9 @@ async fn secure_grpc_end_to_end_append_and_read() {
         let mut client: Option<AsyncUmaDBClient> = None;
         for _ in 0..40 {
             // up to ~2s
-            match AsyncUmaDBClient::connect_with_options(&url, Some(tls.clone())).await {
+            match AsyncUmaDBClient::connect_with_tls_options(url.clone(), Some(tls.clone()), None)
+                .await
+            {
                 Ok(c) => {
                     client = Some(c);
                     break;
@@ -96,7 +98,7 @@ async fn secure_grpc_end_to_end_append_and_read() {
 
     // Read them back (no query means everything)
     let mut resp = client
-        .read(None, None, false, None, false, None)
+        .read(None, None, false, None, false)
         .await
         .expect("read start");
 

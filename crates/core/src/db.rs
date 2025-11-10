@@ -1,10 +1,6 @@
 use std::path::Path;
 
 use crate::common::{PageID, Position};
-use umadb_dcb::{
-    DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreSync, DCBQuery, DCBReadResponseSync,
-    DCBResult, DCBSequencedEvent,
-};
 use crate::events_tree::{EventIterator, event_tree_append, event_tree_lookup};
 use crate::events_tree_nodes::EventRecord;
 use crate::mvcc::{Mvcc, Writer};
@@ -14,11 +10,14 @@ use crate::tags_tree_nodes::TagHash;
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
+use umadb_dcb::{
+    DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreSync, DCBQuery, DCBReadResponseSync,
+    DCBResult, DCBSequencedEvent,
+};
 use uuid::Uuid;
 
 pub static DEFAULT_PAGE_SIZE: usize = 4096;
 pub const DEFAULT_DB_FILENAME: &str = "uma.db";
-
 
 /// EventStore implementing the DCBEventStoreSync interface
 pub struct UmaDB {
@@ -147,7 +146,6 @@ impl DCBEventStoreSync for UmaDB {
         backwards: bool,
         limit: Option<u32>,
         _subscribe: bool,
-        _batch_size: Option<u32>,
     ) -> DCBResult<Box<dyn DCBReadResponseSync + '_>> {
         let mvcc = &self.mvcc;
         let reader = mvcc.reader()?;
@@ -630,13 +628,13 @@ pub fn is_request_idempotent(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use umadb_dcb::{
-        DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreSync, DCBQuery, DCBQueryItem,
-    };
     use crate::page::Page;
     use serial_test::serial;
     use std::collections::HashMap;
     use tempfile::tempdir;
+    use umadb_dcb::{
+        DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreSync, DCBQuery, DCBQueryItem,
+    };
     use uuid::Uuid;
 
     // Backward-compatible wrapper for tests: call new read_conditional with an empty dirty map
@@ -1150,7 +1148,7 @@ mod tests {
         assert_eq!(store.head().unwrap(), Some(last));
 
         // Read all
-        let mut resp = store.read(None, None, false, None, false, None).unwrap();
+        let mut resp = store.read(None, None, false, None, false).unwrap();
         let (all, head) = resp.collect_with_head().unwrap();
         assert_eq!(head, Some(last));
         assert_eq!(all.len(), 2);
@@ -1158,7 +1156,7 @@ mod tests {
         assert_eq!(all[1].event.event_type, "TypeB");
 
         // Limit semantics: only first event returned and head equals that position
-        let mut resp_lim1 = store.read(None, None, false, Some(1), false, None).unwrap();
+        let mut resp_lim1 = store.read(None, None, false, Some(1), false).unwrap();
         let (only_one, head_lim1) = resp_lim1.collect_with_head().unwrap();
         assert_eq!(only_one.len(), 1);
         assert_eq!(only_one[0].event.event_type, "TypeA");
@@ -1171,9 +1169,7 @@ mod tests {
                 tags: vec!["foo".to_string()],
             }],
         };
-        let mut resp2 = store
-            .read(Some(query), None, false, None, false, None)
-            .unwrap();
+        let mut resp2 = store.read(Some(query), None, false, None, false).unwrap();
         let out2 = resp2.next_batch().unwrap();
         assert_eq!(out2.len(), 2);
         assert!(out2.iter().all(|e| e.event.tags.iter().any(|t| t == "foo")));
@@ -1181,7 +1177,7 @@ mod tests {
         // From semantics: skip the first event
         let first_pos = all[0].position + 1;
         let mut resp3 = store
-            .read(None, Some(first_pos), false, None, false, None)
+            .read(None, Some(first_pos), false, None, false)
             .unwrap();
         let out3 = resp3.next_batch().unwrap();
         assert_eq!(out3.len(), 1);
@@ -1565,7 +1561,7 @@ mod tests {
         };
 
         // Conditions combining tags and types so the tags index is used and the type filter applies after lookup
-        let q_s_and_x =DCBQuery {
+        let q_s_and_x = DCBQuery {
             items: vec![DCBQueryItem {
                 types: vec!["S".into()],
                 tags: vec!["x".into()],

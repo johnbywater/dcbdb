@@ -1,10 +1,10 @@
-use umadb_dcb::{DCBError, DCBResult};
 use crate::events_tree_nodes::{EventInternalNode, EventLeafNode, EventOverflowNode};
 use crate::free_lists_tree_nodes::{
     FreeListInternalNode, FreeListLeafNode, FreeListTsnInternalNode, FreeListTsnLeafNode,
 };
 use crate::header_node::HeaderNode;
 use crate::tags_tree_nodes::{TagInternalNode, TagLeafNode, TagsInternalNode, TagsLeafNode};
+use umadb_dcb::{DCBError, DCBResult};
 
 // Constants for serialization
 const PAGE_TYPE_HEADER: u8 = b'1';

@@ -91,8 +91,8 @@ impl From<AppendConditionProto> for DCBAppendCondition {
     fn from(proto: AppendConditionProto) -> Self {
         DCBAppendCondition {
             fail_if_events_match: proto
-                    .fail_if_events_match
-                    .map_or_else(DCBQuery::default, |q| q.into()),
+                .fail_if_events_match
+                .map_or_else(DCBQuery::default, |q| q.into()),
             after: proto.after,
         }
     }
@@ -147,23 +147,24 @@ pub fn dcb_error_from_status(status: Status) -> DCBError {
     let details = status.details();
     // Try to decode ErrorResponseProto directly from details
     if !details.is_empty()
-        && let Ok(err) = ErrorResponseProto::decode(details) {
-            return match err.error_type {
-                x if x == umadb::error_response_proto::ErrorType::Integrity as i32 => {
-                    DCBError::IntegrityError(err.message)
-                }
-                x if x == umadb::error_response_proto::ErrorType::Corruption as i32 => {
-                    DCBError::Corruption(err.message)
-                }
-                x if x == umadb::error_response_proto::ErrorType::Serialization as i32 => {
-                    DCBError::SerializationError(err.message)
-                }
-                x if x == umadb::error_response_proto::ErrorType::Internal as i32 => {
-                    DCBError::InternalError(err.message)
-                }
-                _ => DCBError::Io(std::io::Error::other(err.message)),
-            };
-        }
+        && let Ok(err) = ErrorResponseProto::decode(details)
+    {
+        return match err.error_type {
+            x if x == umadb::error_response_proto::ErrorType::Integrity as i32 => {
+                DCBError::IntegrityError(err.message)
+            }
+            x if x == umadb::error_response_proto::ErrorType::Corruption as i32 => {
+                DCBError::Corruption(err.message)
+            }
+            x if x == umadb::error_response_proto::ErrorType::Serialization as i32 => {
+                DCBError::SerializationError(err.message)
+            }
+            x if x == umadb::error_response_proto::ErrorType::Internal as i32 => {
+                DCBError::InternalError(err.message)
+            }
+            _ => DCBError::Io(std::io::Error::other(err.message)),
+        };
+    }
     // Fallback: infer from gRPC code
     match status.code() {
         Code::FailedPrecondition => DCBError::IntegrityError(status.message().to_string()),

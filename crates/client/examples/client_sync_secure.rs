@@ -6,7 +6,10 @@ use uuid::Uuid;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Connect to the gRPC server
-    let client = UmaDBClient::connect("https://localhost:50051", Some("server.pem"))?;
+    let url = "https://localhost:50051".to_string();
+    let client = UmaDBClient::new(url)
+        .ca_path("server.pem".to_string()) // For self-signed server certificates.
+        .connect()?;
 
     // Define a consistency boundary
     let cb = DCBQuery {
@@ -17,7 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Read events for a decision model
-    let mut read_response = client.read(Some(cb.clone()), None, false, None, false, None)?;
+    let mut read_response = client.read(Some(cb.clone()), None, false, None, false)?;
 
     // Build decision model
     while let Some(result) = read_response.next() {
@@ -102,7 +105,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Subscribe to all events for a projection
-    let mut subscription = client.read(None, None, false, None, true, None)?;
+    let mut subscription = client.read(None, None, false, None, true)?;
 
     // Build an up-to-date view
     while let Some(result) = subscription.next() {

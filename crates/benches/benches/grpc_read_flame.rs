@@ -1,5 +1,7 @@
 // cargo bench --bench grpc_read_flame --features flamegraphs
 
+use umadb_client::UmaDBClient;
+
 fn main() -> std::io::Result<()> {
     use pprof::ProfilerGuard;
     use std::fs::File;
@@ -131,51 +133,45 @@ fn main() -> std::io::Result<()> {
             let mut clients: Vec<Arc<AsyncUmaDBClient>> = Vec::with_capacity(threads);
             for _ in 0..threads {
                 let c = rt
-                    .block_on(AsyncUmaDBClient::connect(&addr_http, None))
+                    .block_on(
+                        UmaDBClient::new(addr_http.clone())
+                            .batch_size(READ_BATCH_SIZE)
+                            .connect_async(),
+                    )
                     .expect("connect client");
                 clients.push(Arc::new(c));
             }
             let clients = Arc::new(clients);
 
-            profile_concurrent_reads(
-                &format!("grpc_read_concurrent_{threads}"),
-                || {
-                    let clients_clone = clients.clone();
-                    rt.block_on(async {
-                        // Spawn `threads` concurrent read futures and await them all
-                        use futures::future::join_all;
-                        let futs = (0..threads).map(|i| {
-                            let client = clients_clone[i].clone();
-                            async move {
-                                let mut resp = client
-                                    .read(
-                                        None,
-                                        None,
-                                        false,
-                                        Some(TOTAL_EVENTS),
-                                        false,
-                                        Some(READ_BATCH_SIZE),
-                                    )
-                                    .await
-                                    .expect("start read response");
-                                let mut count = 0usize;
-                                loop {
-                                    let batch = resp.next_batch().await.expect("next_batch ok");
-                                    if batch.is_empty() {
-                                        break;
-                                    }
-                                    count += batch.len();
+            profile_concurrent_reads(&format!("grpc_read_concurrent_{threads}"), || {
+                let clients_clone = clients.clone();
+                rt.block_on(async {
+                    // Spawn `threads` concurrent read futures and await them all
+                    use futures::future::join_all;
+                    let futs = (0..threads).map(|i| {
+                        let client = clients_clone[i].clone();
+                        async move {
+                            let mut resp = client
+                                .read(None, None, false, Some(TOTAL_EVENTS), false)
+                                .await
+                                .expect("start read response");
+                            let mut count = 0usize;
+                            loop {
+                                let batch = resp.next_batch().await.expect("next_batch ok");
+                                if batch.is_empty() {
+                                    break;
                                 }
-                                assert_eq!(
-                                    count, TOTAL_EVENTS as usize,
-                                    "expected to read all preloaded events"
-                                );
+                                count += batch.len();
                             }
-                        });
-                        let _ = join_all(futs).await;
+                            assert_eq!(
+                                count, TOTAL_EVENTS as usize,
+                                "expected to read all preloaded events"
+                            );
+                        }
                     });
-                },
-            )?;
+                    let _ = join_all(futs).await;
+                });
+            })?;
         }
 
         // Shutdown server

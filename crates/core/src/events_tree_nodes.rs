@@ -1,9 +1,9 @@
 use crate::common::PageID;
 use crate::common::Position;
-use umadb_dcb::DCBError;
-use umadb_dcb::DCBResult;
 use bitflags::bitflags;
 use byteorder::{ByteOrder, LittleEndian};
+use umadb_dcb::DCBError;
+use umadb_dcb::DCBResult;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,5 +1,4 @@
 use crate::common::{PageID, Position};
-use umadb_dcb::{DCBError, DCBResult};
 use crate::mvcc::{Mvcc, Writer};
 use crate::node::Node;
 use crate::page::Page;
@@ -7,10 +6,11 @@ use crate::tags_tree_nodes::{
     TagHash, TagInternalNode, TagLeafNode, TagsInternalNode, TagsLeafNode, TagsLeafValue,
 };
 use std::collections::HashMap;
+use umadb_dcb::{DCBError, DCBResult};
 
 /// Insert a Position into the tags tree at the given TagHash key.
 ///
-/// Behaves similarly to LmdbWriter::insert_freed_page_id, but operates on the
+/// Behaves similarly to Writer::insert_freed_page_id, but operates on the
 /// Tags tree (TagsLeafNode/TagsInternalNode) and maintains TagHash keys in
 /// sorted order. If the TagHash already exists in the leaf and the value has no
 /// subtree (root_id == PageID(0)), the Position is appended to the positions

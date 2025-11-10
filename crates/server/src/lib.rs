@@ -8,11 +8,11 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::{Identity, ServerTlsConfig};
 use tonic::{Request, Response, Status, transport::Server};
 
-use umadb_core::db::{DEFAULT_PAGE_SIZE, UmaDB, is_request_idempotent, read_conditional, DEFAULT_DB_FILENAME};
-use umadb_dcb::{
-    DCBAppendCondition, DCBError, DCBEvent, DCBQuery, DCBResult, DCBSequencedEvent,
+use umadb_core::db::{
+    DEFAULT_DB_FILENAME, DEFAULT_PAGE_SIZE, UmaDB, is_request_idempotent, read_conditional,
 };
 use umadb_core::mvcc::Mvcc;
+use umadb_dcb::{DCBAppendCondition, DCBError, DCBEvent, DCBQuery, DCBResult, DCBSequencedEvent};
 
 use tokio::runtime::Runtime;
 use umadb_core::common::Position;
@@ -232,18 +232,13 @@ impl UmaDbService for UmaDBServer {
                     break;
                 }
                 match request_handler
-                    .read(
-                        query_clone.clone(),
-                        next_start,
-                        backwards,
-                        Some(read_limit),
-                    )
+                    .read(query_clone.clone(), next_start, backwards, Some(read_limit))
                     .await
                 {
                     Ok((dcb_sequenced_events, head)) => {
                         // Capture the original length before consuming events
                         let original_len = dcb_sequenced_events.len();
-                        
+
                         // Filter and map events, discarding those with position > captured_head
                         let sequenced_event_protos: Vec<SequencedEventProto> = dcb_sequenced_events
                             .into_iter()
@@ -256,7 +251,7 @@ impl UmaDbService for UmaDBServer {
                             })
                             .map(|e| SequencedEventProto::from(e))
                             .collect();
-                        
+
                         let reached_captured_head = if captured_head.is_some() {
                             // Check if we filtered out any events
                             sequenced_event_protos.len() < original_len
@@ -295,8 +290,11 @@ impl UmaDbService for UmaDBServer {
                                         break;
                                     }
                                     let current_head = *head_rx.borrow();
-                                    if current_head.map(|h| h >= next_start.unwrap_or(1)).unwrap_or(false) {
-                                        break;  // Break out of waiting, new events are available.
+                                    if current_head
+                                        .map(|h| h >= next_start.unwrap_or(1))
+                                        .unwrap_or(false)
+                                    {
+                                        break; // Break out of waiting, new events are available.
                                     }
                                     // Wait for either a new head or a server shutdown signal
                                     tokio::select! {
@@ -611,7 +609,7 @@ impl RequestHandler {
 
         let q = query.unwrap_or(DCBQuery { items: vec![] });
         let from = start.map(Position);
-        
+
         let events = read_conditional(
             &self.mvcc,
             &std::collections::HashMap::new(),
@@ -638,7 +636,8 @@ impl RequestHandler {
     }
 
     async fn head(&self) -> DCBResult<Option<u64>> {
-        let (_, header) = self.mvcc
+        let (_, header) = self
+            .mvcc
             .get_latest_header()
             .map_err(|e| DCBError::Corruption(format!("{e}")))?;
         let last = header.next_position.0.saturating_sub(1);
@@ -650,63 +649,57 @@ impl RequestHandler {
         condition: Option<DCBAppendCondition>,
     ) -> DCBResult<u64> {
         // Concurrent pre-check of the given condition using a reader in a blocking thread.
-        let pre_append_decision = if let Some(condition_binding) = condition {
-            let mvcc = self.mvcc.clone();
-            let events_clone = events.clone(); // move-safe copy for the blocking thread
+        let pre_append_decision = if let Some(mut given_condition) = condition {
+            let reader = self.mvcc.reader()?;
+            let current_head = {
+                let last = reader.next_position.0.saturating_sub(1);
+                if last == 0 { None } else { Some(last) }
+            };
 
-            tokio::task::spawn_blocking(move || -> DCBResult<PreAppendDecision> {
-                let mut given_condition = condition_binding;
-                let reader = mvcc.reader()?;
-                let current_head = {
-                    let last = reader.next_position.0.saturating_sub(1);
-                    if last == 0 { None } else { Some(last) }
-                };
+            // Perform conditional read on the snapshot (limit 1) starting after the given position
+            let from = given_condition.after.map(|after| Position(after + 1));
+            let empty_dirty = std::collections::HashMap::new();
+            let found = read_conditional(
+                &self.mvcc,
+                &empty_dirty,
+                reader.events_tree_root_id,
+                reader.tags_tree_root_id,
+                given_condition.fail_if_events_match.clone(),
+                from,
+                false,
+                Some(1),
+            )?;
 
-                // Perform conditional read on the snapshot (limit 1) starting after the given position
-                let from = given_condition.after.map(|after| Position(after + 1));
-                let empty_dirty = std::collections::HashMap::new();
-                let found = read_conditional(
-                    &mvcc,
+            if let Some(matched) = found.first() {
+                // Found one event — consider if the request is idempotent...
+                match is_request_idempotent(
+                    &self.mvcc,
                     &empty_dirty,
                     reader.events_tree_root_id,
                     reader.tags_tree_root_id,
+                    &events,
                     given_condition.fail_if_events_match.clone(),
                     from,
-                    false,
-                    Some(1),
-                )?;
-
-                if let Some(matched) = found.first() {
-                    // Found one event — consider if the request is idempotent...
-                    return match is_request_idempotent(
-                        &mvcc,
-                        &empty_dirty,
-                        reader.events_tree_root_id,
-                        reader.tags_tree_root_id,
-                        &events_clone,
-                        given_condition.fail_if_events_match.clone(),
-                        from,
-                    ) {
-                        Ok(Some(last_recorded_position)) => {
-                            // Request is idempotent; skip actual append
-                            Ok(PreAppendDecision::AlreadyAppended(last_recorded_position))
-                        }
-                        Ok(None) => {
-                            // Integrity violation
-                            let msg = format!(
-                                "condition: {:?} matched: {:?}",
-                                given_condition.clone(),
-                                matched,
-                            );
-                            Err(DCBError::IntegrityError(msg))
-                        }
-                        Err(err) => {
-                            // Propagate underlying read error
-                            Err(err)
-                        }
-                    };
+                ) {
+                    Ok(Some(last_recorded_position)) => {
+                        // Request is idempotent; skip actual append
+                        PreAppendDecision::AlreadyAppended(last_recorded_position)
+                    }
+                    Ok(None) => {
+                        // Integrity violation
+                        let msg = format!(
+                            "condition: {:?} matched: {:?}",
+                            given_condition.clone(),
+                            matched,
+                        );
+                        return Err(DCBError::IntegrityError(msg));
+                    }
+                    Err(err) => {
+                        // Propagate underlying read error
+                        return Err(err);
+                    }
                 }
-
+            } else {
                 // No match found: we can advance 'after' to the current head observed by this reader
                 let new_after = std::cmp::max(
                     given_condition.after.unwrap_or(0),
@@ -714,10 +707,8 @@ impl RequestHandler {
                 );
                 given_condition.after = Some(new_after);
 
-                Ok(PreAppendDecision::UseCondition(Some(given_condition)))
-            })
-            .await
-            .map_err(|e| DCBError::Io(std::io::Error::other(format!("Join error: {e}"))))??
+                PreAppendDecision::UseCondition(Some(given_condition))
+            }
         } else {
             // No condition provided at all
             PreAppendDecision::UseCondition(None)

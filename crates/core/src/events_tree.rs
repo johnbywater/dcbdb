@@ -1,6 +1,5 @@
 use crate::common::PageID;
 use crate::common::Position;
-use umadb_dcb::{DCBError, DCBResult};
 use crate::events_tree_nodes::{
     EventInternalNode, EventLeafNode, EventOverflowNode, EventRecord, EventValue,
 };
@@ -8,6 +7,7 @@ use crate::mvcc::{Mvcc, Writer};
 use crate::node::Node;
 use crate::page::{PAGE_HEADER_SIZE, Page};
 use std::collections::HashMap;
+use umadb_dcb::{DCBError, DCBResult};
 
 // Helpers for storing large event data across overflow pages
 fn write_overflow_chain(mvcc: &Mvcc, writer: &mut Writer, data: &[u8]) -> DCBResult<PageID> {
@@ -622,9 +622,9 @@ impl<'a> EventIterator<'a> {
                                         // println!(" - last value, will remove");
                                     }
                                 } else if values_idx > 0 {
-                                        // Revisit this leaf.
-                                        push_revisit = Some((page_id, Some(values_idx - 1)));
-                                        // println!(" - not last value, will revisit");
+                                    // Revisit this leaf.
+                                    push_revisit = Some((page_id, Some(values_idx - 1)));
+                                    // println!(" - not last value, will revisit");
                                 } else {
                                     // The last value.
                                     remove_page = true;

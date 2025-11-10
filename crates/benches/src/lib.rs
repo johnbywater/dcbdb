@@ -3,11 +3,11 @@ pub mod bench_api {
     use std::path::Path;
     use umadb_core::common::{PageID, Position};
     use umadb_core::db::DEFAULT_PAGE_SIZE;
-    use umadb_dcb::DCBResult;
     use umadb_core::events_tree_nodes::{EventLeafNode, EventRecord, EventValue};
     use umadb_core::mvcc::{Mvcc, Writer};
     use umadb_core::node::Node;
     use umadb_core::page::{PAGE_HEADER_SIZE, Page};
+    use umadb_dcb::DCBResult;
 
     /// Minimal public wrapper to allow Criterion benches to measure commit paths
     pub struct BenchDb {

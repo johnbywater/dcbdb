@@ -5,11 +5,10 @@
 
 use async_trait::async_trait;
 use futures_core::Stream;
+use futures_util::StreamExt;
 use std::iter::Iterator;
 use thiserror::Error;
 use uuid::Uuid;
-use futures_util::StreamExt;
-
 
 /// Non-async Rust interface for recording and retrieving events
 pub trait DCBEventStoreSync {
@@ -27,7 +26,6 @@ pub trait DCBEventStoreSync {
         backwards: bool,
         limit: Option<u32>,
         subscribe: bool,
-        batch_size: Option<u32>,
     ) -> DCBResult<Box<dyn DCBReadResponseSync + '_>>;
 
     /// Reads events from the store and returns them as a tuple of (Vec<DCBSequencedEvent>, Option<u64>)
@@ -38,7 +36,7 @@ pub trait DCBEventStoreSync {
         backwards: bool,
         limit: Option<u32>,
     ) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
-        let mut response = self.read(query, start, backwards, limit, false, None)?;
+        let mut response = self.read(query, start, backwards, limit, false)?;
         response.collect_with_head()
     }
 
@@ -84,7 +82,6 @@ pub trait DCBEventStoreAsync: Send + Sync {
         backwards: bool,
         limit: Option<u32>,
         subscribe: bool,
-        batch_size: Option<u32>,
     ) -> DCBResult<Box<dyn DCBReadResponseAsync + Send>>;
 
     /// Reads events from the store and returns them as a tuple of (Vec<DCBSequencedEvent>, Option<u64>)
@@ -95,9 +92,7 @@ pub trait DCBEventStoreAsync: Send + Sync {
         backwards: bool,
         limit: Option<u32>,
     ) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
-        let mut response = self
-            .read(query, after, backwards, limit, false, None)
-            .await?;
+        let mut response = self.read(query, after, backwards, limit, false).await?;
         response.collect_with_head().await
     }
 

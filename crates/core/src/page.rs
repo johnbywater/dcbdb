@@ -1,7 +1,7 @@
 use crate::common::PageID;
-use umadb_dcb::{DCBError, DCBResult};
 use crate::node::Node;
 use std::ops::Range;
+use umadb_dcb::{DCBError, DCBResult};
 
 // Page structure
 #[derive(Debug, Clone)]

@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::thread;
 use tempfile::tempdir;
 use tokio::runtime::Builder as RtBuilder;
-use tokio::sync::{oneshot};
-use umadb_client::AsyncUmaDBClient;
+use tokio::sync::oneshot;
+use umadb_client::UmaDBClient;
 use umadb_core::db::UmaDB;
 use umadb_dcb::{
     DCBAppendCondition, DCBEvent, DCBEventStoreAsync, DCBEventStoreSync, DCBQuery, DCBQueryItem,
@@ -45,7 +45,6 @@ fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
 
 pub fn grpc_append_cond_benchmark(c: &mut Criterion) {
     for &threads in &[1usize, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024] {
-
         // Initialize DB and server with some events so head() is not None (not required, but realistic)
         let initial_events = 10_000usize;
         let (_tmp_dir, db_path) = init_db_with_events(initial_events);
@@ -63,9 +62,7 @@ pub fn grpc_append_cond_benchmark(c: &mut Criterion) {
         let addr_clone = addr.clone();
 
         let parallelism = std::thread::available_parallelism();
-        let server_threads = parallelism
-            .map(|n| n.get())
-            .unwrap_or(1);
+        let server_threads = parallelism.map(|n| n.get()).unwrap_or(1);
 
         let server_thread = thread::spawn(move || {
             let rt = RtBuilder::new_multi_thread()
@@ -110,14 +107,13 @@ pub fn grpc_append_cond_benchmark(c: &mut Criterion) {
 
         // Establish a single gRPC connection
         let client = Arc::new(
-            rt.block_on(AsyncUmaDBClient::connect(&addr_http, None))
+            rt.block_on(UmaDBClient::new(addr_http.clone()).connect_async())
                 .expect("connect client"),
         );
 
         let after = rt
             .block_on(async { client.head().await.expect("head ok") })
             .unwrap_or(0);
-
 
         // Report throughput as the total across all concurrent appends
         group.throughput(Throughput::Elements(
@@ -164,10 +160,12 @@ pub fn grpc_append_cond_benchmark(c: &mut Criterion) {
                                 after: Some(after),
                             };
 
-                            let _ = black_box(client
-                                .append(black_box(events), Some(condition))
-                                .await
-                                .expect("append events"));
+                            let _ = black_box(
+                                client
+                                    .append(black_box(events), Some(condition))
+                                    .await
+                                    .expect("append events"),
+                            );
                         }
                     });
                     let _ = join_all(futs).await;
@@ -180,9 +178,7 @@ pub fn grpc_append_cond_benchmark(c: &mut Criterion) {
         // Shutdown server
         let _ = shutdown_tx.send(());
         let _ = server_thread.join();
-
     }
-
 }
 
 criterion_group!(benches, grpc_append_cond_benchmark);

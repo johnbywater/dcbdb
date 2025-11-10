@@ -1,5 +1,4 @@
 use crate::common::PageID;
-use umadb_dcb::{DCBError, DCBResult};
 use memmap2::{Mmap, MmapOptions};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -8,6 +7,7 @@ use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::os::fd::{AsRawFd, RawFd};
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
+use umadb_dcb::{DCBError, DCBResult};
 // use memmap2::{Advice, Mmap, MmapOptions};
 
 // Pager for file I/O
@@ -393,9 +393,9 @@ impl MappedPage {
 mod tests {
     use super::Pager;
     use crate::common::PageID;
-    use umadb_dcb::DCBError;
     use std::path::PathBuf;
     use tempfile::tempdir;
+    use umadb_dcb::DCBError;
 
     fn temp_file_path(name: &str) -> PathBuf {
         let dir = tempdir().expect("tempdir");

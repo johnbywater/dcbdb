@@ -16,58 +16,214 @@ use umadb_dcb::{
 use umadb_proto::dcb_error_from_status;
 use umadb_proto::umadb::uma_db_service_client;
 use umadb_proto::umadb::{
-    AppendConditionProto, AppendRequestProto, EventProto, HeadRequestProto, ReadRequestProto, ReadResponseProto,
+    AppendConditionProto, AppendRequestProto, EventProto, HeadRequestProto, ReadRequestProto,
+    ReadResponseProto,
 };
+
+pub struct UmaDBClient {
+    url: String,
+    ca_path: Option<String>,
+    batch_size: Option<u32>,
+}
+
+impl UmaDBClient {
+    pub fn new(url: String) -> Self {
+        Self {
+            url,
+            ca_path: None,
+            batch_size: None,
+        }
+    }
+
+    pub fn ca_path(self, ca_path: String) -> Self {
+        Self {
+            ca_path: Some(ca_path),
+            ..self
+        }
+    }
+
+    pub fn batch_size(self, batch_size: u32) -> Self {
+        Self {
+            batch_size: Some(batch_size),
+            ..self
+        }
+    }
+
+    pub fn connect(&self) -> DCBResult<SyncUmaDBClient> {
+        SyncUmaDBClient::connect(self.url.clone(), self.ca_path.clone(), self.batch_size)
+    }
+    pub async fn connect_async(&self) -> DCBResult<AsyncUmaDBClient> {
+        AsyncUmaDBClient::connect(self.url.clone(), self.ca_path.clone(), self.batch_size).await
+    }
+}
+
+// --- Sync wrapper around the async client ---
+pub struct SyncUmaDBClient {
+    async_client: AsyncUmaDBClient,
+    handle: Handle,
+    _runtime: Option<Runtime>, // Keeps runtime alive if we created it
+}
+
+impl SyncUmaDBClient {
+    pub fn connect(
+        url: String,
+        ca_path: Option<String>,
+        batch_size: Option<u32>,
+    ) -> DCBResult<Self> {
+        let (rt, handle) = Self::get_rt_handle();
+        let async_client = handle.block_on(AsyncUmaDBClient::connect(url, ca_path, batch_size))?;
+        Ok(Self {
+            async_client,
+            _runtime: rt, // Keep runtime alive for the client lifetime
+            handle,
+        })
+    }
+
+    pub fn connect_with_tls_options(
+        url: String,
+        tls_options: Option<ClientTlsOptions>,
+        batch_size: Option<u32>,
+    ) -> DCBResult<Self> {
+        let (rt, handle) = Self::get_rt_handle();
+        let async_client = handle.block_on(AsyncUmaDBClient::connect_with_tls_options(
+            url,
+            tls_options,
+            batch_size,
+        ))?;
+        Ok(Self {
+            async_client,
+            _runtime: rt, // Keep runtime alive for the client lifetime
+            handle,
+        })
+    }
+
+    fn get_rt_handle() -> (Option<Runtime>, Handle) {
+        let (rt, handle) = {
+            // Try to use an existing runtime first
+            if let Ok(handle) = Handle::try_current() {
+                (None, handle)
+            } else {
+                // No runtime → create and own one
+                let rt = Runtime::new().expect("failed to create Tokio runtime");
+                let handle = rt.handle().clone();
+                (Some(rt), handle)
+            }
+        };
+        (rt, handle)
+    }
+}
+
+impl DCBEventStoreSync for SyncUmaDBClient {
+    fn read(
+        &self,
+        query: Option<DCBQuery>,
+        start: Option<u64>,
+        backwards: bool,
+        limit: Option<u32>,
+        subscribe: bool,
+    ) -> Result<Box<dyn DCBReadResponseSync + '_>, DCBError> {
+        let async_read_response = self.handle.block_on(
+            self.async_client
+                .read(query, start, backwards, limit, subscribe),
+        )?;
+        Ok(Box::new(SyncClientReadResponse {
+            rt: &self.handle,
+            resp: async_read_response,
+            buffer: VecDeque::new(),
+            finished: false,
+        }))
+    }
+
+    fn head(&self) -> Result<Option<u64>, DCBError> {
+        self.handle.block_on(self.async_client.head())
+    }
+
+    fn append(
+        &self,
+        events: Vec<DCBEvent>,
+        condition: Option<DCBAppendCondition>,
+    ) -> Result<u64, DCBError> {
+        self.handle
+            .block_on(self.async_client.append(events, condition))
+    }
+}
+
+pub struct SyncClientReadResponse<'a> {
+    rt: &'a Handle,
+    resp: Box<dyn DCBReadResponseAsync + Send + 'a>,
+    buffer: VecDeque<DCBSequencedEvent>, // efficient pop_front()
+    finished: bool,
+}
+
+impl<'a> SyncClientReadResponse<'a> {
+    /// Fetch the next batch from the async response, filling the buffer
+    fn fetch_next_batch(&mut self) -> Result<(), DCBError> {
+        if self.finished {
+            return Ok(());
+        }
+
+        let batch = self.rt.block_on(self.resp.next_batch())?;
+        if batch.is_empty() {
+            self.finished = true;
+        } else {
+            self.buffer = batch.into();
+        }
+        Ok(())
+    }
+}
+
+impl<'a> Iterator for SyncClientReadResponse<'a> {
+    type Item = Result<DCBSequencedEvent, DCBError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // Fetch the next batch if the buffer is empty.
+        while self.buffer.is_empty() && !self.finished {
+            if let Err(e) = self.fetch_next_batch() {
+                return Some(Err(e));
+            }
+        }
+
+        self.buffer.pop_front().map(Ok)
+    }
+}
+
+impl<'a> DCBReadResponseSync for SyncClientReadResponse<'a> {
+    fn head(&mut self) -> DCBResult<Option<u64>> {
+        self.rt.block_on(self.resp.head())
+    }
+
+    fn collect_with_head(&mut self) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
+        let mut out = Vec::new();
+        for result in self.by_ref() {
+            out.push(result?);
+        }
+        Ok((out, self.head()?))
+    }
+
+    fn next_batch(&mut self) -> Result<Vec<DCBSequencedEvent>, DCBError> {
+        // If there are remaining events in the buffer, drain them
+        if !self.buffer.is_empty() {
+            return Ok(self.buffer.drain(..).collect());
+        }
+
+        // Otherwise fetch a new batch
+        self.fetch_next_batch()?;
+        Ok(self.buffer.drain(..).collect())
+    }
+}
 
 // Async client implementation
 pub struct AsyncUmaDBClient {
     client: uma_db_service_client::UmaDbServiceClient<Channel>,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct ClientTlsOptions {
-    pub domain: Option<String>,
-    pub ca_pem: Option<Vec<u8>>, // trusted CA cert in PEM for self-signed setups
-}
-
-fn endpoint_from_url_with_options(
-    url: &str,
-    tls: Option<ClientTlsOptions>,
-) -> Result<Endpoint, tonic::transport::Error> {
-    use std::time::Duration;
-
-    // Accept grpcs:// as an alias for https://
-    let mut url_owned = url.to_string();
-    if url_owned.starts_with("grpcs://") {
-        url_owned = url_owned.replacen("grpcs://", "https://", 1);
-    }
-
-    let mut endpoint = Endpoint::from_shared(url_owned)?
-        .tcp_nodelay(true)
-        .http2_keep_alive_interval(Duration::from_secs(5))
-        .keep_alive_timeout(Duration::from_secs(10))
-        .initial_stream_window_size(Some(4 * 1024 * 1024))
-        .initial_connection_window_size(Some(8 * 1024 * 1024));
-
-    if let Some(opts) = tls {
-        let mut cfg = ClientTlsConfig::new();
-        if let Some(domain) = &opts.domain {
-            cfg = cfg.domain_name(domain.clone());
-        }
-        if let Some(ca) = opts.ca_pem {
-            cfg = cfg.ca_certificate(Certificate::from_pem(ca));
-        }
-        endpoint = endpoint.tls_config(cfg)?;
-    } else if url.starts_with("https://") {
-        // When using https without explicit options, still enable default TLS.
-        endpoint = endpoint.tls_config(ClientTlsConfig::new())?;
-    }
-
-    Ok(endpoint)
+    batch_size: Option<u32>,
 }
 
 impl AsyncUmaDBClient {
-    pub async fn connect(url: &str, ca_path: Option<&str>) -> DCBResult<Self> {
+    pub async fn connect(
+        url: String,
+        ca_path: Option<String>,
+        batch_size: Option<u32>,
+    ) -> DCBResult<Self> {
         // Try to read the CA certificate.
         let ca_pem = {
             if let Some(ca_path) = ca_path {
@@ -83,16 +239,18 @@ impl AsyncUmaDBClient {
             ca_pem,
         });
 
-        Self::connect_with_options(url, client_tls_options).await
+        Self::connect_with_tls_options(url, client_tls_options, batch_size).await
     }
 
-    pub async fn connect_with_options(
-        url: &str,
-        client_tls_options: Option<ClientTlsOptions>,
-    ) -> DCBResult<AsyncUmaDBClient> {
-        match new_channel(url, client_tls_options).await {
+    pub async fn connect_with_tls_options(
+        url: String,
+        tls_options: Option<ClientTlsOptions>,
+        batch_size: Option<u32>,
+    ) -> DCBResult<Self> {
+        match new_channel(url, tls_options).await {
             Ok(channel) => Ok(Self {
                 client: uma_db_service_client::UmaDbServiceClient::new(channel),
+                batch_size,
             }),
             Err(err) => Err(DCBError::TransportError(format!(
                 "failed to connect: {:?}",
@@ -100,14 +258,6 @@ impl AsyncUmaDBClient {
             ))),
         }
     }
-}
-
-async fn new_channel(
-    url: &str,
-    tls: Option<ClientTlsOptions>,
-) -> Result<Channel, tonic::transport::Error> {
-    let endpoint = endpoint_from_url_with_options(url, tls)?;
-    endpoint.connect().await
 }
 
 #[async_trait]
@@ -120,7 +270,6 @@ impl DCBEventStoreAsync for AsyncUmaDBClient {
         backwards: bool,
         limit: Option<u32>,
         subscribe: bool,
-        batch_size: Option<u32>,
     ) -> DCBResult<Box<dyn DCBReadResponseAsync + Send>> {
         // Convert API types to protobuf types
         let query_proto = query.map(|q| q.into());
@@ -130,7 +279,7 @@ impl DCBEventStoreAsync for AsyncUmaDBClient {
             backwards: Some(backwards),
             limit,
             subscribe: Some(subscribe),
-            batch_size,
+            batch_size: self.batch_size,
         };
 
         let mut client = self.client.clone();
@@ -310,133 +459,51 @@ impl Stream for AsyncClientReadResponse {
     }
 }
 
-// --- Sync wrapper around the async client ---
-pub struct UmaDBClient {
-    async_client: AsyncUmaDBClient,
-    _runtime: Option<Runtime>, // Keeps runtime alive if we created it
-    handle: Handle,
+#[derive(Clone, Debug, Default)]
+pub struct ClientTlsOptions {
+    pub domain: Option<String>,
+    pub ca_pem: Option<Vec<u8>>, // trusted CA cert in PEM for self-signed setups
 }
 
-impl UmaDBClient {
-    pub fn connect(url: &str, ca_path: Option<&str>) -> DCBResult<Self> {
-        // Try to use an existing runtime first
-        if let Ok(handle) = Handle::try_current() {
-            let async_client = handle.block_on(AsyncUmaDBClient::connect(url, ca_path))?;
-            return Ok(Self {
-                async_client,
-                _runtime: None, // We didn’t create a runtime
-                handle,
-            });
-        }
-
-        // No runtime → create and own one
-        let rt = Runtime::new().expect("failed to create Tokio runtime");
-        let handle = rt.handle().clone();
-        let async_client = rt.block_on(AsyncUmaDBClient::connect(url, ca_path))?;
-        Ok(Self {
-            async_client,
-            _runtime: Some(rt), // Keep runtime alive for the client lifetime
-            handle,
-        })
-    }
+async fn new_channel(
+    url: String,
+    tls: Option<ClientTlsOptions>,
+) -> Result<Channel, tonic::transport::Error> {
+    new_endpoint(url, tls)?.connect().await
 }
 
-impl DCBEventStoreSync for UmaDBClient {
-    fn read(
-        &self,
-        query: Option<DCBQuery>,
-        start: Option<u64>,
-        backwards: bool,
-        limit: Option<u32>,
-        subscribe: bool,
-        batch_size: Option<u32>,
-    ) -> Result<Box<dyn DCBReadResponseSync + '_>, DCBError> {
-        let async_read_response = self.handle.block_on(
-            self.async_client
-                .read(query, start, backwards, limit, subscribe, batch_size),
-        )?;
-        Ok(Box::new(SyncClientReadResponse {
-            rt: &self.handle,
-            resp: async_read_response,
-            buffer: VecDeque::new(),
-            finished: false,
-        }))
+fn new_endpoint(
+    url: String,
+    tls: Option<ClientTlsOptions>,
+) -> Result<Endpoint, tonic::transport::Error> {
+    use std::time::Duration;
+
+    // Accept grpcs:// as an alias for https://
+    let mut url_owned = url.to_string();
+    if url_owned.starts_with("grpcs://") {
+        url_owned = url_owned.replacen("grpcs://", "https://", 1);
     }
 
-    fn head(&self) -> Result<Option<u64>, DCBError> {
-        self.handle.block_on(self.async_client.head())
-    }
+    let mut endpoint = Endpoint::from_shared(url_owned)?
+        .tcp_nodelay(true)
+        .http2_keep_alive_interval(Duration::from_secs(5))
+        .keep_alive_timeout(Duration::from_secs(10))
+        .initial_stream_window_size(Some(4 * 1024 * 1024))
+        .initial_connection_window_size(Some(8 * 1024 * 1024));
 
-    fn append(
-        &self,
-        events: Vec<DCBEvent>,
-        condition: Option<DCBAppendCondition>,
-    ) -> Result<u64, DCBError> {
-        self.handle
-            .block_on(self.async_client.append(events, condition))
-    }
-}
-
-pub struct SyncClientReadResponse<'a> {
-    rt: &'a Handle,
-    resp: Box<dyn DCBReadResponseAsync + Send + 'a>,
-    buffer: VecDeque<DCBSequencedEvent>, // efficient pop_front()
-    finished: bool,
-}
-
-impl<'a> SyncClientReadResponse<'a> {
-    /// Fetch the next batch from the async response, filling the buffer
-    fn fetch_next_batch(&mut self) -> Result<(), DCBError> {
-        if self.finished {
-            return Ok(());
+    if let Some(opts) = tls {
+        let mut cfg = ClientTlsConfig::new();
+        if let Some(domain) = &opts.domain {
+            cfg = cfg.domain_name(domain.clone());
         }
-
-        let batch = self.rt.block_on(self.resp.next_batch())?;
-        if batch.is_empty() {
-            self.finished = true;
-        } else {
-            self.buffer = batch.into();
+        if let Some(ca) = opts.ca_pem {
+            cfg = cfg.ca_certificate(Certificate::from_pem(ca));
         }
-        Ok(())
-    }
-}
-
-impl<'a> Iterator for SyncClientReadResponse<'a> {
-    type Item = Result<DCBSequencedEvent, DCBError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        // Fetch the next batch if the buffer is empty.
-        while self.buffer.is_empty() && !self.finished {
-            if let Err(e) = self.fetch_next_batch() {
-                return Some(Err(e));
-            }
-        }
-
-        self.buffer.pop_front().map(Ok)
-    }
-}
-
-impl<'a> DCBReadResponseSync for SyncClientReadResponse<'a> {
-    fn head(&mut self) -> DCBResult<Option<u64>> {
-        self.rt.block_on(self.resp.head())
+        endpoint = endpoint.tls_config(cfg)?;
+    } else if url.starts_with("https://") {
+        // When using https without explicit options, still enable default TLS.
+        endpoint = endpoint.tls_config(ClientTlsConfig::new())?;
     }
 
-    fn collect_with_head(&mut self) -> DCBResult<(Vec<DCBSequencedEvent>, Option<u64>)> {
-        let mut out = Vec::new();
-        for result in self.by_ref() {
-            out.push(result?);
-        }
-        Ok((out, self.head()?))
-    }
-
-    fn next_batch(&mut self) -> Result<Vec<DCBSequencedEvent>, DCBError> {
-        // If there are remaining events in the buffer, drain them
-        if !self.buffer.is_empty() {
-            return Ok(self.buffer.drain(..).collect());
-        }
-
-        // Otherwise fetch a new batch
-        self.fetch_next_batch()?;
-        Ok(self.buffer.drain(..).collect())
-    }
+    Ok(endpoint)
 }

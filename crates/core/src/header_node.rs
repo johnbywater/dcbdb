@@ -1,7 +1,7 @@
 use crate::common::Position;
 use crate::common::{PageID, Tsn};
-use umadb_dcb::{DCBError, DCBResult};
 use byteorder::{ByteOrder, LittleEndian};
+use umadb_dcb::{DCBError, DCBResult};
 
 // Node type definitions
 #[derive(Debug, Clone, PartialEq, Eq)]

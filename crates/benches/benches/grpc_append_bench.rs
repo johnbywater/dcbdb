@@ -8,7 +8,7 @@ use std::time::Duration;
 use tempfile::tempdir;
 use tokio::runtime::Builder as RtBuilder;
 use tokio::sync::oneshot;
-use umadb_client::AsyncUmaDBClient;
+use umadb_client::{AsyncUmaDBClient, UmaDBClient};
 use umadb_core::db::UmaDB;
 use umadb_dcb::{DCBEvent, DCBEventStoreAsync, DCBEventStoreSync};
 use umadb_server::start_server;
@@ -114,7 +114,7 @@ pub fn grpc_append_benchmark(c: &mut Criterion) {
         let mut clients: Vec<Arc<AsyncUmaDBClient>> = Vec::with_capacity(threads);
         for _ in 0..threads {
             let c = rt
-                .block_on(AsyncUmaDBClient::connect(&addr_http, None))
+                .block_on(UmaDBClient::new(addr_http.clone()).connect_async())
                 .expect("connect client");
             clients.push(Arc::new(c));
         }

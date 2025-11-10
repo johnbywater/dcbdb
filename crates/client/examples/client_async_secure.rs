@@ -1,5 +1,5 @@
 use futures::StreamExt;
-use umadb_client::AsyncUmaDBClient;
+use umadb_client::UmaDBClient;
 use umadb_dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreAsync, DCBQuery, DCBQueryItem,
 };
@@ -8,9 +8,11 @@ use uuid::Uuid;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Connect to the gRPC server
-    let addr = "https://localhost:50051";
-    let ca_cert = Some("server.pem");
-    let client = AsyncUmaDBClient::connect(addr, ca_cert).await?;
+    let url = "https://localhost:50051".to_string();
+    let client = UmaDBClient::new(url)
+        .ca_path("server.pem".to_string()) // For self-signed server certificates.
+        .connect_async()
+        .await?;
 
     // Define a consistency boundary
     let cb = DCBQuery {
@@ -22,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Read events for a decision model
     let mut read_response = client
-        .read(Some(cb.clone()), None, false, None, false, None)
+        .read(Some(cb.clone()), None, false, None, false)
         .await?;
 
     // Build decision model
@@ -114,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Subscribe to all events for a projection
-    let mut subscription = client.read(None, None, false, None, true, None).await?;
+    let mut subscription = client.read(None, None, false, None, true).await?;
 
     // Build an up-to-date view
     while let Some(result) = subscription.next().await {

@@ -815,7 +815,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### `struct SyncUmaDCBClient`
 
-The synchronous UmaDB client.
+The synchronous UmaDB client. See examples below.
 
 ### `fn read()`
 
@@ -834,12 +834,7 @@ Arguments:
 | `limit`      | `Option<u32>`      | Optional cap on the number of events to retrieve.                                                                                                            |
 | `subscribe`  | `bool`             | If `true`, keeps the stream open to deliver future events as they arrive.                                                                                    |
 
-Returns a "read response" instance from which `DCBSequencedEvent` instances, and the most relevant "last known" sequence number, can be obtained.
-
-| Interface | Response Type       | Description                                                             |
-|-----------|---------------------|-------------------------------------------------------------------------|
-| **Async** | `AsyncReadResponse` | An asynchronous Rust `Stream` that can be iterated via `.next().await`. |
-| **Sync**  | `SyncReadResponse`  | A blocking Rust `Iterator` that can iterated via `.next()`.              |
+Returns a `SyncReadResponse` instance from which `DCBSequencedEvent` instances, and the most relevant "last known" sequence number, can be obtained.
 
 ### `fn append()`
 
@@ -865,11 +860,13 @@ Returns the **sequence number** (`u64`) of the very last successfully appended e
 
 ### `struct AsyncUmaDCBClient`
 
-The asynchronous UmaDB client.
+The asynchronous UmaDB client. See examples below.
 
 ### `async fn read()`
 
 See `fn read()` above. 
+
+Returns an `AsyncReadResponse` instance from which `DCBSequencedEvent` instances, and the most relevant "last known" sequence number, can be obtained.
 
 ### `async fn append()`
 

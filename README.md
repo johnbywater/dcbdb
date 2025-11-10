@@ -1229,9 +1229,6 @@ mkdir -p ./umadb-data
 
 # Run with persistent storage
 docker run -p 50051:50051 -v $(pwd)/umadb-data:/data ghcr.io/pyeventsourcing/umadb:latest
-
-# Specify a custom database file name
-docker run -p 50051:50051 -v $(pwd)/umadb-data:/data ghcr.io/pyeventsourcing/umadb:latest
 ```
 
 The container runs as a non-root user (uid 1000) and stores data in `/data` by default. Make sure the mounted directory has appropriate permissions.

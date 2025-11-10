@@ -54,6 +54,7 @@ impl UmaDB {
     pub fn append_batch(
         &self,
         items: Vec<(Vec<DCBEvent>, Option<DCBAppendCondition>)>,
+        force_sequential_read: bool,
     ) -> DCBResult<Vec<DCBResult<u64>>> {
         // println!("Processing batch of {} items", items.len());
 
@@ -74,6 +75,7 @@ impl UmaDB {
                     from,
                     false,
                     Some(1),
+                    force_sequential_read,
                 );
                 match read_result1 {
                     Ok(found_vec) => {
@@ -167,6 +169,7 @@ impl DCBEventStoreSync for UmaDB {
             from,
             backwards,
             limit,
+            false,
         )?;
 
         // Compute head according to semantics
@@ -203,7 +206,7 @@ impl DCBEventStoreSync for UmaDB {
             return Ok(0);
         }
         // Delegate to append_batch with a single item to reuse unified batching logic
-        let mut results = self.append_batch(vec![(events, condition)])?;
+        let mut results = self.append_batch(vec![(events, condition)], false)?;
         debug_assert_eq!(results.len(), 1);
         match results.remove(0) {
             Ok(pos) => Ok(pos),
@@ -284,6 +287,7 @@ pub fn read_conditional(
     start: Option<Position>,
     backwards: bool,
     limit: Option<u32>,
+    force_sequential_read: bool,
 ) -> DCBResult<Vec<DCBSequencedEvent>> {
     const SCAN_BATCH_SIZE: u32 = 256;
     // Special case: explicit zero limit
@@ -322,7 +326,7 @@ pub fn read_conditional(
 
     // All query items must have at least one tag to use the tag index path.
     let all_items_have_tags = query.items.iter().all(|it| !it.tags.is_empty());
-    if !all_items_have_tags {
+    if !all_items_have_tags || force_sequential_read {
         // Fallback: sequentially scan all events and apply the same matching logic
         let mut iter = EventIterator::new(mvcc, dirty, events_tree_root_id, start, backwards);
         let mut out: Vec<DCBSequencedEvent> = Vec::new();
@@ -595,6 +599,7 @@ pub fn is_request_idempotent(
             start,
             false,
             Some(submitted_events_len as u32),
+            false,
         );
         match read_result {
             Ok(found_events) => {
@@ -656,6 +661,7 @@ mod tests {
             start,
             backwards,
             limit,
+            false,
         )
     }
 
@@ -1278,7 +1284,7 @@ mod tests {
             ),
         ];
 
-        let results = store.append_batch(items).unwrap();
+        let results = store.append_batch(items, false).unwrap();
 
         assert_eq!(results.len(), 3);
         // First item should succeed with last position 1
@@ -1358,7 +1364,7 @@ mod tests {
             ),
         ];
 
-        let results = store.append_batch(items).unwrap();
+        let results = store.append_batch(items, false).unwrap();
 
         assert_eq!(results.len(), 3);
         match &results[0] {
@@ -1473,7 +1479,7 @@ mod tests {
             ),
         ];
 
-        let results = store.append_batch(items).unwrap();
+        let results = store.append_batch(items, false).unwrap();
         assert_eq!(results.len(), 5);
         match &results[0] {
             Ok(pos) => assert_eq!(*pos, 1),
@@ -1605,7 +1611,7 @@ mod tests {
             ),
         ];
 
-        let results = store.append_batch(items).unwrap();
+        let results = store.append_batch(items, false).unwrap();
         assert_eq!(results.len(), 5);
         match &results[0] {
             Ok(pos) => assert_eq!(*pos, 1),

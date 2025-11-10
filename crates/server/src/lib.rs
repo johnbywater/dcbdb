@@ -507,7 +507,7 @@ impl RequestHandler {
                             }
                             // println!("Total events: {total_events}");
                             // Execute a single batched append operation.
-                            let batch_result = db.append_batch(items);
+                            let batch_result = db.append_batch(items, false);
                             match batch_result {
                                 Ok(results) => {
                                     // Send individual results back to requesters
@@ -608,7 +608,7 @@ impl RequestHandler {
         let last_committed_position = reader.next_position.0.saturating_sub(1);
 
         let q = query.unwrap_or(DCBQuery { items: vec![] });
-        let from = start.map(Position);
+        let start_position = start.map(Position);
 
         let events = read_conditional(
             &self.mvcc,
@@ -616,9 +616,10 @@ impl RequestHandler {
             reader.events_tree_root_id,
             reader.tags_tree_root_id,
             q,
-            from,
+            start_position,
             backwards,
             limit,
+            false,
         )
         .map_err(|e| DCBError::Corruption(format!("{e}")))?;
 
@@ -668,6 +669,7 @@ impl RequestHandler {
                 from,
                 false,
                 Some(1),
+                false,
             )?;
 
             if let Some(matched) = found.first() {

@@ -959,7 +959,7 @@ All the client methods return this type, which yields either a successful result
 
 Here's an example of how to use the synchronous Rust client for UmaDB:
 
-```
+```rust
 use umadb_client::UmaDBClient;
 use umadb_dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreSync, DCBQuery, DCBQueryItem,

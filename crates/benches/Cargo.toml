@@ -21,6 +21,10 @@ name = "grpc_read_bench"
 harness = false
 
 [[bench]]
+name = "grpc_read_cond_bench"
+harness = false
+
+[[bench]]
 name = "grpc_read_flame"
 harness = false
 

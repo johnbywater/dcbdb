@@ -1,0 +1,43 @@
+# Build artifacts
+target/
+**/target/
+
+# Git
+.git/
+.gitignore
+.github/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Test data
+test_builder.rs
+tests/
+
+# Benchmarks
+benchmark_results.txt
+perf_analysis_*/
+
+# Documentation
+*.md
+!README.md
+
+# Images
+*.png
+*.jpg
+*.jpeg
+
+# Certificates (use mounted secrets instead)
+*.pem
+*.key
+
+# Cargo cache
+.cargo/
+
+# Misc
+scripts/
+third_party/

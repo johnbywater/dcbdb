@@ -3,6 +3,10 @@ name = "umadb-client"
 version = {workspace = true}
 edition = { workspace = true }
 license = { workspace = true }
+description = "gRPC client library for UmaDB event store"
+repository = "https://github.com/pyeventsourcing/umadb"
+keywords = ["event-store", "grpc", "client"]
+categories = ["database", "network-programming"]
 
 [dependencies]
 umadb-dcb = { path = "../dcb" }

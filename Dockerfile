@@ -1,24 +1,27 @@
-# Build stage
-FROM --platform=$BUILDPLATFORM rust:1.90-slim AS builder
-ARG TARGETPLATFORM
-WORKDIR /build
+# Multi-stage build for UmaDB server
+# Supports both amd64 and arm64 architectures
 
+# Build stage
+FROM --platform=$TARGETPLATFORM rust:1.90-slim AS builder
+
+# Install build dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    protobuf-compiler pkg-config libssl-dev && \
-    rm -rf /var/lib/apt/lists/*
+    protobuf-compiler \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 
+WORKDIR /build
+
+# Copy workspace configuration
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY src ./src
+#COPY tests ./tests
 
-RUN case "$TARGETPLATFORM" in \
-        "linux/amd64")  export CARGO_TARGET=x86_64-unknown-linux-gnu ;; \
-        "linux/arm64")  export CARGO_TARGET=aarch64-unknown-linux-gnu ;; \
-        *) echo "Unsupported platform: $TARGETPLATFORM" && exit 1 ;; \
-    esac && \
-    rustup target add $CARGO_TARGET && \
-    cargo build --release --target $CARGO_TARGET -p umadb-server
+# Build for release
+RUN cargo build --release -p umadb-server
 
 # Runtime stage
 FROM debian:bookworm-slim

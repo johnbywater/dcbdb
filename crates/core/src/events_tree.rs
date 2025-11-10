@@ -578,25 +578,31 @@ impl<'a> EventIterator<'a> {
                         if stacked_idx.is_none() {
                             // println!(" - first visit");
                             // println!(" - keys: {:?}", leaf.keys.clone());
-                            stacked_idx = match &self.start {
-                                Some(from) => match leaf.keys.binary_search(from) {
-                                    Ok(i) => Some(i),
-                                    Err(i) => {
+                            let values_len = leaf.values.len();
+
+                            stacked_idx = if values_len > 0 {
+                                match &self.start {
+                                    Some(from) => match leaf.keys.binary_search(from) {
+                                        Ok(i) => Some(i),
+                                        Err(i) => {
+                                            if !self.backwards {
+                                                Some(i)
+                                            } else {
+                                                Some(i - 1)
+                                            }
+                                        }
+                                    },
+                                    None => {
                                         if !self.backwards {
-                                            Some(i)
+                                            Some(0)
                                         } else {
-                                            Some(i - 1)
+                                            Some(values_len - 1)
                                         }
                                     }
-                                },
-                                None => {
-                                    if !self.backwards {
-                                        Some(0)
-                                    } else {
-                                        Some(leaf.values.len() - 1)
-                                    }
                                 }
-                            };
+                            } else {
+                                None
+                            }
                         }
 
                         if let Some(values_idx) = stacked_idx {
@@ -636,8 +642,8 @@ impl<'a> EventIterator<'a> {
                                 remove_page = true;
                             }
                         } else {
-                            // Shouldn't get here?
-                            panic!("Shouldn't get here?")
+                            // No leaf values.
+                            remove_page = true;
                         }
                     }
                     _ => {

@@ -330,7 +330,7 @@ impl UmaDbService for UmaDBServer {
                         sent_any = true;
 
                         // Advance the cursor (use a new reader on the next loop iteration)
-                        next_start = last_event_position.map(|p| p + 1);
+                        next_start = last_event_position.map(|p| if !backwards {p + 1} else {p - 1});
 
                         // Stop streaming further if we reached the
                         // captured head boundary (non-subscriber only).

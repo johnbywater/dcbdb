@@ -22,6 +22,11 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(0, result.len());
     assert_eq!(None, head);
 
+    // Read all backwards, expect no results.
+    let (result, head) = event_store.read_with_head(None, None, true, None).unwrap();
+    assert_eq!(0, result.len());
+    assert_eq!(None, head);
+
     // Append one event.
     let event1 = DCBEvent {
         event_type: "type1".to_string(),
@@ -45,9 +50,37 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(event1.uuid, result[0].event.uuid);
     assert_eq!(Some(1), head);
 
-    // Read all after 1, expect no events.
+    // Read all backwards, expect one event.
+    let (result, head) = event_store.read_with_head(None, None, true, None).unwrap();
+    assert_eq!(1, result.len());
+    assert_eq!(event1.data, result[0].event.data);
+    assert_eq!(event1.uuid, result[0].event.uuid);
+    assert_eq!(Some(1), head);
+
+    // Read all from position 2, expect no events.
     let (result, head) = event_store
         .read_with_head(None, Some(2), false, None)
+        .unwrap();
+    assert_eq!(0, result.len());
+    assert_eq!(Some(1), head);
+
+    // Read all backwards from position 2, expect one event.
+    let (result, head) = event_store
+        .read_with_head(None, Some(2), true, None)
+        .unwrap();
+    assert_eq!(1, result.len());
+    assert_eq!(Some(1), head);
+
+    // Read all backwards from position 1, expect one event.
+    let (result, head) = event_store
+        .read_with_head(None, Some(1), true, None)
+        .unwrap();
+    assert_eq!(1, result.len());
+    assert_eq!(Some(1), head);
+
+    // Read all backwards from position 0, expect no events.
+    let (result, head) = event_store
+        .read_with_head(None, Some(0), true, None)
         .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(1), head);
@@ -60,9 +93,24 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(event1.data, result[0].event.data);
     assert_eq!(Some(1), head);
 
+    // Read all backwards limit 1, expect one event.
+    let (result, head) = event_store
+        .read_with_head(None, None, true, Some(1))
+        .unwrap();
+    assert_eq!(1, result.len());
+    assert_eq!(event1.data, result[0].event.data);
+    assert_eq!(Some(1), head);
+
     // Read all limit 0, expect no events (and head is None).
     let (result, head) = event_store
         .read_with_head(None, None, false, Some(0))
+        .unwrap();
+    assert_eq!(0, result.len());
+    assert_eq!(None, head);
+
+    // Read all backwards limit 0, expect no events (and head is None).
+    let (result, head) = event_store
+        .read_with_head(None, None, true, Some(0))
         .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(None, head);
@@ -81,6 +129,14 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(event1.data, result[0].event.data);
     assert_eq!(Some(1), head);
 
+    // Read events with type1 backwards, expect 1 event.
+    let (result, head) = event_store
+        .read_with_head(Some(query_type1.clone()), None, true, None)
+        .unwrap();
+    assert_eq!(1, result.len());
+    assert_eq!(event1.data, result[0].event.data);
+    assert_eq!(Some(1), head);
+
     // Read events with type2, expect no events.
     let query_type2 = DCBQuery {
         items: vec![DCBQueryItem {
@@ -90,6 +146,13 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     };
     let (result, head) = event_store
         .read_with_head(Some(query_type2.clone()), None, false, None)
+        .unwrap();
+    assert_eq!(0, result.len());
+    assert_eq!(Some(1), head);
+
+    // Read events with type2 backwards, expect no events.
+    let (result, head) = event_store
+        .read_with_head(Some(query_type2.clone()), None, true, None)
         .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(1), head);
@@ -108,6 +171,14 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(event1.data, result[0].event.data);
     assert_eq!(Some(1), head);
 
+    // Backwards
+    let (result, head) = event_store
+        .read_with_head(Some(query_tag_x.clone()), None, true, None)
+        .unwrap();
+    assert_eq!(1, result.len());
+    assert_eq!(event1.data, result[0].event.data);
+    assert_eq!(Some(1), head);
+
     // Read events with tagY, expect no events.
     let query_tag_y = DCBQuery {
         items: vec![DCBQueryItem {
@@ -117,6 +188,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     };
     let (result, head) = event_store
         .read_with_head(Some(query_tag_y.clone()), None, false, None)
+        .unwrap();
+    assert_eq!(0, result.len());
+    assert_eq!(Some(1), head);
+
+    let (result, head) = event_store
+        .read_with_head(Some(query_tag_y.clone()), None, true, None)
         .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(1), head);
@@ -134,6 +211,13 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(1, result.len());
     assert_eq!(Some(1), head);
 
+    // Backwards
+    let (result, head) = event_store
+        .read_with_head(Some(query_type1_tag_x.clone()), None, true, None)
+        .unwrap();
+    assert_eq!(1, result.len());
+    assert_eq!(Some(1), head);
+
     // Read events with type1 and tagY, expect no events.
     let query_type1_tag_y = DCBQuery {
         items: vec![DCBQueryItem {
@@ -142,7 +226,13 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         }],
     };
     let (result, head) = event_store
-        .read_with_head(Some(query_type1_tag_y), None, false, None)
+        .read_with_head(Some(query_type1_tag_y.clone()), None, false, None)
+        .unwrap();
+    assert_eq!(0, result.len());
+    assert_eq!(Some(1), head);
+
+    let (result, head) = event_store
+        .read_with_head(Some(query_type1_tag_y.clone()), None, true, None)
         .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(1), head);
@@ -155,7 +245,13 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         }],
     };
     let (result, head) = event_store
-        .read_with_head(Some(query_type2_tag_x), None, false, None)
+        .read_with_head(Some(query_type2_tag_x.clone()), None, false, None)
+        .unwrap();
+    assert_eq!(0, result.len());
+    assert_eq!(Some(1), head);
+
+    let (result, head) = event_store
+        .read_with_head(Some(query_type2_tag_x.clone()), None, true, None)
         .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(1), head);
@@ -192,7 +288,15 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(event3.data, result[2].event.data);
     assert_eq!(Some(3), head);
 
-    // Read all after 1, expect two events.
+    // Read all backwards, expect 3 events (in descending order).
+    let (result, head) = event_store.read_with_head(None, None, true, None).unwrap();
+    assert_eq!(3, result.len());
+    assert_eq!(event3.data, result[0].event.data);
+    assert_eq!(event2.data, result[1].event.data);
+    assert_eq!(event1.data, result[2].event.data);
+    assert_eq!(Some(3), head);
+
+    // Read all start 2, expect two events.
     let (result, head) = event_store
         .read_with_head(None, Some(2), false, None)
         .unwrap();
@@ -201,7 +305,16 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(event3.data, result[1].event.data);
     assert_eq!(Some(3), head);
 
-    // Read all after 2, expect one event.
+    // Read all backwards start 2, expect two events.
+    let (result, head) = event_store
+        .read_with_head(None, Some(2), true, None)
+        .unwrap();
+    assert_eq!(2, result.len());
+    assert_eq!(event2.data, result[0].event.data);
+    assert_eq!(event1.data, result[1].event.data);
+    assert_eq!(Some(3), head);
+
+    // Read all start 3, expect one event.
     let (result, head) = event_store
         .read_with_head(None, Some(3), false, None)
         .unwrap();
@@ -209,7 +322,17 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(event3.data, result[0].event.data);
     assert_eq!(Some(3), head);
 
-    // Read all after 1, limit 1, expect one event.
+    // Read all backwards start 3, expect three events.
+    let (result, head) = event_store
+        .read_with_head(None, Some(3), true, None)
+        .unwrap();
+    assert_eq!(3, result.len());
+    assert_eq!(event3.data, result[0].event.data);
+    assert_eq!(event2.data, result[1].event.data);
+    assert_eq!(event1.data, result[2].event.data);
+    assert_eq!(Some(3), head);
+
+    // Read all start 2, limit 1, expect one event.
     let (result, head) = event_store
         .read_with_head(None, Some(2), false, Some(1))
         .unwrap();
@@ -217,39 +340,89 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(event2.data, result[0].event.data);
     assert_eq!(Some(2), head);
 
-    // Read all after 10, limit 10, expect zero events.
+    // Read all start 2, limit 1, expect one event.
+    let (result, head) = event_store
+        .read_with_head(None, Some(2), true, Some(1))
+        .unwrap();
+    assert_eq!(1, result.len());
+    assert_eq!(event2.data, result[0].event.data);
+    assert_eq!(Some(2), head);
+
+    // Read all start 11, limit 10, expect zero events.
     let (result, head) = event_store
         .read_with_head(None, Some(11), false, Some(10))
         .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(None, head);
 
-    // Read type1 after 1, expect no events.
+    // Read all start 11, limit 10, expect three events.
+    let (result, head) = event_store
+        .read_with_head(None, Some(11), true, Some(10))
+        .unwrap();
+    assert_eq!(3, result.len());
+    assert_eq!(event3.data, result[0].event.data);
+    assert_eq!(event2.data, result[1].event.data);
+    assert_eq!(event1.data, result[2].event.data);
+    assert_eq!(Some(1), head);  // TODO: Maybe should return highest rather than lowest?
+
+    // Read type1 start 2, expect no events.
     let (result, head) = event_store
         .read_with_head(Some(query_type1.clone()), Some(2), false, None)
         .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(3), head);
 
-    // Read tagX after 1, expect no events.
+    // Read type1 backwards start 2, expect one event.
+    let (result, head) = event_store
+        .read_with_head(Some(query_type1.clone()), Some(2), true, None)
+        .unwrap();
+    assert_eq!(1, result.len());
+    assert_eq!(event1.data, result[0].event.data);
+    assert_eq!(Some(3), head);
+
+    // Read tagX start 2, expect no events.
     let (result, head) = event_store
         .read_with_head(Some(query_tag_x.clone()), Some(2), false, None)
         .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(Some(3), head);
 
-    // Read tagX after 1, limit 1 expect no events.
+    // Read tagX backwards start 2, expect no events.
+    let (result, head) = event_store
+        .read_with_head(Some(query_tag_x.clone()), Some(2), true, None)
+        .unwrap();
+    assert_eq!(1, result.len());
+    assert_eq!(event1.data, result[0].event.data);
+    assert_eq!(Some(3), head);
+
+    // Read tagX start 2, limit 1 expect no events.
     let (result, head) = event_store
         .read_with_head(Some(query_tag_x.clone()), Some(2), false, Some(1))
         .unwrap();
     assert_eq!(0, result.len());
     assert_eq!(None, head);
 
-    // Read type1 and tagX after 1, expect no events.
+    // Read tagX backwards start 2, limit 1 expect one event.
+    let (result, head) = event_store
+        .read_with_head(Some(query_tag_x.clone()), Some(2), true, Some(1))
+        .unwrap();
+    assert_eq!(1, result.len());
+    assert_eq!(event1.data, result[0].event.data);
+    assert_eq!(Some(1), head);
+
+    // Read type1 and tagX start 2, expect no events.
     let (result, head) = event_store
         .read_with_head(Some(query_type1_tag_x.clone()), Some(2), false, None)
         .unwrap();
     assert_eq!(0, result.len());
+    assert_eq!(Some(3), head);
+
+    // Read type1 and tagX backwards start 2, expect no events.
+    let (result, head) = event_store
+        .read_with_head(Some(query_type1_tag_x.clone()), Some(2), true, None)
+        .unwrap();
+    assert_eq!(1, result.len());
+    assert_eq!(event1.data, result[0].event.data);
     assert_eq!(Some(3), head);
 
     // Read events with tagA, expect two events.
@@ -267,6 +440,15 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(event3.data, result[1].event.data);
     assert_eq!(Some(3), head);
 
+    // Backwards
+    let (result, head) = event_store
+        .read_with_head(Some(query_tag_a.clone()), None, true, None)
+        .unwrap();
+    assert_eq!(2, result.len());
+    assert_eq!(event3.data, result[0].event.data);
+    assert_eq!(event2.data, result[1].event.data);
+    assert_eq!(Some(3), head);
+
     // Read events with tagA and tagB, expect one event.
     let query_tag_a_and_b = DCBQuery {
         items: vec![DCBQueryItem {
@@ -276,6 +458,14 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     };
     let (result, head) = event_store
         .read_with_head(Some(query_tag_a_and_b.clone()), None, false, None)
+        .unwrap();
+    assert_eq!(1, result.len());
+    assert_eq!(event2.data, result[0].event.data);
+    assert_eq!(Some(3), head);
+
+    // Backwards
+    let (result, head) = event_store
+        .read_with_head(Some(query_tag_a_and_b.clone()), None, true, None)
         .unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event2.data, result[0].event.data);
@@ -302,6 +492,15 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(event3.data, result[1].event.data);
     assert_eq!(Some(3), head);
 
+    // Backwards
+    let (result, head) = event_store
+        .read_with_head(Some(query_tag_b_or_c.clone()), None, true, None)
+        .unwrap();
+    assert_eq!(2, result.len());
+    assert_eq!(event3.data, result[0].event.data);
+    assert_eq!(event2.data, result[1].event.data);
+    assert_eq!(Some(3), head);
+
     // Read events with tagX or tagY, expect one event.
     let query_tag_x_or_y = DCBQuery {
         items: vec![
@@ -322,6 +521,14 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(event1.data, result[0].event.data);
     assert_eq!(Some(3), head);
 
+    // Backwards
+    let (result, head) = event_store
+        .read_with_head(Some(query_tag_x_or_y.clone()), None, true, None)
+        .unwrap();
+    assert_eq!(1, result.len());
+    assert_eq!(event1.data, result[0].event.data);
+    assert_eq!(Some(3), head);
+
     // Read events with type2 and tagA, expect one event.
     let query_type2_tag_a = DCBQuery {
         items: vec![DCBQueryItem {
@@ -336,11 +543,27 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(event2.data, result[0].event.data);
     assert_eq!(Some(3), head);
 
-    // Read events with type2 and tagA after 2, expect no events.
+    // Backwards
+    let (result, head) = event_store
+        .read_with_head(Some(query_type2_tag_a.clone()), None, true, None)
+        .unwrap();
+    assert_eq!(1, result.len());
+    assert_eq!(event2.data, result[0].event.data);
+    assert_eq!(Some(3), head);
+
+    // Read events with type2 and tagA start 3, expect no events.
     let (result, head) = event_store
         .read_with_head(Some(query_type2_tag_a.clone()), Some(3), false, None)
         .unwrap();
     assert_eq!(0, result.len());
+    assert_eq!(Some(3), head);
+
+    // Backwards
+    let (result, head) = event_store
+        .read_with_head(Some(query_type2_tag_a.clone()), Some(3), true, None)
+        .unwrap();
+    assert_eq!(1, result.len());
+    assert_eq!(event2.data, result[0].event.data);
     assert_eq!(Some(3), head);
 
     // Read events with type2 and tagB, or with type3 and tagC, expect two events.
@@ -369,6 +592,33 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(event3.data, result[1].event.data);
     assert_eq!(Some(3), head);
 
+    // Backwards
+    let (result, head) = event_store
+        .read_with_head(
+            Some(query_type2_tag_b_or_type3_tagc.clone()),
+            None,
+            true,
+            None,
+        )
+        .unwrap();
+    assert_eq!(2, result.len());
+    assert_eq!(event3.data, result[0].event.data);
+    assert_eq!(event2.data, result[1].event.data);
+    assert_eq!(Some(3), head);
+
+    // Backwards limit 1
+    let (result, head) = event_store
+        .read_with_head(
+            Some(query_type2_tag_b_or_type3_tagc.clone()),
+            None,
+            true,
+            Some(1),
+        )
+        .unwrap();
+    assert_eq!(1, result.len());
+    assert_eq!(event3.data, result[0].event.data);
+    assert_eq!(Some(3), head);
+
     // Repeat with query items in different order, expect events in ascending order.
     let query_type3_tag_c_or_type2_tag_b = DCBQuery {
         items: vec![
@@ -383,11 +633,28 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         ],
     };
     let (result, head) = event_store
-        .read_with_head(Some(query_type3_tag_c_or_type2_tag_b), None, false, None)
+        .read_with_head(Some(query_type3_tag_c_or_type2_tag_b.clone()), None, false, None)
         .unwrap();
     assert_eq!(2, result.len());
     assert_eq!(event2.data, result[0].event.data);
     assert_eq!(event3.data, result[1].event.data);
+    assert_eq!(Some(3), head);
+
+    // Backwards
+    let (result, head) = event_store
+        .read_with_head(Some(query_type3_tag_c_or_type2_tag_b.clone()), None, true, None)
+        .unwrap();
+    assert_eq!(2, result.len());
+    assert_eq!(event3.data, result[0].event.data);
+    assert_eq!(event2.data, result[1].event.data);
+    assert_eq!(Some(3), head);
+
+    // Backwards limit 1
+    let (result, head) = event_store
+        .read_with_head(Some(query_type3_tag_c_or_type2_tag_b.clone()), None, true, Some(1))
+        .unwrap();
+    assert_eq!(1, result.len());
+    assert_eq!(event3.data, result[0].event.data);
     assert_eq!(Some(3), head);
 
     // Append must fail if recorded events match condition.
@@ -668,6 +935,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         )
         .unwrap();
 
+    // Read all
     let (result, head) = event_store.read_with_head(None, None, false, None).unwrap();
     assert_eq!(13, result.len());
     assert_eq!(result[10].event.event_type, student_registered.event_type);
@@ -684,6 +952,24 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(result[12].event.tags, student_joined_course.tags);
     assert_eq!(Some(13), head);
 
+    // Read all backwards
+    let (result, head) = event_store.read_with_head(None, None, true, None).unwrap();
+    assert_eq!(13, result.len());
+    assert_eq!(result[2].event.event_type, student_registered.event_type);
+    assert_eq!(result[1].event.event_type, course_registered.event_type);
+    assert_eq!(
+        result[0].event.event_type,
+        student_joined_course.event_type
+    );
+    assert_eq!(result[2].event.data, student_registered.data);
+    assert_eq!(result[1].event.data, course_registered.data);
+    assert_eq!(result[0].event.data, student_joined_course.data);
+    assert_eq!(result[2].event.tags, student_registered.tags);
+    assert_eq!(result[1].event.tags, course_registered.tags);
+    assert_eq!(result[0].event.tags, student_joined_course.tags);
+    assert_eq!(Some(13), head);
+
+    // Read student
     let (result, head) = event_store
         .read_with_head(
             Some(DCBQuery {
@@ -698,8 +984,30 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         )
         .unwrap();
     assert_eq!(2, result.len());
+    assert_eq!(result[0].event.data, student_registered.data);
+    assert_eq!(result[1].event.data, student_joined_course.data);
     assert_eq!(Some(13), head);
 
+    // Read student backwards
+    let (result, head) = event_store
+        .read_with_head(
+            Some(DCBQuery {
+                items: vec![DCBQueryItem {
+                    types: vec![],
+                    tags: vec![student_id.clone()],
+                }],
+            }),
+            None,
+            true,
+            None,
+        )
+        .unwrap();
+    assert_eq!(2, result.len());
+    assert_eq!(result[1].event.data, student_registered.data);
+    assert_eq!(result[0].event.data, student_joined_course.data);
+    assert_eq!(Some(13), head);
+
+    // Read course
     let (result, head) = event_store
         .read_with_head(
             Some(DCBQuery {
@@ -714,6 +1022,27 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         )
         .unwrap();
     assert_eq!(2, result.len());
+    assert_eq!(result[0].event.data, course_registered.data);
+    assert_eq!(result[1].event.data, student_joined_course.data);
+    assert_eq!(Some(13), head);
+
+    // Read course backwards
+    let (result, head) = event_store
+        .read_with_head(
+            Some(DCBQuery {
+                items: vec![DCBQueryItem {
+                    types: vec![],
+                    tags: vec![course_id.clone()],
+                }],
+            }),
+            None,
+            true,
+            None,
+        )
+        .unwrap();
+    assert_eq!(2, result.len());
+    assert_eq!(result[1].event.data, course_registered.data);
+    assert_eq!(result[0].event.data, student_joined_course.data);
     assert_eq!(Some(13), head);
 
     let (result, head) = event_store
@@ -735,6 +1064,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(1, result.len());
     assert_eq!(Some(13), head);
 
+    // Read student start position 3
     let (result, head) = event_store
         .read_with_head(
             Some(DCBQuery {
@@ -751,6 +1081,24 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(2, result.len());
     assert_eq!(Some(13), head);
 
+    // Read student backwards start position 3
+    let (result, head) = event_store
+        .read_with_head(
+            Some(DCBQuery {
+                items: vec![DCBQueryItem {
+                    types: vec![],
+                    tags: vec![student_id.clone()],
+                }],
+            }),
+            Some(3),
+            true,
+            None,
+        )
+        .unwrap();
+    assert_eq!(0, result.len());
+    assert_eq!(Some(13), head);
+
+    // Read course start position 3
     let (result, head) = event_store
         .read_with_head(
             Some(DCBQuery {
@@ -767,6 +1115,24 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(2, result.len());
     assert_eq!(Some(13), head);
 
+    // Read course backwards start position 3
+    let (result, head) = event_store
+        .read_with_head(
+            Some(DCBQuery {
+                items: vec![DCBQueryItem {
+                    types: vec![],
+                    tags: vec![course_id.clone()],
+                }],
+            }),
+            Some(3),
+            true,
+            None,
+        )
+        .unwrap();
+    assert_eq!(0, result.len());
+    assert_eq!(Some(13), head);
+
+    // Read joined course start position 3
     let (result, head) = event_store
         .read_with_head(
             Some(DCBQuery {
@@ -786,6 +1152,27 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(1, result.len());
     assert_eq!(Some(13), head);
 
+    // Read joined course backwards start position 3
+    let (result, head) = event_store
+        .read_with_head(
+            Some(DCBQuery {
+                items: vec![DCBQueryItem {
+                    types: vec![],
+                    tags: vec![
+                        student_joined_course.tags[0].clone(),
+                        student_joined_course.tags[1].clone(),
+                    ],
+                }],
+            }),
+            Some(3),
+            true,
+            None,
+        )
+        .unwrap();
+    assert_eq!(0, result.len());
+    assert_eq!(Some(13), head);
+
+    // Read student start position 3 limit 1
     let (result, head) = event_store
         .read_with_head(
             Some(DCBQuery {
@@ -802,6 +1189,24 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(1, result.len());
     assert_eq!(Some(11), head);
 
+    // Read student backwards start position 13 limit 1
+    let (result, head) = event_store
+        .read_with_head(
+            Some(DCBQuery {
+                items: vec![DCBQueryItem {
+                    types: vec![],
+                    tags: vec![student_id.clone()],
+                }],
+            }),
+            Some(13),
+            true,
+            Some(1),
+        )
+        .unwrap();
+    assert_eq!(1, result.len());
+    assert_eq!(Some(13), head);
+
+    // Read course start position 3 limit 1
     let (result, head) = event_store
         .read_with_head(
             Some(DCBQuery {
@@ -818,6 +1223,24 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(1, result.len());
     assert_eq!(Some(12), head);
 
+    // Read course backwards start position 13 limit 1
+    let (result, head) = event_store
+        .read_with_head(
+            Some(DCBQuery {
+                items: vec![DCBQueryItem {
+                    types: vec![],
+                    tags: vec![course_id.clone()],
+                }],
+            }),
+            Some(13),
+            true,
+            Some(1),
+        )
+        .unwrap();
+    assert_eq!(1, result.len());
+    assert_eq!(Some(13), head);
+
+    // Read joined course start position 3 limit 1
     let (result, head) = event_store
         .read_with_head(
             Some(DCBQuery {
@@ -837,6 +1260,27 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(1, result.len());
     assert_eq!(Some(13), head);
 
+    // Read joined course backwards start position 13 limit 1
+    let (result, head) = event_store
+        .read_with_head(
+            Some(DCBQuery {
+                items: vec![DCBQueryItem {
+                    types: vec![],
+                    tags: vec![
+                        student_joined_course.tags[0].clone(),
+                        student_joined_course.tags[1].clone(),
+                    ],
+                }],
+            }),
+            Some(13),
+            true,
+            Some(1),
+        )
+        .unwrap();
+    assert_eq!(1, result.len());
+    assert_eq!(Some(13), head);
+
+    // Read both students
     let consistency_boundary = DCBQuery {
         items: vec![
             DCBQueryItem {
@@ -856,9 +1300,22 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         ],
     };
     let (result, head) = event_store
-        .read_with_head(Some(consistency_boundary), None, false, None)
+        .read_with_head(Some(consistency_boundary.clone()), None, false, None)
         .unwrap();
     assert_eq!(3, result.len());
+    assert_eq!(result[0].event.data, student_registered.data);
+    assert_eq!(result[1].event.data, course_registered.data);
+    assert_eq!(result[2].event.data, student_joined_course.data);
+    assert_eq!(Some(13), head);
+
+    // Read both students backwards
+    let (result, head) = event_store
+        .read_with_head(Some(consistency_boundary.clone()), None, true, None)
+        .unwrap();
+    assert_eq!(3, result.len());
+    assert_eq!(result[2].event.data, student_registered.data);
+    assert_eq!(result[1].event.data, course_registered.data);
+    assert_eq!(result[0].event.data, student_joined_course.data);
     assert_eq!(Some(13), head);
 
     // Final test of head() method after all operations

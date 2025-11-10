@@ -1206,9 +1206,6 @@ UmaDB provides pre-built Docker images for both amd64 and arm64 architectures. T
 ### Pulling the Docker Image
 
 ```bash
-# From Docker Hub
-docker pull umadb/umadb:latest
-
 # From GitHub Container Registry
 docker pull ghcr.io/pyeventsourcing/umadb:latest
 ```
@@ -1219,10 +1216,7 @@ The UmaDB server listens on **port 50051** by default. To run the container:
 
 ```bash
 # Basic run (ephemeral storage)
-docker run -p 50051:50051 umadb/umadb:latest
-
-# Run with custom arguments
-docker run -p 50051:50051 umadb/umadb:latest --help
+docker run -p 50051:50051 ghcr.io/pyeventsourcing/umadb:latest
 ```
 
 ### Persistent Storage with Local File
@@ -1234,10 +1228,10 @@ To persist the database file on your local filesystem, mount a local directory t
 mkdir -p ./umadb-data
 
 # Run with persistent storage
-docker run -p 50051:50051 -v $(pwd)/umadb-data:/data umadb/umadb:latest
+docker run -p 50051:50051 -v $(pwd)/umadb-data:/data ghcr.io/pyeventsourcing/umadb:latest
 
 # Specify a custom database file name
-docker run -p 50051:50051 -v $(pwd)/umadb-data:/data umadb/umadb:latest --db-path /data/my-events.db
+docker run -p 50051:50051 -v $(pwd)/umadb-data:/data ghcr.io/pyeventsourcing/umadb:latest
 ```
 
 The container runs as a non-root user (uid 1000) and stores data in `/data` by default. Make sure the mounted directory has appropriate permissions.
@@ -1257,12 +1251,13 @@ To use a different host port while keeping the container's internal port at 5005
 
 ```bash
 # Map host port 8080 to container port 50051
-docker run -p 8080:50051 -v $(pwd)/umadb-data:/data umadb/umadb:latest
+docker run -p 8080:50051 -v $(pwd)/umadb-data:/data ghcr.io/pyeventsourcing/umadb:latest
 ```
 
 Then connect using:
 ```rust
 let url = "http://localhost:8080".to_string();
+let client = UmaDBClient::new(url).connect()?;
 ```
 
 ### Docker Compose Example
@@ -1273,12 +1268,11 @@ For convenience, you can use Docker Compose:
 version: '3.8'
 services:
   umadb:
-    image: umadb/umadb:latest
+    image: ghcr.io/pyeventsourcing/umadb:latest
     ports:
       - "50051:50051"
     volumes:
       - ./umadb-data:/data
-    command: --db-path /data/events.db
 ```
 
 Run with:

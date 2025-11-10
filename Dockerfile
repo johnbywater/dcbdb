@@ -55,4 +55,4 @@ EXPOSE 50051
 
 # Set default command
 ENTRYPOINT ["/usr/local/bin/umadb"]
-CMD ["--help"]
+CMD ["--listen", "0.0.0.0:50051", "--db-path", "/data"]

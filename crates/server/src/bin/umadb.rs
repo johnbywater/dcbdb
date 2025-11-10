@@ -14,11 +14,11 @@ struct Args {
     #[arg(long = "db-path")]
     db_path: String,
 
-    /// Optional TLS server certificate (PEM)
+    /// Optional TLS server certificate (PEM). Can also be set via UMADB_TLS_CERT environment variable
     #[arg(long = "tls-cert", required = false)]
     cert: Option<String>,
 
-    /// Optional TLS server private key (PEM)
+    /// Optional TLS server private key (PEM). Can also be set via UMADB_TLS_KEY environment variable
     #[arg(long = "tls-key", required = false)]
     key: Option<String>,
 }
@@ -41,6 +41,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
+    // Read TLS cert and key from environment variables if not provided via CLI
+    let cert = args.cert.or_else(|| std::env::var("UMADB_TLS_CERT").ok());
+    let key = args.key.or_else(|| std::env::var("UMADB_TLS_KEY").ok());
+
     // Prepare shutdown trigger
     let (tx, rx) = oneshot::channel::<()>();
 
@@ -50,13 +54,13 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         let _ = tx.send(());
     });
 
-    match (args.cert, args.key) {
+    match (cert, key) {
         (Some(cert), Some(key)) => {
             start_server_secure_from_files(args.db_path, &args.listen, rx, cert, key).await?
         }
         (None, None) => start_server(args.db_path, &args.listen, rx).await?,
         _ => {
-            eprintln!("Both --cert and --key must be provided for TLS");
+            eprintln!("Both --tls-cert and --tls-key (or UMADB_TLS_CERT and UMADB_TLS_KEY) must be provided for TLS");
             std::process::exit(2);
         }
     }

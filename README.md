@@ -329,27 +329,37 @@ This design yields crash-safe commits, allows concurrent readers without blockin
 
 ## Benchmarks
 
+The benchmark plots below were produced on an Apple MacBook Pro M4 (10 performance cores and 4 efficiency cores).
+
+
+![UmaDB benchmark](UmaDB-append-with-readers-bench.png)
+
+The benchmark plot below shows total completed append operations per second from concurrent clients. Each client is
+writing 1 event per request with an append condition. This plot shows that running DCB queries sequentially
+does have a significant impact on throughput compared with the unconditional append operation.
+
+![UmaDB benchmark](UmaDB-append-bench-cond-1-per-request.png)
+
+
 The benchmark plot below shows total appended events per second from concurrent clients. Each client
-is writing one event per request.
+is writing one event per request (no append condition).
 
 ![UmaDB benchmark](UmaDB-append-bench-1-per-request.png)
 
 The benchmark plot below shows total appended events per second from concurrent clients. Each client
-is writing 10 events per request.
+is writing 10 events per request (no append condition).
 
 
 ![UmaDB benchmark](UmaDB-append-bench-10-per-request.png)
 
 The benchmark plot below shows total appended events per second from concurrent clients. Each client
-is writing 100 events per request.
+is writing 100 events per request (no append condition).
 
 ![UmaDB benchmark](UmaDB-append-bench-100-per-request.png)
 
-The benchmark plot below shows total completed append operations per second for concurrent clients, whilst
-there are four other clients concurrently reading events. Each client is writing 1 event per request. This
-plot shows writing is not drastically impeded by concurrent readers.
-
-![UmaDB benchmark](UmaDB-append-with-readers-bench.png)
+The benchmark plot below shows total appended events per second from concurrent clients, whilst
+there are four other clients concurrently reading events. Each client is writing 1 event per request (no append condition).
+This plot shows writing is not drastically impeded by concurrent readers.
 
 The benchmark plot below shows total events received per second across concurrent client read operations, whilst clients
 are throttled to process events at around 10,000 events per second. This plot shows concurrent readers scale quite linearly.
@@ -365,8 +375,6 @@ The benchmark plot below shows total events received per second across concurren
 clients concurrently appending events. This plot shows reading is not drastically impeded by concurrent writers.
 
 ![UmaDB benchmark](UmaDB-read-with-writers-bench.png)
-
-The benchmark plots above were produced on an Apple MacBook Pro M4 (10 performance cores and 4 efficiency cores).
 
 ----
 

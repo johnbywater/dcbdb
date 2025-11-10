@@ -38,10 +38,11 @@ plt.title('UmaDB: Read Operations')
 plt.grid(True, which='both', axis='y')
 plt.grid(True, which='major', axis='x')
 plt.xticks(x, [str(t) for t in x])
+plt.ylim(1000000, 10000000)
 
 # Optional: annotate points
 for t, eps in zip(x, throughputs):
     plt.annotate(f"{eps:,.0f}", (t, eps), textcoords="offset points", xytext=(0, 6), ha='center', fontsize=8)
 
-plt.tight_layout()
+plt.savefig(f"UmaDB-read-unthrottled-bench.png", format="png", dpi=300)
 plt.show()

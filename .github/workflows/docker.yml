@@ -44,7 +44,10 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=true
+          flavor: |
+            latest=auto
+            suffix=-${{ env.PLATFORM_PAIR }},onlatest=false
       
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -110,7 +113,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=true
       
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::thread;
 use tempfile::tempdir;
 use tokio::runtime::Builder as RtBuilder;
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{oneshot};
 use umadb_client::AsyncUmaDBClient;
 use umadb_core::db::UmaDB;
 use umadb_dcb::{
@@ -44,111 +44,105 @@ fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
 }
 
 pub fn grpc_append_cond_benchmark(c: &mut Criterion) {
-    // Initialize DB and server with some events so head() is not None (not required, but realistic)
-    let initial_events = 10_000usize;
-    let (_tmp_dir, db_path) = init_db_with_events(initial_events);
+    for &threads in &[1usize, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024] {
 
-    // Find a free localhost port
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind to ephemeral port");
-    let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
-    drop(listener);
+        // Initialize DB and server with some events so head() is not None (not required, but realistic)
+        let initial_events = 10_000usize;
+        let (_tmp_dir, db_path) = init_db_with_events(initial_events);
 
-    let addr_http = format!("http://{}", addr);
+        // Find a free localhost port
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind to ephemeral port");
+        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        drop(listener);
 
-    // Start the gRPC server in a background thread, with shutdown channel
-    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-    let db_path_clone = db_path.clone();
-    let addr_clone = addr.clone();
+        let addr_http = format!("http://{}", addr);
 
-    let server_thread = thread::spawn(move || {
-        let server_threads = std::thread::available_parallelism()
+        // Start the gRPC server in a background thread, with shutdown channel
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let db_path_clone = db_path.clone();
+        let addr_clone = addr.clone();
+
+        let parallelism = std::thread::available_parallelism();
+        let server_threads = parallelism
             .map(|n| n.get())
             .unwrap_or(1);
+
+        let server_thread = thread::spawn(move || {
+            let rt = RtBuilder::new_multi_thread()
+                .worker_threads(server_threads)
+                .enable_all()
+                .build()
+                .expect("build tokio rt for server");
+            rt.block_on(async move {
+                start_server(db_path_clone, &addr_clone, shutdown_rx)
+                    .await
+                    .expect("start server");
+            });
+        });
+
+        // Wait until the server is actually accepting connections (avoid race with startup)
+        {
+            use std::time::Duration;
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                if std::net::TcpStream::connect(&addr).is_ok() {
+                    break;
+                }
+                if std::time::Instant::now() >= deadline {
+                    panic!("server did not start listening within timeout at {}", addr);
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+
+        let mut group = c.benchmark_group("grpc_append_cond");
+        group.sample_size(100);
+
+        // Number of events appended per iteration by a single writer client
+        let events_per_iter = 1usize;
+
+        // Build a single Tokio runtime with fixed number of worker threads
         let rt = RtBuilder::new_multi_thread()
             .worker_threads(server_threads)
             .enable_all()
             .build()
-            .expect("build tokio rt for server");
-        rt.block_on(async move {
-            start_server(db_path_clone, &addr_clone, shutdown_rx)
-                .await
-                .expect("start server");
-        });
-    });
+            .expect("build tokio rt (writers)");
 
-    // Wait until the server is actually accepting connections (avoid race with startup)
-    {
-        use std::time::Duration;
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        loop {
-            if std::net::TcpStream::connect(&addr).is_ok() {
-                break;
-            }
-            if std::time::Instant::now() >= deadline {
-                panic!("server did not start listening within timeout at {}", addr);
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-    }
+        // Establish a single gRPC connection
+        let client = Arc::new(
+            rt.block_on(AsyncUmaDBClient::connect(&addr_http, None))
+                .expect("connect client"),
+        );
 
-    let mut group = c.benchmark_group("grpc_append_cond");
-    group.sample_size(40);
+        let after = rt
+            .block_on(async { client.head().await.expect("head ok") })
+            .unwrap_or(0);
 
-    // Number of events appended per iteration by a single writer client
-    let events_per_iter = 1usize;
 
-    for &threads in &[1usize, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024] {
-        // Report throughput as the total across all writer clients
+        // Report throughput as the total across all concurrent appends
         group.throughput(Throughput::Elements(
             (events_per_iter as u64) * (threads as u64),
         ));
 
-        // Build a Tokio runtime and multiple persistent clients (one per concurrent writer)
-        let rt = RtBuilder::new_multi_thread()
-            .worker_threads(threads)
-            .enable_all()
-            .build()
-            .expect("build tokio rt (writers)");
-
-        // Establish independent gRPC connections and per-writer state (tag, last_pos)
-        let mut clients: Vec<Arc<AsyncUmaDBClient>> = Vec::with_capacity(threads);
+        // Prepare per-writer state (tag, last_pos)
         let mut tags: Vec<String> = Vec::with_capacity(threads);
         for i in 0..threads {
-            let c = rt
-                .block_on(AsyncUmaDBClient::connect(&addr_http, None))
-                .expect("connect client");
-            clients.push(Arc::new(c));
             tags.push(format!("writer-{}", i));
         }
-        let clients = Arc::new(clients);
         let tags = Arc::new(tags);
 
         // Initialize last_pos for each writer with current head position
-        let mut last_positions: Vec<Arc<Mutex<Option<u64>>>> = Vec::with_capacity(threads);
-        for i in 0..threads {
-            let client = clients[i].clone();
-            let initial = rt
-                .block_on(async { client.head().await.expect("head ok") })
-                .unwrap_or(0);
-            last_positions.push(Arc::new(Mutex::new(Some(initial))));
-        }
-        let last_positions = Arc::new(last_positions);
-
+        let client = client.clone();
+        let rt_handle = rt.handle().clone();
         group.bench_function(BenchmarkId::from_parameter(threads), move |b| {
-            let clients = clients.clone();
             let tags = tags.clone();
-            let last_positions = last_positions.clone();
             b.iter(|| {
-                // Each writer appends 1 event with its own tag and a condition on that tag and last head
-                rt.block_on(async {
+                // Spawn threads number of concurrent append tasks using the single client
+                rt_handle.block_on(async {
                     let futs = (0..threads).map(|i| {
-                        let client = clients[i].clone();
+                        let client = client.clone();
                         let tag = tags[i].clone();
-                        let pos_cell = last_positions[i].clone();
                         async move {
-                            let mut guard = pos_cell.lock().await;
-                            let after = *guard; // Option<u64>
-
                             // Build event for this writer
                             let events: Vec<DCBEvent> = (0..events_per_iter)
                                 .map(|j| DCBEvent {
@@ -161,34 +155,34 @@ pub fn grpc_append_cond_benchmark(c: &mut Criterion) {
 
                             // Build condition: fail if any events with this tag exist after `after`
                             let condition = DCBAppendCondition {
-                                fail_if_events_match: Arc::new(DCBQuery {
+                                fail_if_events_match: DCBQuery {
                                     items: vec![DCBQueryItem {
                                         types: vec![],
-                                        tags: vec![tag.clone()],
+                                        tags: vec!["init".to_string()],
                                     }],
-                                }),
-                                after,
+                                },
+                                after: Some(after),
                             };
 
-                            let new_pos = client
+                            let _ = black_box(client
                                 .append(black_box(events), Some(condition))
                                 .await
-                                .expect("append events");
-                            // Update last known position for this writer
-                            *guard = Some(new_pos);
+                                .expect("append events"));
                         }
                     });
                     let _ = join_all(futs).await;
                 });
             });
         });
+
+        group.finish();
+
+        // Shutdown server
+        let _ = shutdown_tx.send(());
+        let _ = server_thread.join();
+
     }
 
-    group.finish();
-
-    // Shutdown server
-    let _ = shutdown_tx.send(());
-    let _ = server_thread.join();
 }
 
 criterion_group!(benches, grpc_append_cond_benchmark);

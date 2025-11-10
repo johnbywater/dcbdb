@@ -44,4 +44,5 @@ for t, eps in zip(x, throughputs):
     plt.annotate(f"{eps:,.0f}", (t, eps), textcoords="offset points", xytext=(0, 6), ha='center', fontsize=8)
 
 plt.tight_layout()
+plt.savefig(f"UmaDB-append-with-readers-bench.png", format="png", dpi=300)
 plt.show()

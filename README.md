@@ -368,7 +368,7 @@ This plot shows writing is not drastically impeded by concurrent readers.
 ### Conditional Read
 
 The benchmark plot below shows total events received per second across concurrent client read operations, whilst clients
-are selecting events for one tag.
+are selecting all events for one tag from a population of 10,000 tags, each of which has 20 recorded events.
 
 ![UmaDB benchmark](UmaDB-read-cond-bench.png)
 

@@ -44,17 +44,17 @@ jobs:
             artifact_name: umadb
             asset_name: umadb-macos-arm64
           
-          # Windows x86_64
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact_name: umadb.exe
-            asset_name: umadb-windows-amd64.exe
-          
-          # Windows aarch64
-          - os: windows-latest
-            target: aarch64-pc-windows-msvc
-            artifact_name: umadb.exe
-            asset_name: umadb-windows-arm64.exe
+#          # Windows x86_64
+#          - os: windows-latest
+#            target: x86_64-pc-windows-msvc
+#            artifact_name: umadb.exe
+#            asset_name: umadb-windows-amd64.exe
+#
+#          # Windows aarch64
+#          - os: windows-latest
+#            target: aarch64-pc-windows-msvc
+#            artifact_name: umadb.exe
+#            asset_name: umadb-windows-arm64.exe
     
     steps:
     - uses: actions/checkout@v4
@@ -105,10 +105,14 @@ jobs:
     - name: Build binary
       run: cargo build --release --target ${{ matrix.target }} -p umadb-server
     
-    - name: Strip binary (Linux and macOS)
-      if: matrix.os != 'windows-latest'
+    - name: Strip binary (Linux aarch64)
+      if: matrix.target == 'aarch64-unknown-linux-gnu'
+      run: aarch64-linux-gnu-strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+
+    - name: Strip binary (other Unix platforms)
+      if: matrix.os != 'windows-latest' && matrix.target != 'aarch64-unknown-linux-gnu'
       run: strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
-    
+
     - name: Create archive
       shell: bash
       run: |

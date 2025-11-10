@@ -60,7 +60,9 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         }
         (None, None) => start_server(args.db_path, &args.listen, rx).await?,
         _ => {
-            eprintln!("Both --tls-cert and --tls-key (or UMADB_TLS_CERT and UMADB_TLS_KEY) must be provided for TLS");
+            eprintln!(
+                "Both --tls-cert and --tls-key (or UMADB_TLS_CERT and UMADB_TLS_KEY) must be provided for TLS"
+            );
             std::process::exit(2);
         }
     }

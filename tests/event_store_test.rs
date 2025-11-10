@@ -363,7 +363,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(event3.data, result[0].event.data);
     assert_eq!(event2.data, result[1].event.data);
     assert_eq!(event1.data, result[2].event.data);
-    assert_eq!(Some(1), head);  // TODO: Maybe should return highest rather than lowest?
+    assert_eq!(Some(1), head); // TODO: Maybe should return highest rather than lowest?
 
     // Read type1 start 2, expect no events.
     let (result, head) = event_store
@@ -633,7 +633,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
         ],
     };
     let (result, head) = event_store
-        .read_with_head(Some(query_type3_tag_c_or_type2_tag_b.clone()), None, false, None)
+        .read_with_head(
+            Some(query_type3_tag_c_or_type2_tag_b.clone()),
+            None,
+            false,
+            None,
+        )
         .unwrap();
     assert_eq!(2, result.len());
     assert_eq!(event2.data, result[0].event.data);
@@ -642,7 +647,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
 
     // Backwards
     let (result, head) = event_store
-        .read_with_head(Some(query_type3_tag_c_or_type2_tag_b.clone()), None, true, None)
+        .read_with_head(
+            Some(query_type3_tag_c_or_type2_tag_b.clone()),
+            None,
+            true,
+            None,
+        )
         .unwrap();
     assert_eq!(2, result.len());
     assert_eq!(event3.data, result[0].event.data);
@@ -651,7 +661,12 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
 
     // Backwards limit 1
     let (result, head) = event_store
-        .read_with_head(Some(query_type3_tag_c_or_type2_tag_b.clone()), None, true, Some(1))
+        .read_with_head(
+            Some(query_type3_tag_c_or_type2_tag_b.clone()),
+            None,
+            true,
+            Some(1),
+        )
         .unwrap();
     assert_eq!(1, result.len());
     assert_eq!(event3.data, result[0].event.data);
@@ -957,10 +972,7 @@ pub fn dcb_event_store_test<T: DCBEventStoreSync>(event_store: &T) {
     assert_eq!(13, result.len());
     assert_eq!(result[2].event.event_type, student_registered.event_type);
     assert_eq!(result[1].event.event_type, course_registered.event_type);
-    assert_eq!(
-        result[0].event.event_type,
-        student_joined_course.event_type
-    );
+    assert_eq!(result[0].event.event_type, student_joined_course.event_type);
     assert_eq!(result[2].event.data, student_registered.data);
     assert_eq!(result[1].event.data, course_registered.data);
     assert_eq!(result[0].event.data, student_joined_course.data);

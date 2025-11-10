@@ -63,10 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .uuid(Uuid::new_v4()); // different UUID
 
     let conflicting_result = client
-        .append(
-            vec![conflicting_event.clone()],
-            Some(condition.clone()),
-        )
+        .append(vec![conflicting_event.clone()], Some(condition.clone()))
         .await;
 
     // Expect an integrity error
@@ -87,10 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     if position1 == position2 {
-        println!(
-            "Append method returned same commit position: {}",
-            position2
-        );
+        println!("Append method returned same commit position: {}", position2);
     } else {
         panic!("Expected idempotent retry!")
     }

@@ -959,7 +959,7 @@ All the client methods return this type, which yields either a successful result
 
 Here's an example of how to use the synchronous Rust client for UmaDB:
 
-```rust
+```
 use umadb_client::UmaDBClient;
 use umadb_dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreSync, DCBQuery, DCBQueryItem,
@@ -1036,10 +1036,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let position2 = client.append(vec![event.clone()], Some(append_condition.clone()))?;
 
     if position1 == position2 {
-        println!(
-            "Append method returned same commit position: {}",
-            position2
-        );
+        println!("Append method returned same commit position: {}", position2);
     } else {
         panic!("Expected idempotent retry!")
     }
@@ -1133,10 +1130,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .uuid(Uuid::new_v4()); // different UUID
 
     let conflicting_result = client
-        .append(
-            vec![conflicting_event.clone()],
-            Some(condition.clone()),
-        )
+        .append(vec![conflicting_event.clone()], Some(condition.clone()))
         .await;
 
     // Expect an integrity error
@@ -1157,10 +1151,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     if position1 == position2 {
-        println!(
-            "Append method returned same commit position: {}",
-            position2
-        );
+        println!("Append method returned same commit position: {}", position2);
     } else {
         panic!("Expected idempotent retry!")
     }

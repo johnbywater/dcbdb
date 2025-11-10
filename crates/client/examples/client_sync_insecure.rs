@@ -74,10 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let position2 = client.append(vec![event.clone()], Some(append_condition.clone()))?;
 
     if position1 == position2 {
-        println!(
-            "Append method returned same commit position: {}",
-            position2
-        );
+        println!("Append method returned same commit position: {}", position2);
     } else {
         panic!("Expected idempotent retry!")
     }

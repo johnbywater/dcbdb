@@ -399,10 +399,10 @@ cargo run --bin umadb -- --listen 127.0.0.1:50051 --db-path ./uma.db
 
 The `umadb` executable accepts the following command-line options:
 
-- `    --listen`:  Listen address, e.g. 127.0.0.1:50051
-- `    --db-path`: Path to database file or folder
-- `-c, --tls-cert`: Optional TLS server certificate (PEM)
-- `-k, --tls-key`: Optional TLS server private key (PEM)
+- `--listen`:  Listen address, e.g. 127.0.0.1:50051
+- `--db-path`: Path to database file or folder
+- `--tls-cert`: Optional TLS server certificate (PEM)
+- `--tls-key`: Optional TLS server private key (PEM)
 - `-h, --help`: Print help information
 - `-V, --version`: Print version information
 

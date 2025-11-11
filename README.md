@@ -102,7 +102,7 @@ Event positions are:
 
 ### Tags and Queries
 
-Tags enable efficient filtered reading of events. A tags is an arbitrary string. Common patterns include:
+Tags enable efficient filtered reading of events. A tag is an arbitrary string. Common patterns include:
 
 * Entity identifiers: `"order:12345"`
 * Categories: `"region:us-west"`

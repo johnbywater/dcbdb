@@ -1,0 +1,19 @@
+[package]
+name = "umadb-python"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+description = "Python bindings for UmaDB event store client"
+repository = "https://github.com/pyeventsourcing/umadb"
+keywords = ["event-store", "grpc", "client", "python"]
+categories = ["database", "network-programming"]
+
+[lib]
+name = "umadb"
+crate-type = ["cdylib"]
+
+[dependencies]
+umadb-client = { path = "../client" }
+umadb-dcb = { path = "../dcb" }
+pyo3 = { version = "0.24", features = ["extension-module", "abi3-py39"] }
+uuid = { workspace = true }

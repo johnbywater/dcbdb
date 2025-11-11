@@ -4,3 +4,4 @@
 /test-data
 /server.key
 /server.pem
+/crates/python/python/umadb/_umadb.cpython-314-darwin.so

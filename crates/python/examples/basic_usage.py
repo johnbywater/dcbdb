@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+"""
+Basic usage example for UmaDB Python client.
+
+This example demonstrates:
+1. Connecting to a UmaDB server
+2. Appending events
+3. Reading events
+4. Using queries to filter events
+5. Using append conditions
+"""
+
+from umadb import Client, Event, Query, QueryItem, AppendCondition
+
+
+def main():
+    # Connect to UmaDB server (make sure server is running)
+    print("Connecting to UmaDB server...")
+    client = Client("http://localhost:50051")
+
+    # Get current head position
+    head = client.head()
+    print(f"Current head position: {head}")
+
+    # Create and append some events
+    print("\nAppending events...")
+    events = [
+        Event(
+            event_type="UserCreated",
+            data=b'{"user_id": "123", "name": "Alice"}',
+            tags=["user", "user:123"],
+        ),
+        Event(
+            event_type="UserUpdated",
+            data=b'{"user_id": "123", "email": "alice@example.com"}',
+            tags=["user", "user:123"],
+        ),
+        Event(
+            event_type="OrderCreated",
+            data=b'{"order_id": "456", "user_id": "123"}',
+            tags=["order", "user:123", "order:456"],
+        ),
+    ]
+
+    position = client.append(events)
+    print(f"Events appended, last position: {position}")
+
+    # Read all events
+    print("\nReading all events...")
+    all_events = client.read()
+    for seq_event in all_events:
+        print(f"  Position {seq_event.position}: {seq_event.event.event_type} - tags: {seq_event.event.tags}")
+
+    # Read with query to filter events
+    print("\nReading user-related events...")
+    user_query_item = QueryItem(tags=["user"])
+    user_query = Query(items=[user_query_item])
+    user_events = client.read(query=user_query)
+    for seq_event in user_events:
+        print(f"  Position {seq_event.position}: {seq_event.event.event_type}")
+
+    # Read with multiple filters (OR logic)
+    print("\nReading UserCreated OR OrderCreated events...")
+    query = Query(items=[
+        QueryItem(types=["UserCreated"]),
+        QueryItem(types=["OrderCreated"]),
+    ])
+    filtered_events = client.read(query=query)
+    for seq_event in filtered_events:
+        print(f"  Position {seq_event.position}: {seq_event.event.event_type}")
+
+    # Read with limit
+    print("\nReading last 2 events...")
+    recent_events = client.read(limit=2, backwards=True)
+    for seq_event in recent_events:
+        print(f"  Position {seq_event.position}: {seq_event.event.event_type}")
+
+    # Try conditional append (preventing duplicate UserCreated for user:123)
+    print("\nTrying conditional append (should fail)...")
+    fail_query = Query(items=[
+        QueryItem(types=["UserCreated"], tags=["user:123"])
+    ])
+    condition = AppendCondition(fail_if_events_match=fail_query)
+
+    duplicate_event = Event(
+        event_type="UserCreated",
+        data=b'{"user_id": "123", "name": "Alice Again"}',
+        tags=["user", "user:123"],
+    )
+
+    try:
+        client.append([duplicate_event], condition=condition)
+        print("  Unexpected: append succeeded")
+    except ValueError as e:
+        print(f"  Expected: append failed - {e}")
+
+    # Conditional append that should succeed
+    print("\nTrying conditional append for new user (should succeed)...")
+    new_user_event = Event(
+        event_type="UserCreated",
+        data=b'{"user_id": "456", "name": "Bob"}',
+        tags=["user", "user:456"],
+    )
+    fail_query = Query(items=[
+        QueryItem(types=["UserCreated"], tags=["user:456"])
+    ])
+    condition = AppendCondition(fail_if_events_match=fail_query)
+
+    try:
+        position = client.append([new_user_event], condition=condition)
+        print(f"  Success: event appended at position {position}")
+    except ValueError as e:
+        print(f"  Failed: {e}")
+
+    # Final head position
+    final_head = client.head()
+    print(f"\nFinal head position: {final_head}")
+
+
+if __name__ == "__main__":
+    main()

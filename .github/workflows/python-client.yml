@@ -45,14 +45,14 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --manifest-path crates/python/Cargo.toml
+          args: --release --out dist --manifest-path crates/python/Cargo.toml --install-protoc
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: auto
       - name: Build free-threaded wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --manifest-path crates/python/Cargo.toml -i python3.13t
+          args: --release --out dist --manifest-path crates/python/Cargo.toml -i python3.13t --install-protoc
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: auto
       - name: Upload wheels
@@ -79,22 +79,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --manifest-path crates/python/Cargo.toml
+          args: --release --out dist --manifest-path crates/python/Cargo.toml --install-protoc
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: musllinux_1_2
       - name: Build free-threaded wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --manifest-path crates/python/Cargo.toml -i python3.13t
+          args: --release --out dist --manifest-path crates/python/Cargo.toml -i python3.13t  --install-protoc
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: musllinux_1_2
       - name: Upload wheels
@@ -118,15 +114,11 @@ jobs:
         with:
           python-version: "3.13"
           architecture: ${{ matrix.platform.target }}
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --manifest-path crates/python/Cargo.toml
+          args: --release --out dist --manifest-path crates/python/Cargo.toml --install-protoc
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
       - uses: actions/setup-python@v5
         with:
@@ -136,7 +128,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --manifest-path crates/python/Cargo.toml -i python3.13t
+          args: --release --out dist --manifest-path crates/python/Cargo.toml -i python3.13t --install-protoc
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -158,21 +150,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --manifest-path crates/python/Cargo.toml
+          args: --release --out dist --manifest-path crates/python/Cargo.toml --install-protoc
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
       - name: Build free-threaded wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --manifest-path crates/python/Cargo.toml -i python3.13t
+          args: --release --out dist --manifest-path crates/python/Cargo.toml -i python3.13t --install-protoc
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
       - name: Upload wheels
         uses: actions/upload-artifact@v4

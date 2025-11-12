@@ -56,10 +56,10 @@ jobs:
             curl -LO "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${PROTOC_ZIP}"
             mkdir -p "$HOME/protoc"
             python3 - <<'PYCODE'
-            import zipfile, sys, os
-                with zipfile.ZipFile(sys.argv[1]) as zf:
+          import zipfile, sys, os
+          with zipfile.ZipFile(sys.argv[1]) as zf:
             zf.extractall(sys.argv[2])
-            PYCODE "${PROTOC_ZIP}" "$HOME/protoc"
+            PYCODE
             export PATH="$HOME/protoc/bin:$PATH"
 
       - name: Build free-threaded wheels
@@ -81,10 +81,10 @@ jobs:
             curl -LO "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${PROTOC_ZIP}"
             mkdir -p "$HOME/protoc"
             python3 - <<'PYCODE'
-            import zipfile, sys, os
-            with zipfile.ZipFile(sys.argv[1]) as zf:
-                zf.extractall(sys.argv[2])
-            PYCODE "${PROTOC_ZIP}" "$HOME/protoc"
+          import zipfile, sys, os
+          with zipfile.ZipFile(sys.argv[1]) as zf:
+            zf.extractall(sys.argv[2])
+            PYCODE
             export PATH="$HOME/protoc/bin:$PATH"
       - name: Upload wheels
         uses: actions/upload-artifact@v4

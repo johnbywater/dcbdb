@@ -109,6 +109,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -117,9 +118,19 @@ jobs:
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: musllinux_1_2
           before-script-linux: |
-            curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v23.2/protoc-23.2-linux-x86_64.zip
-            unzip protoc-23.2-linux-x86_64.zip -d $HOME/protoc
+            PROTOC_VERSION=23.2
+            case "$(uname -m)" in
+              x86_64)  PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-x86_64.zip" ;;
+              aarch64) PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-aarch_64.zip" ;;
+              armv7l)  PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-armv7.zip" ;;
+              i686)    PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-x86_32.zip" ;;
+              *) echo "Unsupported arch: $(uname -m)" >&2; exit 1 ;;
+            esac
+            curl -LO "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${PROTOC_ZIP}"
+            unzip "${PROTOC_ZIP}" -d "$HOME/protoc"
             export PATH="$HOME/protoc/bin:$PATH"
+      
+
       - name: Build free-threaded wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -128,14 +139,25 @@ jobs:
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: musllinux_1_2
           before-script-linux: |
-            curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v23.2/protoc-23.2-linux-x86_64.zip
-            unzip protoc-23.2-linux-x86_64.zip -d $HOME/protoc
+            PROTOC_VERSION=23.2
+            case "$(uname -m)" in
+              x86_64)  PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-x86_64.zip" ;;
+              aarch64) PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-aarch_64.zip" ;;
+              armv7l)  PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-armv7.zip" ;;
+              i686)    PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-x86_32.zip" ;;
+              *) echo "Unsupported arch: $(uname -m)" >&2; exit 1 ;;
+            esac
+            curl -LO "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${PROTOC_ZIP}"
+            unzip "${PROTOC_ZIP}" -d "$HOME/protoc"
             export PATH="$HOME/protoc/bin:$PATH"
+      
+
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
           name: wheels-musllinux-${{ matrix.platform.target }}
           path: dist
+
 
   windows:
     runs-on: ${{ matrix.platform.runner }}

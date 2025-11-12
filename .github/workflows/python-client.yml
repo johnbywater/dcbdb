@@ -54,6 +54,7 @@ jobs:
           args: --release --out dist --manifest-path crates/python/Cargo.toml -i python${{ matrix.python-version }}
 #          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: auto
+          container: ${{ matrix.platform.container }}
           before-script-linux: |
             PROTOC_VERSION=23.2
             case "$(uname -m)" in

@@ -30,6 +30,7 @@ jobs:
 #            target: x86
           - runner: ubuntu-22.04
             target: aarch64
+            container: quay.io/pypa/manylinux2014_aarch64:latest
 #          - runner: ubuntu-22.04
 #            target: armv7
 #          - runner: ubuntu-22.04
@@ -54,7 +55,6 @@ jobs:
 #          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: auto
           before-script-linux: |
-            sudo apt-get install gcc
             PROTOC_VERSION=23.2
             case "$(uname -m)" in
               x86_64)  PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-x86_64.zip" ;;

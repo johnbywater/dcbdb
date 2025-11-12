@@ -39,12 +39,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
           args: --release --out dist --manifest-path crates/python/Cargo.toml
-          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+#          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: auto
           before-script-linux: |
             PROTOC_VERSION=23.2
@@ -65,36 +66,12 @@ jobs:
             chmod +x "$HOME/protoc/bin/protoc"
             export PATH="$HOME/protoc/bin:$PATH"
 
-      - name: Build free-threaded wheels
-        uses: PyO3/maturin-action@v1
-        with:
-          target: ${{ matrix.platform.target }}
-          args: --release --out dist --manifest-path crates/python/Cargo.toml -i python3.13t
-          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
-          manylinux: auto
-          before-script-linux: |
-            PROTOC_VERSION=23.2
-            case "$(uname -m)" in
-              x86_64)  PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-x86_64.zip" ;;
-              aarch64) PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-aarch_64.zip" ;;
-              armv7l)  PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-armv7.zip" ;;
-              i686)    PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-x86_32.zip" ;;
-              *) echo "Unsupported arch: $(uname -m)" >&2; exit 1 ;;
-            esac
-            curl -LO "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${PROTOC_ZIP}"
-            mkdir -p "$HOME/protoc"
-            python3 - "$PROTOC_ZIP" "$HOME/protoc" <<'PYCODE'
-            import zipfile, sys, os
-            with zipfile.ZipFile(sys.argv[1]) as zf:
-                zf.extractall(sys.argv[2])
-            PYCODE
-            chmod +x "$HOME/protoc/bin/protoc"
-            export PATH="$HOME/protoc/bin:$PATH"
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-linux-${{ matrix.python-version }}-${{ matrix.platform.target }}
+          name: wheels-musllinux-${{ matrix.python-version }}-${{ matrix.platform.target }}
           path: dist
+
 
   musllinux:
     runs-on: ${{ matrix.platform.runner }}
@@ -122,7 +99,7 @@ jobs:
         with:
           target: ${{ matrix.platform.target }}
           args: --release --out dist --manifest-path crates/python/Cargo.toml
-          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+#          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: musllinux_1_2
           before-script-linux: |
             PROTOC_VERSION=23.2
@@ -136,28 +113,6 @@ jobs:
             curl -LO "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${PROTOC_ZIP}"
             unzip "${PROTOC_ZIP}" -d "$HOME/protoc"
             export PATH="$HOME/protoc/bin:$PATH"
-      
-
-      - name: Build free-threaded wheels
-        uses: PyO3/maturin-action@v1
-        with:
-          target: ${{ matrix.platform.target }}
-          args: --release --out dist --manifest-path crates/python/Cargo.toml -i python3.13t
-          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
-          manylinux: musllinux_1_2
-          before-script-linux: |
-            PROTOC_VERSION=23.2
-            case "$(uname -m)" in
-              x86_64)  PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-x86_64.zip" ;;
-              aarch64) PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-aarch_64.zip" ;;
-              armv7l)  PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-armv7.zip" ;;
-              i686)    PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-x86_32.zip" ;;
-              *) echo "Unsupported arch: $(uname -m)" >&2; exit 1 ;;
-            esac
-            curl -LO "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${PROTOC_ZIP}"
-            unzip "${PROTOC_ZIP}" -d "$HOME/protoc"
-            export PATH="$HOME/protoc/bin:$PATH"
-      
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -175,28 +130,27 @@ jobs:
         platform:
           - runner: windows-latest
             target: x64
-          - runner: windows-latest
-            target: x86
+#          - runner: windows-latest
+#            target: x86
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           architecture: ${{ matrix.platform.target }}
+
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
           args: --release --out dist --manifest-path crates/python/Cargo.toml
 #          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: 3.13t
-          architecture: ${{ matrix.platform.target }}
+
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
@@ -212,23 +166,26 @@ jobs:
         platform:
           - runner: macos-latest
             target: aarch64
-          - runner: macos-15-intel
-            target: x86_64
+#          - runner: macos-15-intel
+#            target: x86_64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
           args: --release --out dist --manifest-path crates/python/Cargo.toml
 #          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
@@ -239,11 +196,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Build sdist
         uses: PyO3/maturin-action@v1
         with:
           command: sdist
           args: --out dist --manifest-path crates/python/Cargo.toml
+
       - name: Upload sdist
         uses: actions/upload-artifact@v4
         with:

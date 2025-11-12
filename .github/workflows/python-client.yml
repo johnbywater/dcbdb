@@ -17,6 +17,8 @@ permissions:
 jobs:
   linux:
     runs-on: ${{ matrix.platform.runner }}
+    env:
+      PYO3_USE_ABI3_FORWARD_COMPATIBILITY: 1
     strategy:
       matrix:
         python-version: ["3.14"]
@@ -75,6 +77,8 @@ jobs:
 
   musllinux:
     runs-on: ${{ matrix.platform.runner }}
+    env:
+      PYO3_USE_ABI3_FORWARD_COMPATIBILITY: 1
     strategy:
       matrix:
         python-version: ["3.14"]
@@ -123,6 +127,8 @@ jobs:
 
   windows:
     runs-on: ${{ matrix.platform.runner }}
+    env:
+      PYO3_USE_ABI3_FORWARD_COMPATIBILITY: 1
     strategy:
       matrix:
         python-version: ["3.14"]
@@ -159,6 +165,8 @@ jobs:
 
   macos:
     runs-on: ${{ matrix.platform.runner }}
+    env:
+      PYO3_USE_ABI3_FORWARD_COMPATIBILITY: 1
     strategy:
       matrix:
         python-version: ["3.14"]

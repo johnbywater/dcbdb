@@ -15,7 +15,9 @@ resolver = "2"
 default-members = [
   "crates/server"
 ]
-
+exclude = [
+  "crates/python"
+]
 [workspace.package]
 version = "0.1.5"
 edition = "2024"
@@ -27,7 +29,8 @@ futures = "0.3.31"
 libc = "0.2.174"
 tempfile = "3.23.0"
 thiserror = "2.0.17"
-tonic = { version = "0.14.2", features = ["tls-native-roots", "tls-ring"] }
+tonic = { version = "0.14.2", features = ["server", "tls-native-roots", "tls-aws-lc"] }
+# TODO: How to enable the optional FIPS support?
 tonic-health = "0.14.2"
 tokio = { version = "1.48.0", features = ["full"] }
 uuid = { version = "1.18.1", features = ["v4"] }

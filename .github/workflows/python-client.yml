@@ -54,7 +54,7 @@ jobs:
 #          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: auto
           before-script-linux: |
-            yum install -y gcc gcc-c++ glibc-devel glibc-headers libatomic
+            sudo apt-get install gcc
             PROTOC_VERSION=23.2
             case "$(uname -m)" in
               x86_64)  PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-x86_64.zip" ;;

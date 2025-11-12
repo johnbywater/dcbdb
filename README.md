@@ -824,7 +824,7 @@ for read_response in subscription_stream:
 
 ```
 
-An actual Python client for UmaDB is forthcoming.
+The [official Python client](https://pypi.org/project/umadb/) for UmaDB is available on PyPI.
 
 ----
 

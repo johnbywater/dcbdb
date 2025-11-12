@@ -4,24 +4,12 @@ A Python client for UmaDB event store built using Rust bindings via PyO3 and Mat
 
 ## Installation
 
-### From PyPI (once published)
+### From PyPI
+
+First, create and activate a virtual environment. Then:
 
 ```bash
 pip install umadb
-```
-
-### From Source
-
-```bash
-# Install maturin
-pip install maturin
-
-# Build and install in development mode
-cd crates/python
-maturin develop
-
-# Or build a wheel
-maturin build --release
 ```
 
 ## Usage
@@ -188,16 +176,19 @@ Condition for conditional appends.
 
 ### Building
 
+First, create and activate a virtual environment. Then:
+
 ```bash
-# Install development dependencies
+# Install maturin
 pip install maturin
 
-# Build in development mode
-maturin develop
+# Build and install in development mode
+maturin develop -m crates/python/Cargo.toml
 
-# Run tests
-pytest
+# Or build a wheel
+maturin build -m crates/python/Cargo.toml --release
 ```
+
 
 ### Testing
 

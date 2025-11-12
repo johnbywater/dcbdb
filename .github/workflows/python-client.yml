@@ -71,7 +71,7 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-musllinux-${{ matrix.python-version }}-${{ matrix.platform.target }}
+          name: wheels-linux-${{ matrix.python-version }}-${{ matrix.platform.target }}
           path: dist
 
 
@@ -136,8 +136,8 @@ jobs:
         platform:
           - runner: windows-latest
             target: x64
-#          - runner: windows-latest
-#            target: x86
+          - runner: windows-latest
+            target: x86
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -174,8 +174,8 @@ jobs:
         platform:
           - runner: macos-latest
             target: aarch64
-#          - runner: macos-15-intel
-#            target: x86_64
+          - runner: macos-15-intel
+            target: x86_64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

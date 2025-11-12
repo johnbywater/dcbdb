@@ -45,8 +45,21 @@ jobs:
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: auto
           before-script-linux: |
-            curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v23.2/protoc-23.2-linux-x86_64.zip
-            unzip protoc-23.2-linux-x86_64.zip -d $HOME/protoc
+            set -eux
+            PROTOC_VERSION=23.2
+            ARCH=$(uname -m)
+            case "$ARCH" in
+              x86_64)  PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-x86_64.zip" ;;
+              aarch64) PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-aarch_64.zip" ;;
+              ppc64le) PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-ppcle_64.zip" ;;
+              s390x)   PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-s390x.zip" ;;
+              armv7l)  PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-armv7.zip" ;;
+              i686)    PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-x86_32.zip" ;;
+              *) echo "Unsupported arch: $ARCH" >&2; exit 1 ;;
+            esac
+            curl -LO "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${PROTOC_ZIP}"
+            mkdir -p "$HOME/protoc"
+            bsdtar -xf "${PROTOC_ZIP}" -C "$HOME/protoc"
             export PATH="$HOME/protoc/bin:$PATH"
       - name: Build free-threaded wheels
         uses: PyO3/maturin-action@v1
@@ -56,8 +69,21 @@ jobs:
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: auto
           before-script-linux: |
-            curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v23.2/protoc-23.2-linux-x86_64.zip
-            unzip protoc-23.2-linux-x86_64.zip -d $HOME/protoc
+            set -eux
+            PROTOC_VERSION=23.2
+            ARCH=$(uname -m)
+            case "$ARCH" in
+              x86_64)  PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-x86_64.zip" ;;
+              aarch64) PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-aarch_64.zip" ;;
+              ppc64le) PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-ppcle_64.zip" ;;
+              s390x)   PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-s390x.zip" ;;
+              armv7l)  PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-armv7.zip" ;;
+              i686)    PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-x86_32.zip" ;;
+              *) echo "Unsupported arch: $ARCH" >&2; exit 1 ;;
+            esac
+            curl -LO "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${PROTOC_ZIP}"
+            mkdir -p "$HOME/protoc"
+            bsdtar -xf "${PROTOC_ZIP}" -C "$HOME/protoc"
             export PATH="$HOME/protoc/bin:$PATH"
       - name: Upload wheels
         uses: actions/upload-artifact@v4

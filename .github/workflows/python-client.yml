@@ -24,10 +24,10 @@ jobs:
         python-version: ["3.14"]
         #        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.13t", "3.14", "3.14t"]
         platform:
-          - runner: ubuntu-22.04
-            target: x86_64
-          - runner: ubuntu-22.04
-            target: x86
+#          - runner: ubuntu-22.04
+#            target: x86_64
+#          - runner: ubuntu-22.04
+#            target: x86
           - runner: ubuntu-22.04
             target: aarch64
 #          - runner: ubuntu-22.04

@@ -41,6 +41,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         env:
           RING_FORCE_PURE: 1
+          RING_PREGENERATE_ASM: 0
         with:
           target: ${{ matrix.platform.target }}
           args: --release --out dist --manifest-path crates/python/Cargo.toml
@@ -67,6 +68,9 @@ jobs:
 
       - name: Build free-threaded wheels
         uses: PyO3/maturin-action@v1
+        env:
+          RING_FORCE_PURE: 1
+          RING_PREGENERATE_ASM: 0
         with:
           target: ${{ matrix.platform.target }}
           args: --release --out dist --manifest-path crates/python/Cargo.toml -i python3.13t

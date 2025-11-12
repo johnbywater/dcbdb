@@ -39,6 +39,8 @@ jobs:
           python-version: "3.13"
       - name: Build wheels
         uses: PyO3/maturin-action@v1
+        env:
+          RING_FORCE_PURE: 1
         with:
           target: ${{ matrix.platform.target }}
           args: --release --out dist --manifest-path crates/python/Cargo.toml

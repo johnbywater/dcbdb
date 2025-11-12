@@ -44,7 +44,10 @@ jobs:
           args: --release --out dist --manifest-path crates/python/Cargo.toml
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: auto
-          before-script-linux: yum install -y protobuf-compiler
+          before-script-linux: |
+            curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v23.2/protoc-23.2-linux-x86_64.zip
+            unzip protoc-23.2-linux-x86_64.zip -d $HOME/protoc
+            export PATH="$HOME/protoc/bin:$PATH"
       - name: Build free-threaded wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -52,7 +55,10 @@ jobs:
           args: --release --out dist --manifest-path crates/python/Cargo.toml -i python3.13t
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: auto
-          before-script-linux: yum install -y protobuf-compiler
+          before-script-linux: |
+            curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v23.2/protoc-23.2-linux-x86_64.zip
+            unzip protoc-23.2-linux-x86_64.zip -d $HOME/protoc
+            export PATH="$HOME/protoc/bin:$PATH"
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:

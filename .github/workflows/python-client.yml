@@ -55,7 +55,6 @@ jobs:
             esac
             curl -LO "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${PROTOC_ZIP}"
             mkdir -p "$HOME/protoc"
-#            unzip -o "$PROTOC_ZIP" -d "$HOME/protoc"   # unzip isn't available?
             python3 - "$PROTOC_ZIP" "$HOME/protoc" <<'PYCODE'
             import zipfile, sys, os
             with zipfile.ZipFile(sys.argv[1]) as zf:
@@ -82,7 +81,6 @@ jobs:
             esac
             curl -LO "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${PROTOC_ZIP}"
             mkdir -p "$HOME/protoc"
-#            unzip -o "$PROTOC_ZIP" -d "$HOME/protoc"   # unzip isn't available?
             python3 - "$PROTOC_ZIP" "$HOME/protoc" <<'PYCODE'
             import zipfile, sys, os
             with zipfile.ZipFile(sys.argv[1]) as zf:

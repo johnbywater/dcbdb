@@ -148,7 +148,7 @@ impl DCBEventStoreSync for UmaDB {
         backwards: bool,
         limit: Option<u32>,
         _subscribe: bool,
-    ) -> DCBResult<Box<dyn DCBReadResponseSync + '_>> {
+    ) -> DCBResult<Box<dyn DCBReadResponseSync + 'static>> {
         let mvcc = &self.mvcc;
         let reader = mvcc.reader()?;
 

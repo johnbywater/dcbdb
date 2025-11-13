@@ -1,7 +1,9 @@
+use std::sync::Arc;
 use pyo3::prelude::*;
-use pyo3::exceptions::{PyException, PyRuntimeError, PyValueError};
-use pyo3::types::{PyBytes, PyList};
-use umadb_client::{SyncUmaDBClient, UmaDBClient};
+use pyo3::exceptions::{PyException, PyKeyboardInterrupt, PyRuntimeError, PyValueError};
+use pyo3::types::PyBytes;
+use pyo3::wrap_pyfunction;
+use umadb_client::{trigger_cancel, SyncUmaDBClient, UmaDBClient};
 use umadb_dcb::{
     DCBAppendCondition, DCBError, DCBEvent, DCBEventStoreSync, DCBQuery, DCBQueryItem,
     DCBSequencedEvent,
@@ -14,6 +16,7 @@ fn dcb_error_to_py_err(err: DCBError) -> PyErr {
         DCBError::IntegrityError(msg) => PyValueError::new_err(format!("Integrity error: {}", msg)),
         DCBError::TransportError(msg) => PyRuntimeError::new_err(format!("Transport error: {}", msg)),
         DCBError::Corruption(msg) => PyRuntimeError::new_err(format!("Corruption: {}", msg)),
+        DCBError::CancelledByUser() => PyKeyboardInterrupt::new_err(()),
         other => PyException::new_err(format!("{}", other)),
     }
 }
@@ -191,10 +194,32 @@ impl PyAppendCondition {
     }
 }
 
+/// Python iterator over sequenced events
+#[pyclass(name = "ReadResponse", unsendable)]
+pub struct PyReadResponse {
+    // _client: Arc<SyncUmaDBClient>,
+    inner: Box<dyn Iterator<Item = Result<DCBSequencedEvent, DCBError>> + 'static>,
+}
+
+#[pymethods]
+impl PyReadResponse {
+    fn __iter__(slf: PyRef<Self>) -> PyRef<Self> {
+        slf
+    }
+
+    fn __next__(mut slf: PyRefMut<Self>) -> Option<PyResult<PySequencedEvent>> {
+        match slf.inner.next() {
+            Some(Ok(event)) => Some(Ok(PySequencedEvent { inner: event })),
+            Some(Err(err)) => Some(Err(dcb_error_to_py_err(err))),
+            None => None,
+        }
+    }
+}
+
 /// Python wrapper for the synchronous UmaDB client
 #[pyclass(name = "Client")]
 pub struct PyUmaDBClient {
-    inner: SyncUmaDBClient,
+    inner: Arc<SyncUmaDBClient>,
 }
 
 #[pymethods]
@@ -225,7 +250,7 @@ impl PyUmaDBClient {
 
         let sync_client = client.connect().map_err(dcb_error_to_py_err)?;
 
-        Ok(PyUmaDBClient { inner: sync_client })
+        Ok(PyUmaDBClient { inner: Arc::new(sync_client) })
     }
 
     /// Read events from the event store
@@ -240,30 +265,24 @@ impl PyUmaDBClient {
     /// Returns:
     ///     List of SequencedEvent objects
     #[pyo3(signature = (query=None, start=None, backwards=false, limit=None, subscribe=false))]
-    fn read<'py>(
+    fn read(
         &self,
-        py: Python<'py>,
         query: Option<PyQuery>,
         start: Option<u64>,
         backwards: bool,
         limit: Option<u32>,
         subscribe: bool,
-    ) -> PyResult<Bound<'py, PyList>> {
+    ) -> PyResult<PyReadResponse> {
         let query_inner = query.map(|q| q.inner);
-        
-        let mut response = self
-            .inner
+
+        let response_iter = self.inner
             .read(query_inner, start, backwards, limit, subscribe)
             .map_err(dcb_error_to_py_err)?;
 
-        let events = PyList::empty(py);
-        for result in response.by_ref() {
-            let seq_event = result.map_err(dcb_error_to_py_err)?;
-            let py_seq_event = PySequencedEvent { inner: seq_event };
-            events.append(py_seq_event)?;
-        }
-
-        Ok(events)
+        Ok(PyReadResponse {
+            // _client: client_for_py,
+            inner: response_iter,
+        })
     }
 
     /// Get the current head position of the event store
@@ -301,14 +320,26 @@ impl PyUmaDBClient {
     }
 }
 
+
+#[pyfunction]
+#[pyo3(text_signature = "()")]
+/// Triggers cancellation of all UmaDB subscriptions from Python.
+/// Useful if you want to handle SIGINT in Python code and manually
+/// notify the Rust client to stop reading.
+fn trigger_cancel_from_python() {
+    trigger_cancel();
+}
+
 /// UmaDB Python client module
 #[pymodule]
 fn _umadb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyUmaDBClient>()?;
     m.add_class::<PyEvent>()?;
     m.add_class::<PySequencedEvent>()?;
+    m.add_class::<PyReadResponse>()?;
     m.add_class::<PyQuery>()?;
     m.add_class::<PyQueryItem>()?;
     m.add_class::<PyAppendCondition>()?;
+    m.add_function(wrap_pyfunction!(trigger_cancel_from_python, m)?)?;
     Ok(())
 }

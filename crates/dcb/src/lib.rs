@@ -26,7 +26,7 @@ pub trait DCBEventStoreSync {
         backwards: bool,
         limit: Option<u32>,
         subscribe: bool,
-    ) -> DCBResult<Box<dyn DCBReadResponseSync + '_>>;
+    ) -> DCBResult<Box<dyn DCBReadResponseSync + 'static>>;
 
     /// Reads events from the store and returns them as a tuple of (Vec<DCBSequencedEvent>, Option<u64>)
     fn read_with_head(
@@ -82,7 +82,7 @@ pub trait DCBEventStoreAsync: Send + Sync {
         backwards: bool,
         limit: Option<u32>,
         subscribe: bool,
-    ) -> DCBResult<Box<dyn DCBReadResponseAsync + Send>>;
+    ) -> DCBResult<Box<dyn DCBReadResponseAsync + Send + 'static>>;
 
     /// Reads events from the store and returns them as a tuple of (Vec<DCBSequencedEvent>, Option<u64>)
     async fn read_with_head<'a>(
@@ -327,6 +327,8 @@ pub enum DCBError {
     PageAlreadyDirty(u64),
     #[error("Transport error: {0}")]
     TransportError(String),
+    #[error("Cancelled by user")]
+    CancelledByUser(),
 }
 
 pub type DCBResult<T> = Result<T, DCBError>;

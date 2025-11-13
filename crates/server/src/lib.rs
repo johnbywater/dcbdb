@@ -571,6 +571,9 @@ impl RequestHandler {
                                             DCBError::TransportError(err) => {
                                                 DCBError::TransportError(err.clone())
                                             }
+                                            DCBError::CancelledByUser() => {
+                                                DCBError::CancelledByUser()
+                                            }
                                         }
                                     }
                                     let total = responders.len();

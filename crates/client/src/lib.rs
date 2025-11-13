@@ -20,10 +20,49 @@ use umadb_proto::umadb::{
     ReadResponseProto,
 };
 
+use tokio::sync::watch;
+use std::sync::{Once, OnceLock};
+
+/// A global watch channel for shutdown/cancel signals.
+static CANCEL_SENDER: OnceLock<watch::Sender<()>> = OnceLock::new();
+
+/// Returns a receiver subscribed to the global cancel signal.
+fn cancel_receiver() -> watch::Receiver<()> {
+    let sender = CANCEL_SENDER.get_or_init(|| {
+        let (tx, _rx) = watch::channel::<()>(());
+        tx
+    });
+    sender.subscribe()
+}
+
+/// Sends the cancel signal to all receivers (e.g., on Ctrl-C).
+pub fn trigger_cancel() {
+    if let Some(sender) = CANCEL_SENDER.get() {
+        let _ = sender.send(()); // ignore error if already closed
+    }
+}
+
+static REGISTER_SIGINT: Once = Once::new();
+
+pub fn register_cancel_sigint_handler() {
+    REGISTER_SIGINT.call_once(|| {
+        // Capture the current runtime handle; panic if none exists
+        let handle = Handle::current();
+
+        // Spawn a detached task on that runtime
+        handle.spawn(async {
+            if tokio::signal::ctrl_c().await.is_ok() {
+                trigger_cancel();
+            }
+        });
+    });
+}
+
 pub struct UmaDBClient {
     url: String,
     ca_path: Option<String>,
     batch_size: Option<u32>,
+    without_sigint_handler: bool,
 }
 
 impl UmaDBClient {
@@ -32,6 +71,7 @@ impl UmaDBClient {
             url,
             ca_path: None,
             batch_size: None,
+            without_sigint_handler: false,
         }
     }
 
@@ -49,11 +89,26 @@ impl UmaDBClient {
         }
     }
 
+    pub fn without_sigint_handler(self) -> Self {
+        Self {
+            without_sigint_handler: true,
+            ..self
+        }
+    }
+
     pub fn connect(&self) -> DCBResult<SyncUmaDBClient> {
-        SyncUmaDBClient::connect(self.url.clone(), self.ca_path.clone(), self.batch_size)
+        let client = SyncUmaDBClient::connect(self.url.clone(), self.ca_path.clone(), self.batch_size);
+        if !self.without_sigint_handler && let Ok(client) = &client  {
+            client.register_cancel_sigint_handler();
+        }
+        client
     }
     pub async fn connect_async(&self) -> DCBResult<AsyncUmaDBClient> {
-        AsyncUmaDBClient::connect(self.url.clone(), self.ca_path.clone(), self.batch_size).await
+        let client = AsyncUmaDBClient::connect(self.url.clone(), self.ca_path.clone(), self.batch_size).await;
+        if !self.without_sigint_handler && let Ok(client) = &client  {
+            client.register_cancel_sigint_handler().await;
+        }
+        client
     }
 }
 
@@ -111,6 +166,10 @@ impl SyncUmaDBClient {
         };
         (rt, handle)
     }
+
+    pub fn register_cancel_sigint_handler(&self) {
+        self.handle.block_on(self.async_client.register_cancel_sigint_handler());
+    }
 }
 
 impl DCBEventStoreSync for SyncUmaDBClient {
@@ -121,13 +180,13 @@ impl DCBEventStoreSync for SyncUmaDBClient {
         backwards: bool,
         limit: Option<u32>,
         subscribe: bool,
-    ) -> Result<Box<dyn DCBReadResponseSync + '_>, DCBError> {
+    ) -> Result<Box<dyn DCBReadResponseSync + 'static>, DCBError> {
         let async_read_response = self.handle.block_on(
             self.async_client
                 .read(query, start, backwards, limit, subscribe),
         )?;
         Ok(Box::new(SyncClientReadResponse {
-            rt: &self.handle,
+            rt: self.handle.clone(),
             resp: async_read_response,
             buffer: VecDeque::new(),
             finished: false,
@@ -148,14 +207,14 @@ impl DCBEventStoreSync for SyncUmaDBClient {
     }
 }
 
-pub struct SyncClientReadResponse<'a> {
-    rt: &'a Handle,
-    resp: Box<dyn DCBReadResponseAsync + Send + 'a>,
+pub struct SyncClientReadResponse {
+    rt: Handle,
+    resp: Box<dyn DCBReadResponseAsync + Send + 'static>,
     buffer: VecDeque<DCBSequencedEvent>, // efficient pop_front()
     finished: bool,
 }
 
-impl<'a> SyncClientReadResponse<'a> {
+impl<'a> SyncClientReadResponse {
     /// Fetch the next batch from the async response, filling the buffer
     fn fetch_next_batch(&mut self) -> Result<(), DCBError> {
         if self.finished {
@@ -172,7 +231,7 @@ impl<'a> SyncClientReadResponse<'a> {
     }
 }
 
-impl<'a> Iterator for SyncClientReadResponse<'a> {
+impl<'a> Iterator for SyncClientReadResponse {
     type Item = Result<DCBSequencedEvent, DCBError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -187,7 +246,7 @@ impl<'a> Iterator for SyncClientReadResponse<'a> {
     }
 }
 
-impl<'a> DCBReadResponseSync for SyncClientReadResponse<'a> {
+impl<'a> DCBReadResponseSync for SyncClientReadResponse {
     fn head(&mut self) -> DCBResult<Option<u64>> {
         self.rt.block_on(self.resp.head())
     }
@@ -258,6 +317,10 @@ impl AsyncUmaDBClient {
             ))),
         }
     }
+
+    pub async fn register_cancel_sigint_handler(&self) {
+        register_cancel_sigint_handler();
+    }
 }
 
 #[async_trait]
@@ -270,7 +333,7 @@ impl DCBEventStoreAsync for AsyncUmaDBClient {
         backwards: bool,
         limit: Option<u32>,
         subscribe: bool,
-    ) -> DCBResult<Box<dyn DCBReadResponseAsync + Send>> {
+    ) -> DCBResult<Box<dyn DCBReadResponseAsync + Send + 'static>> {
         // Convert API types to protobuf types
         let query_proto = query.map(|q| q.into());
         let request = ReadRequestProto {
@@ -286,8 +349,7 @@ impl DCBEventStoreAsync for AsyncUmaDBClient {
         let response = client.read(request).await.map_err(dcb_error_from_status)?;
         let stream = response.into_inner();
 
-        Ok(Box::new(AsyncClientReadResponse::new(stream)))
-    }
+        Ok(Box::new(AsyncClientReadResponse::new(stream)))    }
 
     async fn head(&self) -> DCBResult<Option<u64>> {
         let mut client = self.client.clone();
@@ -327,6 +389,7 @@ pub struct AsyncClientReadResponse {
     buffered: VecDeque<DCBSequencedEvent>,
     last_head: Option<Option<u64>>, // None = unknown yet; Some(x) = known
     ended: bool,
+    cancel: watch::Receiver<()>,
 }
 
 impl AsyncClientReadResponse {
@@ -336,6 +399,7 @@ impl AsyncClientReadResponse {
             buffered: VecDeque::new(),
             last_head: None,
             ended: false,
+            cancel: cancel_receiver(),
         }
     }
 
@@ -345,30 +409,32 @@ impl AsyncClientReadResponse {
             return Ok(());
         }
 
-        match self.stream.message().await {
-            Ok(Some(resp)) => {
-                self.last_head = Some(resp.head);
-
-                let mut buffered = VecDeque::with_capacity(resp.events.len());
-                for e in resp.events {
-                    if let Some(ev) = e.event {
-                        let event = DCBEvent::try_from(ev)?; // propagate error
-                        buffered.push_back(DCBSequencedEvent {
-                            position: e.position,
-                            event,
-                        });
-                    }
-                }
-
-                self.buffered = buffered;
-                Ok(())
-            }
-            Ok(None) => {
+        tokio::select! {
+            _ = self.cancel.changed() => {
                 self.ended = true;
-                Ok(())
+                // return Ok(());
+                return Err(DCBError::CancelledByUser());
             }
-            Err(status) => Err(dcb_error_from_status(status)),
+            msg = self.stream.message() => {
+                match msg {
+                    Ok(Some(resp)) => {
+                        self.last_head = Some(resp.head);
+                        let mut buffered = VecDeque::with_capacity(resp.events.len());
+                        for e in resp.events {
+                            if let Some(ev) = e.event {
+                                let event = DCBEvent::try_from(ev)?;
+                                buffered.push_back(DCBSequencedEvent { position: e.position, event });
+                            }
+                        }
+                        self.buffered = buffered;
+                    }
+                    Ok(None) => self.ended = true,
+                    Err(status) => return Err(dcb_error_from_status(status)),
+                }
+            }
         }
+
+        Ok(())
     }
 }
 

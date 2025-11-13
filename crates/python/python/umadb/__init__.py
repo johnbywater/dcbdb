@@ -12,6 +12,9 @@ from umadb._umadb import (
     Query,
     QueryItem,
     AppendCondition,
+    IntegrityError,
+    TransportError,
+    CorruptionError,
 )
 
 __version__ = "0.1.6"
@@ -23,4 +26,7 @@ __all__ = [
     "Query",
     "QueryItem",
     "AppendCondition",
+    "IntegrityError",
+    "TransportError",
+    "CorruptionError",
 ]

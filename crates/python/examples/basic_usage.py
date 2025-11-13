@@ -10,7 +10,7 @@ This example demonstrates:
 5. Using append conditions
 """
 
-from umadb import Client, Event, Query, QueryItem, AppendCondition
+from umadb import Client, Event, Query, QueryItem, AppendCondition, IntegrityError
 
 
 def main():
@@ -91,7 +91,7 @@ def main():
     try:
         client.append([duplicate_event], condition=condition)
         print("  Unexpected: append succeeded")
-    except ValueError as e:
+    except IntegrityError as e:
         print(f"  Expected: append failed - {e}")
 
     # Conditional append that should succeed

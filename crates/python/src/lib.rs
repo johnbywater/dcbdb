@@ -10,12 +10,18 @@ use umadb_dcb::{
 };
 use uuid::Uuid;
 
+use pyo3::create_exception;
+
+create_exception!(umadb, IntegrityError, PyValueError);
+create_exception!(umadb, TransportError, PyRuntimeError);
+create_exception!(umadb, CorruptionError, PyRuntimeError);
+
 /// Convert DCBError to Python exception
 fn dcb_error_to_py_err(err: DCBError) -> PyErr {
     match err {
-        DCBError::IntegrityError(msg) => PyValueError::new_err(format!("Integrity error: {}", msg)),
-        DCBError::TransportError(msg) => PyRuntimeError::new_err(format!("Transport error: {}", msg)),
-        DCBError::Corruption(msg) => PyRuntimeError::new_err(format!("Corruption: {}", msg)),
+        DCBError::IntegrityError(msg) => IntegrityError::new_err(msg),
+        DCBError::TransportError(msg) => TransportError::new_err(msg),
+        DCBError::Corruption(msg) => CorruptionError::new_err(msg),
         DCBError::CancelledByUser() => PyKeyboardInterrupt::new_err(()),
         other => PyException::new_err(format!("{}", other)),
     }
@@ -332,7 +338,7 @@ fn trigger_cancel_from_python() {
 
 /// UmaDB Python client module
 #[pymodule]
-fn _umadb(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _umadb(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyUmaDBClient>()?;
     m.add_class::<PyEvent>()?;
     m.add_class::<PySequencedEvent>()?;
@@ -341,5 +347,8 @@ fn _umadb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyQueryItem>()?;
     m.add_class::<PyAppendCondition>()?;
     m.add_function(wrap_pyfunction!(trigger_cancel_from_python, m)?)?;
+    m.add("IntegrityError", py.get_type::<IntegrityError>())?;
+    m.add("TransportError", py.get_type::<TransportError>())?;
+    m.add("CorruptionError", py.get_type::<CorruptionError>())?;
     Ok(())
 }

@@ -122,6 +122,8 @@ jobs:
           mkdir -p ./binaries/linux/arm64
           mv ./binaries/x86_64-unknown-linux-musl/umadb ./binaries/linux/amd64/
           mv ./binaries/aarch64-unknown-linux-musl/umadb ./binaries/linux/arm64/
+          chmod +x ./binaries/linux/arm64/umadb
+          chmod +x ./binaries/linux/amd64/umadb
           ls -lah ./binaries/linux/
           ls -lh ./binaries/linux/amd64
           ls -lh ./binaries/linux/arm64

@@ -94,6 +94,10 @@ jobs:
 #          strip target/${{ matrix.target }}/release/umadb
           aarch64-linux-musl-strip target/${{ matrix.target }}/release/umadb
 
+      - name: Test binary
+        run: |
+          target/${{ matrix.target }}/release/umadb --version  
+
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:

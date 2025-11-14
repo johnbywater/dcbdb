@@ -18,8 +18,9 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-#        target: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl]
-        target: [aarch64-unknown-linux-musl]
+        target:
+#          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
 
     steps:
       # -----------------------------
@@ -27,6 +28,24 @@ jobs:
       # -----------------------------
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Install xz
+        run: sudo apt-get update && sudo apt-get install -y musl-tools curl xz-utils qemu-user
+
+      # Setup ARM64 musl-cross toolchain
+      - name: Setup ARM64 musl-cross
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: |
+          curl -L -o aarch64-unknown-linux-musl.tar.xz \
+            https://github.com/cross-tools/musl-cross/releases/download/20250929/aarch64-unknown-linux-musl.tar.xz
+          mkdir -p $HOME/musl-cross
+          tar -xJf aarch64-unknown-linux-musl.tar.xz -C $HOME/musl-cross --strip-components=1
+          chmod +x $HOME/musl-cross/bin/*
+          echo "$HOME/musl-cross/bin" >> $GITHUB_PATH
+
+      - name: Test ARM64 musl compiler
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: aarch64-unknown-linux-musl-gcc --version
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -38,39 +57,6 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-#  This doesn't actually install the aarch64-unknown-linux-musl on amd64 arch image...
-#      # Install musl cross-compiler
-#      - name: Install MUSL tools
-#        run: |
-#          sudo apt-get update
-#          sudo apt-get install -y musl musl-tools
-
-      - name: Install xz
-        run: sudo apt-get update && sudo apt-get install -y xz-utils
-
-      - name: Download musl-cross
-        run: |
-          curl -L -o aarch64-musl.tar.xz \
-            https://github.com/cross-tools/musl-cross/releases/download/20250929/aarch64-unknown-linux-musl.tar.xz
-          mkdir -p $HOME/musl-cross
-          tar -xJf aarch64-musl.tar.xz -C $HOME/musl-cross --strip-components=1
-
-      - name: Add musl-cross to PATH
-        run: echo "$HOME/musl-cross/bin" >> $GITHUB_PATH
-
-      - name: List musl-cross bin
-        run: ls -l $HOME/musl-cross/bin
-
-      - name: Debug PATH
-        run: echo $PATH
-
-      - name: Fix permissions
-        run: chmod +x $HOME/musl-cross/bin/*
-
-
-      - name: Test musl compiler
-        run: aarch64-unknown-linux-musl-gcc --version
-
       - name: Configure MUSL cross-compilation
         if: matrix.target == 'aarch64-unknown-linux-musl'
         run: |
@@ -78,10 +64,6 @@ jobs:
           echo "Setting MUSL cross environment"
           echo "CC_aarch64_unknown_linux_musl=aarch64-unknown-linux-musl-gcc" >> $GITHUB_ENV
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-unknown-linux-musl-gcc" >> $GITHUB_ENV
-
-      - name: Configure Cargo for aarch64 MUSL
-        if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: |
           mkdir -p .cargo
           cat > .cargo/config.toml <<EOF
           [target.aarch64-unknown-linux-musl]
@@ -91,12 +73,25 @@ jobs:
       - name: Build release binary
         run: |
           cargo build --release --target ${{ matrix.target }} -p umadb-server
-          aarch64-unknown-linux-musl-strip target/${{ matrix.target }}/release/umadb
-#          strip target/${{ matrix.target }}/release/umadb
 
+      # Strip the binary
+      - name: Strip release binary
+        run: |
+          if [ "${{ matrix.target }}" == "aarch64-unknown-linux-musl" ]; then
+            $HOME/musl-cross/bin/aarch64-unknown-linux-musl-strip \
+              target/${{ matrix.target }}/release/umadb
+          else
+            strip target/${{ matrix.target }}/release/umadb
+          fi
+
+      # Optional: Run the binary
       - name: Test binary
         run: |
-          target/${{ matrix.target }}/release/umadb --version  
+          if [ "${{ matrix.target }}" == "aarch64-unknown-linux-musl" ]; then
+            qemu-aarch64 target/${{ matrix.target }}/release/umadb --version
+          else
+            target/${{ matrix.target }}/release/umadb --version
+          fi
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4

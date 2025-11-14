@@ -1,6 +1,6 @@
 [package]
 name = "umadb-core"
-version = {workspace = true}
+version = { workspace = true }
 edition = { workspace = true }
 license = { workspace = true }
 description = "Core event store implementation for UmaDB"

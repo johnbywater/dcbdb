@@ -91,8 +91,8 @@ jobs:
       - name: Build release binary
         run: |
           cargo build --release --target ${{ matrix.target }} -p umadb-server
-#          strip target/${{ matrix.target }}/release/umadb
           aarch64-linux-musl-strip target/${{ matrix.target }}/release/umadb
+#          strip target/${{ matrix.target }}/release/umadb
 
       - name: Test binary
         run: |

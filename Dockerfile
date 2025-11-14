@@ -13,9 +13,9 @@ FROM scratch AS final
 
 WORKDIR /data
 
-# Copy prebuilt MUSL binaries per platform
-COPY --platform=linux/amd64 ./binaries/x86_64-unknown-linux-musl/umadb /umadb
-COPY --platform=linux/arm64 ./binaries/aarch64-unknown-linux-musl/umadb /umadb
+# Copy binary, use TARGETPLATFORM to select the correct binary
+ARG TARGETPLATFORM
+COPY ./binaries/${TARGETPLATFORM}/umadb /umadb
 
 # Copy CA certificates from base
 COPY --from=base /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/

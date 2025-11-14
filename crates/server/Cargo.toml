@@ -1,6 +1,7 @@
 [package]
 name = "umadb-server"
 description = "Event store built for Dynamic Consistency Boundaries"
+repository = "https://github.com/pyeventsourcing/umadb"
 version = {workspace = true}
 edition = { workspace = true }
 license = { workspace = true }

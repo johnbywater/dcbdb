@@ -10,3 +10,4 @@
 /perf_analysis_*/
 /dcbdb-databases/
 /dcbdb-databases-docker/
+/crates/python/python/umadb/__pycache__/

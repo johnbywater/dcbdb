@@ -68,15 +68,15 @@ jobs:
 
 
       - name: Test musl compiler
-        run: aarch64-linux-musl-gcc --version
+        run: aarch64-unknown-linux-musl-gcc --version
 
       - name: Configure MUSL cross-compilation
         if: matrix.target == 'aarch64-unknown-linux-musl'
         run: |
           rustup target add aarch64-unknown-linux-musl
           echo "Setting MUSL cross environment"
-          echo "CC_aarch64_unknown_linux_musl=aarch64-linux-musl-gcc" >> $GITHUB_ENV
-          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-musl-gcc" >> $GITHUB_ENV
+          echo "CC_aarch64_unknown_linux_musl=aarch64-unknown-linux-musl-gcc" >> $GITHUB_ENV
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-unknown-linux-musl-gcc" >> $GITHUB_ENV
 
       - name: Configure Cargo for aarch64 MUSL
         if: matrix.target == 'aarch64-unknown-linux-musl'
@@ -84,7 +84,7 @@ jobs:
           mkdir -p .cargo
           cat > .cargo/config.toml <<EOF
           [target.aarch64-unknown-linux-musl]
-          linker = "aarch64-linux-musl-gcc"
+          linker = "aarch64-unknown-linux-musl-gcc"
           EOF
 
       - name: Build release binary

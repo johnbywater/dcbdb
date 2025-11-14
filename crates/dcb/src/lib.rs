@@ -430,4 +430,43 @@ mod tests {
         assert_eq!(response.next().unwrap().unwrap().position, 2);
         assert!(response.next().is_none());
     }
+
+
+    #[test]
+    fn test_event_new() {
+        let event1 = DCBEvent::new().event_type("type1").data(b"data1").tags(["tagX"]);
+
+        println!("Event created with builder API:");
+        println!("  event_type: {}", event1.event_type);
+        println!("  data: {:?}", event1.data);
+        println!("  tags: {:?}", event1.tags);
+        println!("  uuid: {:?}", event1.uuid);
+
+        // Verify the fields match expectations
+        assert_eq!(event1.event_type, "type1");
+        assert_eq!(event1.data, b"data1".to_vec());
+        assert_eq!(event1.tags, vec!["tagX".to_string()]);
+        assert_eq!(event1.uuid, None);
+
+        // Test with multiple tags
+        let event2 = DCBEvent::new().event_type("type2").data(b"data2").tags(["tag1", "tag2", "tag3"]);
+        assert_eq!(event2.tags.len(), 3);
+
+        // Test without data or tags
+        let event3 = DCBEvent::new().event_type("type3");
+        assert_eq!(event3.data.len(), 0);
+        assert_eq!(event3.tags.len(), 0);
+
+        // Test DCBQueryItem builder
+        let query_item = DCBQueryItem::new().types(["type1", "type2"]).tags(["tagA", "tagB"]);
+        assert_eq!(query_item.types.len(), 2);
+        assert_eq!(query_item.tags.len(), 2);
+
+        // Test DCBQuery builder
+        let query = DCBQuery::new().item(query_item);
+        assert_eq!(query.items.len(), 1);
+
+        println!("\nAll builder API tests passed!");
+    }
+
 }

@@ -19,7 +19,7 @@ test_builder.rs
 tests/
 
 # Benchmarks
-benchmark_results.txt
+performance-reports/
 perf_analysis_*/
 
 # Documentation

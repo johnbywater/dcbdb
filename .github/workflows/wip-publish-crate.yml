@@ -1,0 +1,75 @@
+name: Publish Crates
+
+
+on:
+  workflow_dispatch
+#  push:
+#    tags:
+#      - 'v*.*.*'
+#    branches:
+#      - main
+
+#on:
+#  workflow_dispatch:
+#    inputs:
+#      crate:
+#        description: 'Crate to publish (all, umadb-dcb, umadb-core, umadb-proto, umadb-client)'
+#        required: true
+#        default: 'all'
+#        type: choice
+#        options:
+#          - all
+#          - umadb-dcb
+#          - umadb-core
+#          - umadb-proto
+#          - umadb-client
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+    
+    - name: Install Protoc
+      uses: arduino/setup-protoc@v3
+      with:
+        repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Verify version in Cargo.toml
+      run: |
+        VERSION=$(grep -m 1 "version" Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+        echo "Publishing version: $VERSION"
+    
+    - name: Publish umadb-dcb
+#      if: github.event.inputs.crate == 'all' || github.event.inputs.crate == 'umadb-dcb'
+      run: |
+        cd crates/dcb
+        cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        sleep 30
+    
+    - name: Publish umadb-core
+#      if: github.event.inputs.crate == 'all' || github.event.inputs.crate == 'umadb-core'
+      run: |
+        cd crates/core
+        cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        sleep 30
+    
+    - name: Publish umadb-proto
+#      if: github.event.inputs.crate == 'all' || github.event.inputs.crate == 'umadb-proto'
+      run: |
+        cd crates/proto
+        cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        sleep 30
+    
+    - name: Publish umadb-client
+#      if: github.event.inputs.crate == 'all' || github.event.inputs.crate == 'umadb-client'
+      run: |
+        cd crates/client
+        cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}

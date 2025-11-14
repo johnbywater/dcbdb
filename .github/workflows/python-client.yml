@@ -3,7 +3,7 @@
 #
 #    maturin generate-ci github -m crates/python/Cargo.toml
 #
-name: Python Client
+name: Build and Publish Python Client
 
 on:
   push:

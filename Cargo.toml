@@ -40,6 +40,7 @@ serial_test = "3.2.0"
 [workspace.metadata.release]
 push = false
 tag = false
+rate-limit.new-packages = 6
 
 [package]
 name = "umadb"

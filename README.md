@@ -469,89 +469,136 @@ umadb --listen 127.0.0.1:50051 --db-path ./uma.db  --tls-cert server.pem --tls-k
 
 ----
 
-## Running UmaDB with Docker
+## UmaDB Docker Containers
 
-UmaDB provides pre-built Docker images for both amd64 and arm64 architectures. The images are available on [GitHub Container Registry](https://github.com/pyeventsourcing/umadb/pkgs/container/umadb).
+UmaDB provides multi-platform Docker container images for the `linux/amd64` and `linux/arm64` platforms.
+
+The images are available on [GitHub Container Registry](https://github.com/pyeventsourcing/umadb/pkgs/container/umadb) and [Docker Hub](https://hub.docker.com/r/umadb/umadb).
 
 ### Pulling the Docker Image
 
+Pull "latest" from GitHub Container Registry.
+
 ```bash
-# From GitHub Container Registry
 docker pull ghcr.io/pyeventsourcing/umadb:latest
 ```
 
-### Running the Container
-
-The UmaDB server listens on **port 50051** by default. To run the container:
+Pull "latest" from Docker Hub.
 
 ```bash
-# Basic run (ephemeral storage)
-docker run -p 50051:50051 ghcr.io/pyeventsourcing/umadb:latest
+docker pull umadb/umadb:latest
+```
+
+Images are tagged "latest", "x.y.z" (semantic version number), "x.y" (major and minor), and "x" (major).
+
+### Running the Container
+
+The container's `ENTRYPOINT` is the `umadb` binary. The default `CMD` are the `umadb` cli arguments
+`--listen 0.0.0.0:50051 --db-path /data`. This means that by default the container will run `umadb`
+listening to internal port `50051` and using the internal filepath `/data/uma.db` for the database file.
+
+You can supply alternative arguments, for example `--help` or `--version`.
+
+Print the `umadb` version:
+
+```bash
+docker run umadb/umadb:latest --version
+```
+
+Print the `umadb` help message:
+
+```bash
+docker run umadb/umadb:latest --help
+```
+
+Please note, the `umadb` container is a Docker `scratch` container with only one binary executable `/umadb`,
+and so attempting to use the `--entrypoint` argument of `docker run` to execute something other than `/umadb`,
+for example `bash` or anything else, will cause a "failed to create task" Docker error.
+
+### Connecting to UmaDB
+
+The `umadb` container exposes port `50051` internally. If you want to connect to the database server from
+outside Docker, then use the `-p, --publish` argument of `docker run` to publish the exposed port on the host.
+
+```bash
+docker run --publish 50051:50051 umadb/umadb:latest
 ```
 
 ### Persistent Storage with Local File
 
-To persist the database file on your local filesystem, mount a local directory to `/data` in the container:
+The `umadb` container stores data in the internal file `/data/uma.db` by default. To persist
+the database file on your local filesystem, use the `-v, --volume` argument of `docker run` to mount
+a local directory to the container's internal `/data` directory:
 
 ```bash
-# Create a local directory for the database
-mkdir -p ./umadb-data
-
-# Run with persistent storage
-docker run -p 50051:50051 -v $(pwd)/umadb-data:/data ghcr.io/pyeventsourcing/umadb:latest
+docker run --volume /path/to/local/data:/data umadb/umadb:latest
 ```
 
-The container runs as a non-root user (uid 1000) and stores data in `/data` by default. Make sure the mounted directory has appropriate permissions.
+UmaDB will then create and use the file `/path/to/local/data/uma.db` to store your events.
 
-### Activating TLS
+### Transaction Layer Security (TLS)
 
-Environment variable `UMADB_TLS_CERT` can be used to indicate a file system path to a server TLS certificate file.
-
-Environment variable `UMADB_TLS_KEY` can be used to indicate a file system path to a server TLS private key file.
-
-
-### Connecting to the Server
-
-Once the container is running, you can connect to it from your application using the gRPC endpoint:
-
-```rust
-let url = "http://localhost:50051".to_string();
-let client = UmaDBClient::new(url).connect()?;
-```
-
-### Custom Port Mapping
-
-To use a different host port while keeping the container's internal port at 50051:
+By default, the `umadb` executable starts an "insecure" gRPC channel. To activate TLS, so that
+a "secure" channel will be started instead, mount a local "secrets" folder and provide an internal
+file system path to a TLS certificate and a private key using environment variables. You can do this
+using the `-v, --volume` and `-e, --env` arguments of `docker run`, and the UmaDB environment variables
+`UMADB_TLS_CERT` and `UMADB_TLS_KEY`.
 
 ```bash
-# Map host port 8080 to container port 50051
-docker run -p 8080:50051 -v $(pwd)/umadb-data:/data ghcr.io/pyeventsourcing/umadb:latest
+docker run --volume /path/to/local/secrets:/etc/secrets --env UMADB_TLS_CERT=/etc/secrets/server.pem --env UMADB_TLS_KEY=/etc/secrets/server.key umadb/umadb:latest
 ```
 
-Then connect using:
-```rust
-let url = "http://localhost:8080".to_string();
-let client = UmaDBClient::new(url).connect()?;
+### Docker Run Example
+
+The following example will run the `umadb` container with the name `umadb-insecure`, publish the container
+port at `50051`, store event data in the local file `/path/to/local/data/uma.db`, and start an "insecure"
+gRPC channel.
+
+```bash
+docker run \
+  --name umadb-insecure \
+  --publish 50051:50051 \
+  --volume /path/to/local/data:/data \
+  umadb/umadb:latest
+```
+
+The following example will run the `umadb` container with the name `umadb-secure`, publish the container port
+at `50051`, store event data in the local file `/path/to/local/data/uma.db`, and activate TLS using a PEM encoded
+certificate in the local file `/path/to/local/secrets/server.pem` and key in
+`/path/to/local/secrets/server.key`. 
+
+```bash
+docker run \
+  --name umadb-secure
+  --publish 50051:50051 \
+  --volume /path/to/local/data:/data \
+  --volume /path/to/local/secrets:/etc/secrets \
+  --env UMADB_TLS_CERT=/etc/secrets/server.pem \
+  --env UMADB_TLS_KEY=/etc/secrets/server.key \
+  umadb/umadb:latest
 ```
 
 ### Docker Compose Example
 
-For convenience, you can use Docker Compose:
+For convenience, you can use Docker Compose.
+
+Write a `docker-compose.yaml` file:
+
 
 ```yaml
-version: '3.8'
 services:
   umadb:
-    image: ghcr.io/pyeventsourcing/umadb:latest
+    image: umadb/umadb:latest
     ports:
       - "50051:50051"
     volumes:
-      - ./umadb-data:/data
+      - ./path/to/local/data:/data
 ```
 
-Run with:
+And then run:
+
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 ----
 

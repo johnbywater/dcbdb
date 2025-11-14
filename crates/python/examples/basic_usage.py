@@ -9,6 +9,7 @@ This example demonstrates:
 4. Using queries to filter events
 5. Using append conditions
 """
+import uuid
 
 from umadb import Client, Event, Query, QueryItem, AppendCondition, IntegrityError
 
@@ -96,13 +97,14 @@ def main():
 
     # Conditional append that should succeed
     print("\nTrying conditional append for new user (should succeed)...")
+    new_user_id = str(uuid.uuid4())
     new_user_event = Event(
         event_type="UserCreated",
         data=b'{"user_id": "456", "name": "Bob"}',
-        tags=["user", "user:456"],
+        tags=["user", new_user_id],
     )
     fail_query = Query(items=[
-        QueryItem(types=["UserCreated"], tags=["user:456"])
+        QueryItem(types=["UserCreated"], tags=[new_user_id])
     ])
     condition = AppendCondition(fail_if_events_match=fail_query)
 

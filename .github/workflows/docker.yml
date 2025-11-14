@@ -31,11 +31,16 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       # Install musl cross-compiler
       - name: Install MUSL tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools
+          sudo apt-get install -y musl-tools gcc-aarch64-linux-musl
 
       # Configure cargo linker for aarch64 MUSL
       - name: Configure Cargo for aarch64 MUSL

@@ -6,15 +6,19 @@ use umadb_server::{start_server, start_server_secure_from_files};
 #[derive(Parser, Debug)]
 #[command(version)]
 struct Args {
+    /// Listen address, e.g. 127.0.0.1:50051
     #[arg(long = "listen")]
     listen: String,
 
+    /// Path to database file or folder
     #[arg(long = "db-path")]
     db_path: String,
 
+    /// Optional file path to TLS server certificate (PEM) - can also be set via UMADB_TLS_CERT environment variable
     #[arg(long = "tls-cert", required = false)]
     cert: Option<String>,
 
+    /// Optional file path to TLS server private key (PEM) - can also be set via UMADB_TLS_KEY environment variable
     #[arg(long = "tls-key", required = false)]
     key: Option<String>,
 }

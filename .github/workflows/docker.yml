@@ -47,8 +47,8 @@ jobs:
         if: matrix.target == 'aarch64-unknown-linux-musl'
         run: |
           echo "Setting MUSL cross environment"
-          echo "CC_aarch64_unknown_linux_musl=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CC_aarch64_unknown_linux_musl=aarch64-linux-musl-gcc" >> $GITHUB_ENV
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-musl-gcc" >> $GITHUB_ENV
 
       - name: Configure Cargo for aarch64 MUSL
         if: matrix.target == 'aarch64-unknown-linux-musl'

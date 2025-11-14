@@ -57,6 +57,16 @@ jobs:
       - name: Add musl-cross to PATH
         run: echo "$HOME/musl-cross/bin" >> $GITHUB_PATH
 
+      - name: List musl-cross bin
+        run: ls -l $HOME/musl-cross/bin
+
+      - name: Debug PATH
+        run: echo $PATH
+
+      - name: Fix permissions
+        run: chmod +x $HOME/musl-cross/bin/*
+
+
       - name: Test musl compiler
         run: aarch64-linux-musl-gcc --version
 

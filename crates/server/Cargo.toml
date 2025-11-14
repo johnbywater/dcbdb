@@ -2,14 +2,14 @@
 name = "umadb-server"
 description = "Event store built for Dynamic Consistency Boundaries"
 repository = "https://github.com/pyeventsourcing/umadb"
-version = {workspace = true}
+version = { workspace = true }
 edition = { workspace = true }
 license = { workspace = true }
 
 [dependencies]
-umadb-dcb = { path = "../dcb" }
-umadb-core = { path = "../core" }
-umadb-proto = { path = "../proto" }
+umadb-dcb = { path = "../dcb", version = "0.1.20" }
+umadb-core = { path = "../core", version = "0.1.20" }
+umadb-proto = { path = "../proto", version = "0.1.20" }
 clap = { version = "4.5.6", features = ["derive"] }
 tokio = { workspace = true }
 tonic = { workspace = true }

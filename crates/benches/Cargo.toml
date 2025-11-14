@@ -6,10 +6,10 @@ license = { workspace = true }
 publish = false
 
 [dependencies]
-umadb-dcb = { path = "../dcb", version = "0.1.20"}
-umadb-core = { path = "../core", version = "0.1.20"}
-umadb-client = { path = "../client", version = "0.1.20"}
-umadb-server = { path = "../server", version = "0.1.20"}
+umadb-dcb = { path = "../dcb", version = "0.1.21"}
+umadb-core = { path = "../core", version = "0.1.21"}
+umadb-client = { path = "../client", version = "0.1.21"}
+umadb-server = { path = "../server", version = "0.1.21"}
 futures = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }

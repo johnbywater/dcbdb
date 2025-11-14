@@ -2328,7 +2328,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "umadb"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "criterion 0.7.0",
  "futures",
@@ -2348,7 +2348,7 @@ dependencies = [
 
 [[package]]
 name = "umadb-benches"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "criterion 0.7.0",
  "futures",
@@ -2363,7 +2363,7 @@ dependencies = [
 
 [[package]]
 name = "umadb-client"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "async-trait",
  "futures",
@@ -2376,7 +2376,7 @@ dependencies = [
 
 [[package]]
 name = "umadb-core"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "bitflags 2.10.0",
  "byteorder",
@@ -2394,7 +2394,7 @@ dependencies = [
 
 [[package]]
 name = "umadb-dcb"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "async-trait",
  "futures-core",
@@ -2405,7 +2405,7 @@ dependencies = [
 
 [[package]]
 name = "umadb-proto"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "prost",
  "tonic",
@@ -2417,7 +2417,7 @@ dependencies = [
 
 [[package]]
 name = "umadb-python"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "pyo3",
  "umadb-client",
@@ -2427,7 +2427,7 @@ dependencies = [
 
 [[package]]
 name = "umadb-server"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "async-trait",
  "clap",

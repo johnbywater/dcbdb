@@ -19,7 +19,7 @@ exclude = [
   "crates/python"
 ]
 [workspace.package]
-version = "0.1.20"
+version = "0.1.21"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/pyeventsourcing/umadb"
@@ -56,10 +56,10 @@ exclude = [
 ]
 
 [dependencies]
-umadb-dcb = { path = "crates/dcb", version = "0.1.20" }
-umadb-core = { path = "crates/core", version = "0.1.20" }
-umadb-client = { path = "crates/client", version = "0.1.20" }
-umadb-server = { path = "crates/server", version = "0.1.20" }
+umadb-dcb = { path = "crates/dcb", version = "0.1.21" }
+umadb-core = { path = "crates/core", version = "0.1.21" }
+umadb-client = { path = "crates/client", version = "0.1.21" }
+umadb-server = { path = "crates/server", version = "0.1.21" }
 futures = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }

@@ -22,6 +22,7 @@ exclude = [
 version = "0.1.20"
 edition = "2024"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/pyeventsourcing/umadb"
 
 [workspace.dependencies]
 async-trait = "0.1.89"
@@ -38,8 +39,11 @@ serial_test = "3.2.0"
 
 [package]
 name = "umadb"
+description = "Event store built for Dynamic Consistency Boundaries"
+repository = { workspace = true }
 version = { workspace = true }
 edition = { workspace = true }
+license = { workspace = true }
 
 # Exclude specific files from the published package
 exclude = [
@@ -48,17 +52,17 @@ exclude = [
 ]
 
 [dependencies]
-umadb-dcb = { path = "crates/dcb" }
-umadb-core = { path = "crates/core" }
-umadb-client = { path = "crates/client" }
-umadb-server = { path = "crates/server" }
-umadb-benches = { path = "crates/benches" }
+umadb-dcb = { path = "crates/dcb", version = "0.1.20" }
+umadb-core = { path = "crates/core", version = "0.1.20" }
+umadb-client = { path = "crates/client", version = "0.1.20" }
+umadb-server = { path = "crates/server", version = "0.1.20" }
 futures = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
 tonic-health = { workspace = true }
 
 [dev-dependencies]
+umadb-benches = { path = "crates/benches" }
 # Add test dependencies as needed
 tempfile = "3.23.0"
 criterion = { version = "0.7.0", features = ["html_reports", "csv_output"] }

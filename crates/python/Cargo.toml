@@ -13,7 +13,7 @@ name = "umadb"
 crate-type = ["cdylib"]
 
 [dependencies]
-umadb-client = { path = "../client" }
-umadb-dcb = { path = "../dcb" }
+umadb-client = { path = "../client", version = "0.1.20" }
+umadb-dcb = { path = "../dcb", version = "0.1.20" }
 pyo3 = { version = "0.24", features = ["extension-module"] }
 uuid = { workspace = true }

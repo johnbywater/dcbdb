@@ -51,11 +51,11 @@ jobs:
         run: |
           curl -L -o aarch64-musl.tar.xz \
             https://github.com/cross-tools/musl-cross/releases/download/20250929/aarch64-unknown-linux-musl.tar.xz
-          mkdir -p /usr/local/musl-cross
-          tar -xJf aarch64-musl.tar.xz -C /usr/local/musl-cross --strip-components=1
+          mkdir -p $HOME/musl-cross
+          tar -xJf aarch64-musl.tar.xz -C $HOME/musl-cross --strip-components=1
 
       - name: Add musl-cross to PATH
-        run: echo "/usr/local/musl-cross/bin" >> $GITHUB_PATH
+        run: echo "$HOME/musl-cross/bin" >> $GITHUB_PATH
 
       - name: Test musl compiler
         run: aarch64-linux-musl-gcc --version

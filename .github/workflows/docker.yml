@@ -37,24 +37,36 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Install musl cross-compiler
-      - name: Install MUSL tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl musl-tools
+#  This doesn't actually install the aarch64-unknown-linux-musl on amd64 arch image...
+#      # Install musl cross-compiler
+#      - name: Install MUSL tools
+#        run: |
+#          sudo apt-get update
+#          sudo apt-get install -y musl musl-tools
 
-      # Check tools
-      - name: Check tools
-        if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: ls /usr/bin
+      - name: Install xz
+        run: sudo apt-get update && sudo apt-get install -y xz-utils
+
+      - name: Download musl-cross
+        run: |
+          curl -L -o aarch64-musl.tar.xz \
+            https://github.com/cross-tools/musl-cross/releases/download/20250929/aarch64-unknown-linux-musl.tar.xz
+          mkdir -p /usr/local/musl-cross
+          tar -xJf aarch64-musl.tar.xz -C /usr/local/musl-cross --strip-components=1
+
+      - name: Add musl-cross to PATH
+        run: echo "/usr/local/musl-cross/bin" >> $GITHUB_PATH
+
+      - name: Test musl compiler
+        run: aarch64-linux-musl-gcc --version
 
       - name: Configure MUSL cross-compilation
         if: matrix.target == 'aarch64-unknown-linux-musl'
         run: |
           rustup target add aarch64-unknown-linux-musl
           echo "Setting MUSL cross environment"
-          echo "CC_aarch64_unknown_linux_musl=/usr/bin/aarch64-linux-musl-gcc" >> $GITHUB_ENV
-          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=/usr/bin/aarch64-linux-musl-gcc" >> $GITHUB_ENV
+          echo "CC_aarch64_unknown_linux_musl=aarch64-linux-musl-gcc" >> $GITHUB_ENV
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-musl-gcc" >> $GITHUB_ENV
 
       - name: Configure Cargo for aarch64 MUSL
         if: matrix.target == 'aarch64-unknown-linux-musl'
@@ -62,7 +74,7 @@ jobs:
           mkdir -p .cargo
           cat > .cargo/config.toml <<EOF
           [target.aarch64-unknown-linux-musl]
-          linker = "/usr/bin/aarch64-linux-musl-gcc"
+          linker = "aarch64-linux-musl-gcc"
           EOF
 
       - name: Build release binary

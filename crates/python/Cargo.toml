@@ -8,6 +8,9 @@ repository = "https://github.com/pyeventsourcing/umadb"
 keywords = ["event-store", "grpc", "client", "python"]
 categories = ["database", "network-programming"]
 
+[package.metadata.release]
+release = false
+
 [lib]
 name = "umadb"
 crate-type = ["cdylib"]

@@ -1,30 +1,25 @@
-use clap::Parser;
+use clap::{CommandFactory, Parser, FromArgMatches};
 use tokio::signal;
 use tokio::sync::oneshot;
 use umadb_server::{start_server, start_server_secure_from_files};
 
 #[derive(Parser, Debug)]
-#[command(about = "UmaDB gRPC server", version)]
+#[command(version)]
 struct Args {
-    /// Listen address, e.g. 127.0.0.1:50051
     #[arg(long = "listen")]
     listen: String,
 
-    /// Path to database file or folder
     #[arg(long = "db-path")]
     db_path: String,
 
-    /// Optional TLS server certificate (PEM). Can also be set via UMADB_TLS_CERT environment variable
     #[arg(long = "tls-cert", required = false)]
     cert: Option<String>,
 
-    /// Optional TLS server private key (PEM). Can also be set via UMADB_TLS_KEY environment variable
     #[arg(long = "tls-key", required = false)]
     key: Option<String>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Build a custom runtime with increased blocking thread pool for high concurrency
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(
             std::thread::available_parallelism()
@@ -39,16 +34,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = Args::parse();
+    let mut cmd = Args::command();
+    cmd = cmd.about(&format!("UmaDB gRPC server ({}-{})", std::env::consts::OS, std::env::consts::ARCH));
 
-    // Read TLS cert and key from environment variables if not provided via CLI
+    let matches = cmd.get_matches();
+    let args = Args::from_arg_matches(&matches)?; // <-- FromArgMatches trait
+
     let cert = args.cert.or_else(|| std::env::var("UMADB_TLS_CERT").ok());
     let key = args.key.or_else(|| std::env::var("UMADB_TLS_KEY").ok());
 
-    // Prepare shutdown trigger
     let (tx, rx) = oneshot::channel::<()>();
-
-    // Spawn a task that waits for Ctrl-C and triggers shutdown
     tokio::spawn(async move {
         let _ = signal::ctrl_c().await;
         let _ = tx.send(());

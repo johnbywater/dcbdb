@@ -1,58 +1,55 @@
-# Multi-stage build for UmaDB server
-# Supports both amd64 and arm64 architectures
+# ============================================================
+# 1. BUILDER STAGE (multi-arch, MUSL, static linking)
+# ============================================================
+FROM rust:1.90-slim AS builder
 
-# Build stage
-FROM --platform=$TARGETPLATFORM rust:1.90-slim AS builder
+# Use Docker Buildx-provided architecture
+ARG TARGETARCH
 
-# Install build dependencies
+# Install MUSL toolchain, build deps, and ca-certificates
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    protobuf-compiler \
-    pkg-config \
-    libssl-dev \
+        musl-tools musl-dev clang pkg-config protobuf-compiler \
+        ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# Determine target and add it to rustup \
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
+        rustup target add x86_64-unknown-linux-musl; \
+        echo "x86_64-unknown-linux-musl" > /tmp/rust_target; \
+    elif [ "$TARGETARCH" = "arm64" ]; then \
+        rustup target add aarch64-unknown-linux-musl; \
+        echo "aarch64-unknown-linux-musl" > /tmp/rust_target; \
+    else \
+        echo "Unsupported architecture: $TARGETARCH"; exit 1; \
+    fi
 
 WORKDIR /build
 
-# Copy workspace configuration
+# Copy workspace
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY src ./src
-#COPY tests ./tests
 
-# Build for release
-RUN cargo build --release -p umadb-server
+# Build the static binary
+RUN cargo build --release --target "$(cat /tmp/rust_target)" -p umadb-server
+RUN strip /build/target/$(cat /tmp/rust_target)/release/umadb
 
-# Runtime stage
-FROM debian:bookworm-slim
+# ============================================================
+# 2. RUNTIME STAGE (SCRATCH, 100% static binary)
+# ============================================================
+FROM scratch
 
-# Install runtime dependencies
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create a non-root user
-RUN useradd -m -u 1000 umadb
-
-# Copy the binary from builder
-COPY --from=builder /build/target/release/umadb /usr/local/bin/umadb
-
-# Set ownership
-RUN chown umadb:umadb /usr/local/bin/umadb
-
-# Create data directory
-RUN mkdir -p /data && chown umadb:umadb /data
-
-# Switch to non-root user
-USER umadb
-
-# Set working directory
 WORKDIR /data
 
-# Expose default gRPC port
+# Copy the static binary
+COPY --from=builder /build/target/*musl*/release/umadb /umadb
+
+# Copy CA certificates from builder
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+
+# Expose gRPC port
 EXPOSE 50051
 
-# Set default command
-ENTRYPOINT ["/usr/local/bin/umadb"]
+ENTRYPOINT ["/umadb"]
 CMD ["--listen", "0.0.0.0:50051", "--db-path", "/data"]

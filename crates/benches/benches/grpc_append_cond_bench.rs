@@ -4,6 +4,7 @@ use std::hint::black_box;
 use std::net::TcpListener;
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 use tempfile::tempdir;
 use tokio::runtime::Builder as RtBuilder;
 use tokio::sync::oneshot;
@@ -13,6 +14,19 @@ use umadb_dcb::{
     DCBAppendCondition, DCBEvent, DCBEventStoreAsync, DCBEventStoreSync, DCBQuery, DCBQueryItem,
 };
 use umadb_server::start_server;
+
+fn get_events_per_request() -> usize {
+    std::env::var("EVENTS_PER_REQUEST")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1)
+}
+
+fn get_max_threads() -> Option<usize> {
+    std::env::var("MAX_THREADS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+}
 
 fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
     let dir = tempdir().expect("tempdir");
@@ -44,7 +58,18 @@ fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
 }
 
 pub fn grpc_append_cond_benchmark(c: &mut Criterion) {
-    for &threads in &[1usize, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024] {
+    let events_per_request = get_events_per_request();
+    let group_name = format!("grpc_append_cond_{}_per_request", events_per_request);
+
+    let all_threads = [1usize, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024];
+    let max_threads = get_max_threads();
+    let thread_counts: Vec<usize> = all_threads
+        .iter()
+        .copied()
+        .filter(|&t| max_threads.map_or(true, |max| t <= max))
+        .collect();
+
+    for &threads in &thread_counts {
         // Initialize DB and server with some events so head() is not None (not required, but realistic)
         let initial_events = 10_000usize;
         let (_tmp_dir, db_path) = init_db_with_events(initial_events);
@@ -79,7 +104,6 @@ pub fn grpc_append_cond_benchmark(c: &mut Criterion) {
 
         // Wait until the server is actually accepting connections (avoid race with startup)
         {
-            use std::time::Duration;
             let deadline = std::time::Instant::now() + Duration::from_secs(5);
             loop {
                 if std::net::TcpStream::connect(&addr).is_ok() {
@@ -92,11 +116,12 @@ pub fn grpc_append_cond_benchmark(c: &mut Criterion) {
             }
         }
 
-        let mut group = c.benchmark_group("grpc_append_cond");
-        group.sample_size(100);
+        let mut group = c.benchmark_group(&group_name);
+        group.sample_size(200);
+        group.measurement_time(Duration::from_secs(20));
 
         // Number of events appended per iteration by a single writer client
-        let events_per_iter = 1usize;
+        let events_per_iter = events_per_request;
 
         // Build a single Tokio runtime with fixed number of worker threads
         let rt = RtBuilder::new_multi_thread()

@@ -140,13 +140,19 @@ plt.title(f'UmaDB: Read with {WRITER_COUNT} Concurrent Writers')
 plt.grid(True, which='both', axis='y', alpha=0.3)
 plt.grid(True, which='major', axis='x', alpha=0.3)
 plt.xticks(x, [str(t) for t in x])
-plt.legend(loc='best', fontsize=8, ncol=2)
+plt.legend(loc='lower right', fontsize=8, ncol=2)
 
 # Set y-axis minimum to the lowest plotted value rounded down to the next power of 10
 min_value = min(percentile_throughputs[0])  # p5 percentile has the lowest values
 # Round down to the next power of 10: 10^floor(log10(min_value))
 y_min = 10 ** np.floor(np.log10(min_value))
-plt.ylim(bottom=y_min)
+
+# Set y-axis maximum to the highest plotted value rounded up to the next power of 10
+# Consider both p95 percentile and confidence interval upper bounds
+max_value = max(max(percentile_throughputs[9]), max(ci_upper_throughputs))
+# Round up to the next power of 10: 10^ceil(log10(max_value))
+y_max = 10 ** np.ceil(np.log10(max_value))
+plt.ylim(bottom=y_min, top=y_max)
 
 plt.tight_layout()
 plt.savefig(f"UmaDB-read-with-writers-bench.png", format="png", dpi=300)

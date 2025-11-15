@@ -20,7 +20,10 @@ fn get_max_threads() -> Option<usize> {
 }
 
 fn is_throttled() -> bool {
-    std::env::var("BENCH_READ_THROTTLED").is_ok()
+    std::env::var("BENCH_READ_THROTTLED")
+        .ok()
+        .map(|s| !s.is_empty())
+        .unwrap_or(false)
 }
 
 fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {

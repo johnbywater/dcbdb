@@ -137,7 +137,7 @@ plt.title(f'UmaDB: Append with {READER_COUNT} Concurrent Readers')
 plt.grid(True, which='both', axis='y', alpha=0.3)
 plt.grid(True, which='major', axis='x', alpha=0.3)
 plt.xticks(x, [str(t) for t in x])
-plt.legend(loc='best', fontsize=8, ncol=2)
+plt.legend(loc='lower right', fontsize=8, ncol=2)
 
 # Set y-axis minimum to the lowest plotted value rounded down to the next power of 10
 min_value = min(percentile_throughputs[0])  # p5 percentile has the lowest values

@@ -7,7 +7,7 @@ import os
 # Keep this in sync with benches/grpc_read_bench.rs
 TOTAL_EVENTS = 10_000  # events per iteration per client
 MAX_THREADS = int(os.environ.get('MAX_THREADS', '0')) if os.environ.get('MAX_THREADS') else None
-THROTTLED = os.environ.get('BENCH_READ_THROTTLED') is not None
+THROTTLED = bool(os.environ.get('BENCH_READ_THROTTLED', ''))
 GROUP_NAME = "grpc_read_throttled" if THROTTLED else "grpc_read_unthrottled"
 
 # Thread variants you ran (match the bench). Edit if you change the bench.
@@ -141,7 +141,7 @@ plt.title(f'UmaDB: Read Operations')
 plt.grid(True, which='both', axis='y', alpha=0.3)
 plt.grid(True, which='major', axis='x', alpha=0.3)
 plt.xticks(x, [str(t) for t in x])
-plt.legend(loc='best', fontsize=8, ncol=2)
+plt.legend(loc='lower right', fontsize=8, ncol=2)
 
 # Set y-axis minimum to the lowest plotted value rounded down to the next power of 10
 min_value = min(percentile_throughputs[0])  # p5 percentile has the lowest values

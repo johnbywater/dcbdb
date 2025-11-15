@@ -377,12 +377,13 @@ are selecting all events for one tag from a population of 10,000 tags, each of w
 ### Unconditional Read
 
 The benchmark plot below shows total events received per second across concurrent client read operations, whilst clients
-are throttled to process events at around 10,000 events per second. This plot shows concurrent readers scale quite linearly.
+are self-constrained to process events at around 10,000 events per second. This plot shows concurrent readers scale quite linearly.
 
 ![UmaDB benchmark](UmaDB-read-throttled-bench.png)
 
-The benchmark plot below shows total events received per second across concurrent client read operations, whilst clients are not throttled.
-The rate is ultimately constrained by the CPU and network channel limitations.
+The benchmark plot below shows total events received per second across concurrent client read operations, whilst clients
+are not self-constrained in their rate of consumption. The rate is ultimately constrained by the CPU and network channel
+limitations.
 
 ![UmaDB benchmark](UmaDB-read-unthrottled-bench.png)
 

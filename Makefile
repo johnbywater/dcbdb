@@ -5,8 +5,8 @@ EVENTS_PER_REQUEST ?= 10
 bench-append:
 	@echo "Running benchmark with EVENTS_PER_REQUEST=$(EVENTS_PER_REQUEST)"
 	@trap 'kill 0' EXIT; \
-	EVENTS_PER_REQUEST=$(EVENTS_PER_REQUEST) cargo bench -p umadb-benches --bench grpc_append_bench; \
-	EVENTS_PER_REQUEST=$(EVENTS_PER_REQUEST) python ./crates/benches/benches/grpc_append_bench_plot.py
+	EVENTS_PER_REQUEST=$(EVENTS_PER_REQUEST) MAX_THREADS=$(MAX_THREADS) cargo bench -p umadb-benches --bench grpc_append_bench; \
+	EVENTS_PER_REQUEST=$(EVENTS_PER_REQUEST) MAX_THREADS=$(MAX_THREADS) python ./crates/benches/benches/grpc_append_bench_plot.py
 
 bench-append-1:
 	$(MAKE) bench-append EVENTS_PER_REQUEST=1

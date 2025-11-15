@@ -13,6 +13,16 @@ use umadb_core::db::UmaDB;
 use umadb_dcb::{DCBEvent, DCBEventStoreAsync, DCBEventStoreSync};
 use umadb_server::start_server;
 
+fn get_max_threads() -> Option<usize> {
+    std::env::var("MAX_THREADS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+}
+
+fn is_throttled() -> bool {
+    std::env::var("BENCH_READ_THROTTLED").is_ok()
+}
+
 fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
     let dir = tempdir().expect("tempdir");
     let path = dir.path().to_str().unwrap().to_string();
@@ -45,6 +55,7 @@ fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
 pub fn grpc_read_benchmark(c: &mut Criterion) {
     const TOTAL_EVENTS: u32 = 10_000;
     const READ_BATCH_SIZE: u32 = 1000;
+    let throttled = is_throttled();
 
     // Initialize DB and server with some events
     let (_tmp_dir, db_path) = init_db_with_events(TOTAL_EVENTS as usize);
@@ -93,11 +104,20 @@ pub fn grpc_read_benchmark(c: &mut Criterion) {
         }
     }
 
-    let mut group = c.benchmark_group("grpc_read");
+    let group_name = if throttled { "grpc_read_throttled" } else { "grpc_read_unthrottled" };
+    let mut group = c.benchmark_group(group_name);
     group.sample_size(10);
     group.measurement_time(Duration::from_secs(10));
 
-    for &threads in &[1usize, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024] {
+    let all_threads = [1usize, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024];
+    let max_threads = get_max_threads();
+    let thread_counts: Vec<usize> = all_threads
+        .iter()
+        .copied()
+        .filter(|&t| max_threads.map_or(true, |max| t <= max))
+        .collect();
+
+    for &threads in &thread_counts {
         // Report throughput as the total across all runtime worker threads
         group.throughput(Throughput::Elements(
             (TOTAL_EVENTS as u64) * (threads as u64),
@@ -146,9 +166,9 @@ pub fn grpc_read_benchmark(c: &mut Criterion) {
                                     let _evt = black_box(item);
                                     count += 1;
                                 }
-                                // if count % 1000 == 0 {
-                                //     tokio::time::sleep(Duration::from_millis(90)).await;
-                                // }
+                                if throttled && count % 1000 == 0 {
+                                    tokio::time::sleep(Duration::from_millis(90)).await;
+                                }
                             }
                             assert_eq!(
                                 count, TOTAL_EVENTS as usize,

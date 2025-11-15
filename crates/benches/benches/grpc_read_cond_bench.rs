@@ -16,6 +16,12 @@ use umadb_server::start_server;
 const EVENTS_PER_TAG: u32 = 20;
 const BATCH_SIZE: u32 = 10000;
 
+fn get_max_threads() -> Option<usize> {
+    std::env::var("MAX_THREADS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+}
+
 fn init_db_with_events() -> (tempfile::TempDir, String) {
     let dir = tempdir().expect("tempdir");
     let path = dir.path().to_str().unwrap().to_string();
@@ -95,7 +101,15 @@ pub fn grpc_read_cond_benchmark(c: &mut Criterion) {
     group.sample_size(10);
     group.measurement_time(Duration::from_secs(10));
 
-    for &threads in &[1usize, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024] {
+    let all_threads = [1usize, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024];
+    let max_threads = get_max_threads();
+    let thread_counts: Vec<usize> = all_threads
+        .iter()
+        .copied()
+        .filter(|&t| max_threads.map_or(true, |max| t <= max))
+        .collect();
+
+    for &threads in &thread_counts {
         // Report throughput as the total across all runtime worker threads
         group.throughput(Throughput::Elements(
             (EVENTS_PER_TAG as u64) * (threads as u64),

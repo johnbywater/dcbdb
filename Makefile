@@ -1,6 +1,7 @@
 .PHONY: bench-append bench-append-1 bench-append-10 bench-append-100 bench-append-all
 .PHONY: bench-append-cond bench-append-cond-1 bench-append-cond-10 bench-append-cond-100 bench-append-cond-all
 .PHONY: bench-append-with-readers
+.PHONY: bench-read-cond
 # Default EVENTS_PER_REQUEST to 10 if not provided
 EVENTS_PER_REQUEST ?= 10
 
@@ -49,3 +50,9 @@ bench-append-with-readers:
 	@trap 'kill 0' INT TERM; \
 	MAX_THREADS=$(MAX_THREADS) cargo bench -p umadb-benches --bench grpc_append_with_readers_bench && \
 	python ./crates/benches/benches/grpc_append_with_readers_bench_plot.py
+
+bench-read-cond:
+	@echo "Running conditional read benchmark"
+	@trap 'kill 0' INT TERM; \
+	MAX_THREADS=$(MAX_THREADS) cargo bench -p umadb-benches --bench grpc_read_cond_bench && \
+	MAX_THREADS=$(MAX_THREADS) python ./crates/benches/benches/grpc_read_cond_bench_plot.py

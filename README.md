@@ -359,7 +359,7 @@ is writing 100 events per request (no append condition).
 
 ![UmaDB benchmark](UmaDB-append-bench-100-per-request.png)
 
-### Append with Concurrent Reader
+### Append with Concurrent Readers
 
 The benchmark plot below shows total appended events per second from concurrent clients, whilst
 there are four other clients concurrently reading events. Each client is writing 1 event per request (no append condition).
@@ -385,6 +385,8 @@ The benchmark plot below shows total events received per second across concurren
 The rate is ultimately constrained by the CPU and network channel limitations.
 
 ![UmaDB benchmark](UmaDB-read-unthrottled-bench.png)
+
+### Read with Concurrent Writers
 
 The benchmark plot below shows total events received per second across concurrent client read operations, whilst there are four other
 clients concurrently appending events. This plot shows reading is not drastically impeded by concurrent writers.

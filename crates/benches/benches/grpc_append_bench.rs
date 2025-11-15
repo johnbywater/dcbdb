@@ -61,7 +61,7 @@ pub fn grpc_append_benchmark(c: &mut Criterion) {
     let group_name = format!("grpc_append_{}_per_request", events_per_request);
     let mut group = c.benchmark_group(&group_name);
     group.sample_size(200);
-    group.measurement_time(Duration::from_secs(10));
+    group.measurement_time(Duration::from_secs(20));
 
     let all_threads = [1usize, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024];
     let max_threads = get_max_threads();

@@ -6,9 +6,11 @@ import os
 
 # Keep this in sync with benches/grpc_append
 EVENTS_PER_REQUEST = int(os.environ.get('EVENTS_PER_REQUEST', '10'))  # number of events appended per client request
+MAX_THREADS = int(os.environ.get('MAX_THREADS', '0')) if os.environ.get('MAX_THREADS') else None
 
 # Thread variants you ran (match the bench). Edit if you change the bench.
-threads = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
+all_threads = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
+threads = [t for t in all_threads if MAX_THREADS is None or t <= MAX_THREADS]
 
 x = []
 mean_throughputs = []

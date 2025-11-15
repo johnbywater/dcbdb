@@ -20,6 +20,12 @@ fn get_events_per_request() -> usize {
         .unwrap_or(10)
 }
 
+fn get_max_threads() -> Option<usize> {
+    std::env::var("MAX_THREADS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+}
+
 fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
     let dir = tempdir().expect("tempdir");
     let path = dir.path().to_str().unwrap().to_string();
@@ -57,7 +63,15 @@ pub fn grpc_append_benchmark(c: &mut Criterion) {
     group.sample_size(200);
     group.measurement_time(Duration::from_secs(10));
 
-    for &threads in &[1usize, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024] {
+    let all_threads = [1usize, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024];
+    let max_threads = get_max_threads();
+    let thread_counts: Vec<usize> = all_threads
+        .iter()
+        .copied()
+        .filter(|&t| max_threads.map_or(true, |max| t <= max))
+        .collect();
+
+    for &threads in &thread_counts {
         // Initialize DB and server with 10_000 events (as requested)
         let initial_events = 10_000usize;
         let (_tmp_dir, db_path) = init_db_with_events(initial_events);

@@ -4,7 +4,8 @@ EVENTS_PER_REQUEST ?= 10
 
 bench-append:
 	@echo "Running benchmark with EVENTS_PER_REQUEST=$(EVENTS_PER_REQUEST)"
-	EVENTS_PER_REQUEST=$(EVENTS_PER_REQUEST) cargo bench -p umadb-benches --bench grpc_append_bench
+	@trap 'kill 0' EXIT; \
+	EVENTS_PER_REQUEST=$(EVENTS_PER_REQUEST) cargo bench -p umadb-benches --bench grpc_append_bench; \
 	EVENTS_PER_REQUEST=$(EVENTS_PER_REQUEST) python ./crates/benches/benches/grpc_append_bench_plot.py
 
 bench-append-1:

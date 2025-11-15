@@ -329,15 +329,18 @@ This design yields crash-safe commits, allows concurrent readers without blockin
 
 ## Benchmarks
 
-The benchmark plots below were produced on an Apple MacBook Pro M4 (10 performance cores and 4 efficiency cores).
+The benchmark plots below were produced on an Apple MacBook Pro M4 (10 performance cores and 4 efficiency cores),
+using the UmaDB Rust gRPC client to make gRPC requests to UmaDB gRPC server listening on `http://127.0.0.1:50051`.
 
 ### Conditional Append
 
 The benchmark plot below shows total appended events per second from concurrent clients. Each client is
-writing 1 event per request with an append condition. By comparison with the unconditional append operations,
-we can see the rate during low concurrency is mostly limited by the durable commit transaction overhead. Similarly,
-we can see that during high concurrency, the sequential evaluation of the append condition queries becomes the
-limiting factor.
+writing 1 event per request with an append condition. During low concurrency, the rate is limited
+by the fixed overhead of a durable commit transaction, which is amortized for concurrent requests
+by batching append requests. During high concurrency, the limiting factor becomes the
+actual volume of data being written.
+
+These are the kinds of requests that would be made by an application after a decision model has generated a new event.
 
 ![UmaDB benchmark](UmaDB-append-bench-cond-1-per-request.png)
 
@@ -351,17 +354,17 @@ writing 100 events per request with an append condition.
 
 ![UmaDB benchmark](UmaDB-append-bench-cond-100-per-request.png)
 
+
 ### Unconditional Append
 
 The benchmark plot below shows total appended events per second from concurrent clients. Each client
-is writing one event per request (no append condition). This plot shows for low concurrency, the rate
-is limited by the durable commit transaction overhead, which is amortized by batching append requests.
+is writing one event per request (no append condition). By comparison with the performance of the conditional
+append operations above, we can see evaluating the append condition doesn't affect performance very much.
 
 ![UmaDB benchmark](UmaDB-append-bench-1-per-request.png)
 
 The benchmark plot below shows total appended events per second from concurrent clients. Each client
 is writing 10 events per request (no append condition).
-
 
 ![UmaDB benchmark](UmaDB-append-bench-10-per-request.png)
 
@@ -370,7 +373,7 @@ is writing 100 events per request (no append condition).
 
 ![UmaDB benchmark](UmaDB-append-bench-100-per-request.png)
 
-### Append with Concurrent Readers
+### Unconditional Append with Concurrent Readers
 
 The benchmark plot below shows total appended events per second from concurrent clients, whilst
 there are four other clients concurrently reading events. Each client is writing 1 event per request (no append condition).
@@ -383,12 +386,17 @@ This plot shows writing is not drastically impeded by concurrent readers.
 The benchmark plot below shows total events received per second across concurrent client read operations, whilst clients
 are selecting all events for one tag from a population of 10,000 tags, each of which has 20 recorded events.
 
+This is the kind of reading the might happen whilst building a decision model from which new events are generated.
+
 ![UmaDB benchmark](UmaDB-read-cond-bench.png)
 
 ### Unconditional Read
 
 The benchmark plot below shows total events received per second across concurrent client read operations, whilst clients
 are self-constrained to process events at around 10,000 events per second. This plot shows concurrent readers scale quite linearly.
+
+This is the kind of reading the might happen whilst projecting the state of an application
+into a materialized view in a downstream event processing component (CQRS).
 
 ![UmaDB benchmark](UmaDB-read-throttled-bench.png)
 
@@ -398,7 +406,7 @@ limitations.
 
 ![UmaDB benchmark](UmaDB-read-unthrottled-bench.png)
 
-### Uncondition Read with Concurrent Writers
+### Unconditional Read with Concurrent Writers
 
 The benchmark plot below shows total events received per second across concurrent client read operations, whilst there are four other
 clients concurrently appending events. By comparison with the unconstrained read without writers, this plot shows reading is not drastically impeded by concurrent writers.

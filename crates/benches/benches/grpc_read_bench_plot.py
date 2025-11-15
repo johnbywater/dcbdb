@@ -147,7 +147,13 @@ plt.legend(loc='best', fontsize=8, ncol=2)
 min_value = min(percentile_throughputs[0])  # p5 percentile has the lowest values
 # Round down to the next power of 10: 10^floor(log10(min_value))
 y_min = 10 ** np.floor(np.log10(min_value))
-plt.ylim(bottom=y_min)
+
+# Set y-axis maximum to the highest plotted value rounded up to the next power of 10
+# Consider both p95 percentile and confidence interval upper bounds
+max_value = max(max(percentile_throughputs[9]), max(ci_upper_throughputs))
+# Round up to the next power of 10: 10^ceil(log10(max_value))
+y_max = 10 ** np.ceil(np.log10(max_value))
+plt.ylim(bottom=y_min, top=y_max)
 
 plt.tight_layout()
 filename = "UmaDB-read-throttled-bench.png" if THROTTLED else "UmaDB-read-unthrottled-bench.png"

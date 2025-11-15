@@ -67,7 +67,7 @@ plt.figure(figsize=(8, 5))
 # We want top bands darker, so band 9 (90-100) should be darkest
 
 # Use a color map to create progressive shading from light to dark
-base_color = 'blue'
+base_color = 'green'
 num_bands = 10
 
 for i in range(num_bands):
@@ -88,9 +88,13 @@ for i in range(num_bands):
     
     plt.fill_between(x, lower, upper, alpha=alpha, color=base_color, label=label, linewidth=0)
 
-# Plot mean throughput with markers
+# Add thin black lines at p0 and p100 boundaries
+plt.plot(x, percentile_throughputs[0], linestyle='-', linewidth=0.8, color='black', alpha=0.7, zorder=5)
+plt.plot(x, percentile_throughputs[10], linestyle='-', linewidth=0.8, color='black', alpha=0.7, zorder=5)
+
+# Plot mean throughput with round markers in black
 plt.plot(x, mean_throughputs, marker='o', linestyle='-', linewidth=2, markersize=6, 
-         label='Mean', color='darkred', zorder=10)
+         label='Mean', color='black', zorder=10)
 
 # Add numerical annotations for mean values
 for t, eps in zip(x, mean_throughputs):

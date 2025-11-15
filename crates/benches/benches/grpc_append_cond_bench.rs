@@ -8,7 +8,7 @@ use std::time::Duration;
 use tempfile::tempdir;
 use tokio::runtime::Builder as RtBuilder;
 use tokio::sync::oneshot;
-use umadb_client::UmaDBClient;
+use umadb_client::{AsyncUmaDBClient, UmaDBClient};
 use umadb_core::db::UmaDB;
 use umadb_dcb::{
     DCBAppendCondition, DCBEvent, DCBEventStoreAsync, DCBEventStoreSync, DCBQuery, DCBQueryItem,
@@ -19,7 +19,7 @@ fn get_events_per_request() -> usize {
     std::env::var("EVENTS_PER_REQUEST")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(1)
+        .unwrap_or(10)
 }
 
 fn get_max_threads() -> Option<usize> {
@@ -28,7 +28,7 @@ fn get_max_threads() -> Option<usize> {
         .and_then(|s| s.parse().ok())
 }
 
-fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
+fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String, u64) {
     let dir = tempdir().expect("tempdir");
     let path = dir.path().to_str().unwrap().to_string();
 
@@ -38,6 +38,7 @@ fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
     // Prepare events and append in moderate batches to avoid huge allocations
     let batch_size = 1000usize.min(num_events.max(1));
     let mut remaining = num_events;
+    let mut last_position = 0u64;
     while remaining > 0 {
         let current = remaining.min(batch_size);
         let mut events = Vec::with_capacity(current);
@@ -50,16 +51,20 @@ fn init_db_with_events(num_events: usize) -> (tempfile::TempDir, String) {
             };
             events.push(ev);
         }
-        store.append(events, None).expect("append to store");
+        last_position = store.append(events, None).expect("append to store");
         remaining -= current;
     }
 
-    (dir, path)
+    (dir, path, last_position)
 }
 
 pub fn grpc_append_cond_benchmark(c: &mut Criterion) {
+    // for &threads in &[1usize, 2, 4] {
     let events_per_request = get_events_per_request();
     let group_name = format!("grpc_append_cond_{}_per_request", events_per_request);
+    let mut group = c.benchmark_group(&group_name);
+    group.sample_size(200);
+    group.measurement_time(Duration::from_secs(20));
 
     let all_threads = [1usize, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024];
     let max_threads = get_max_threads();
@@ -70,9 +75,9 @@ pub fn grpc_append_cond_benchmark(c: &mut Criterion) {
         .collect();
 
     for &threads in &thread_counts {
-        // Initialize DB and server with some events so head() is not None (not required, but realistic)
+        // Initialize DB and server with 10_000 events (as requested)
         let initial_events = 10_000usize;
-        let (_tmp_dir, db_path) = init_db_with_events(initial_events);
+        let (_tmp_dir, db_path, last_init_pos) = init_db_with_events(initial_events);
 
         // Find a free localhost port
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind to ephemeral port");
@@ -86,10 +91,10 @@ pub fn grpc_append_cond_benchmark(c: &mut Criterion) {
         let db_path_clone = db_path.clone();
         let addr_clone = addr.clone();
 
-        let parallelism = std::thread::available_parallelism();
-        let server_threads = parallelism.map(|n| n.get()).unwrap_or(1);
-
         let server_thread = thread::spawn(move || {
+            let server_threads = std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1);
             let rt = RtBuilder::new_multi_thread()
                 .worker_threads(server_threads)
                 .enable_all()
@@ -104,6 +109,7 @@ pub fn grpc_append_cond_benchmark(c: &mut Criterion) {
 
         // Wait until the server is actually accepting connections (avoid race with startup)
         {
+            use std::time::Duration;
             let deadline = std::time::Instant::now() + Duration::from_secs(5);
             loop {
                 if std::net::TcpStream::connect(&addr).is_ok() {
@@ -116,65 +122,50 @@ pub fn grpc_append_cond_benchmark(c: &mut Criterion) {
             }
         }
 
-        let mut group = c.benchmark_group(&group_name);
-        group.sample_size(200);
-        group.measurement_time(Duration::from_secs(20));
+        // Number of events appended per iteration per client
+        let events_per_request = get_events_per_request();
 
-        // Number of events appended per iteration by a single writer client
-        let events_per_iter = events_per_request;
-
-        // Build a single Tokio runtime with fixed number of worker threads
-        let rt = RtBuilder::new_multi_thread()
-            .worker_threads(server_threads)
-            .enable_all()
-            .build()
-            .expect("build tokio rt (writers)");
-
-        // Establish a single gRPC connection
-        let client = Arc::new(
-            rt.block_on(UmaDBClient::new(addr_http.clone()).connect_async())
-                .expect("connect client"),
-        );
-
-        let after = rt
-            .block_on(async { client.head().await.expect("head ok") })
-            .unwrap_or(0);
-
-        // Report throughput as the total across all concurrent appends
+        // Report throughput as the total across all runtime worker threads (informational)
         group.throughput(Throughput::Elements(
-            (events_per_iter as u64) * (threads as u64),
+            (events_per_request as u64) * (threads as u64),
         ));
 
-        // Prepare per-writer state (tag, last_pos)
-        let mut tags: Vec<String> = Vec::with_capacity(threads);
-        for i in 0..threads {
-            tags.push(format!("writer-{}", i));
+        // Build a Tokio runtime and multiple persistent clients (one per concurrent writer)
+        let rt = RtBuilder::new_multi_thread()
+            .worker_threads(threads)
+            .enable_all()
+            .build()
+            .expect("build tokio rt (client)");
+        let mut clients: Vec<Arc<AsyncUmaDBClient>> = Vec::with_capacity(threads);
+        for _ in 0..threads {
+            let c = rt
+                .block_on(UmaDBClient::new(addr_http.clone()).connect_async())
+                .expect("connect client");
+            clients.push(Arc::new(c));
         }
-        let tags = Arc::new(tags);
+        let clients = Arc::new(clients);
 
-        // Initialize last_pos for each writer with current head position
-        let client = client.clone();
-        let rt_handle = rt.handle().clone();
         group.bench_function(BenchmarkId::from_parameter(threads), move |b| {
-            let tags = tags.clone();
+            let clients = clients.clone();
             b.iter(|| {
-                // Spawn threads number of concurrent append tasks using the single client
-                rt_handle.block_on(async {
-                    let futs = (0..threads).map(|i| {
-                        let client = client.clone();
-                        let tag = tags[i].clone();
-                        async move {
-                            // Build event for this writer
-                            let events: Vec<DCBEvent> = (0..events_per_iter)
-                                .map(|j| DCBEvent {
-                                    event_type: "bench-append-cond".to_string(),
-                                    data: format!("data-{}", j).into_bytes(),
-                                    tags: vec![tag.clone()],
-                                    uuid: None,
-                                })
-                                .collect();
+                // Build the batch of events per iteration (per task)
+                let events: Vec<DCBEvent> = (0..events_per_request)
+                    .map(|i| DCBEvent {
+                        event_type: "bench-append".to_string(),
+                        data: format!("data-{i}").into_bytes(),
+                        tags: vec!["append".to_string()],
+                        // tags: vec![format!("append-{i}").to_string()],
+                        uuid: None,
+                    })
+                    .collect();
 
-                            // Build condition: fail if any events with this tag exist after `after`
+                rt.block_on(async {
+                    // Spawn `threads` concurrent append futures and await them all
+                    let futs = (0..threads).map(|i| {
+                        let client = clients[i].clone();
+                        let evs = events.clone();
+                        async move {
+                            // Build append condition: fail if any "init" tagged events exist after last_init_pos
                             let condition = DCBAppendCondition {
                                 fail_if_events_match: DCBQuery {
                                     items: vec![DCBQueryItem {
@@ -182,12 +173,12 @@ pub fn grpc_append_cond_benchmark(c: &mut Criterion) {
                                         tags: vec!["init".to_string()],
                                     }],
                                 },
-                                after: Some(after),
+                                after: Some(last_init_pos),
                             };
 
                             let _ = black_box(
                                 client
-                                    .append(black_box(events), Some(condition))
+                                    .append(black_box(evs), Some(condition))
                                     .await
                                     .expect("append events"),
                             );
@@ -197,13 +188,12 @@ pub fn grpc_append_cond_benchmark(c: &mut Criterion) {
                 });
             });
         });
-
-        group.finish();
-
         // Shutdown server
         let _ = shutdown_tx.send(());
         let _ = server_thread.join();
     }
+
+    group.finish();
 }
 
 criterion_group!(benches, grpc_append_cond_benchmark);

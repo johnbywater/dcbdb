@@ -4,6 +4,7 @@
 .PHONY: bench-read bench-read-throttled
 .PHONY: bench-read-cond
 .PHONY: bench-read-with-writers
+.PHONY: bench-all
 # Default EVENTS_PER_REQUEST to 10 if not provided
 EVENTS_PER_REQUEST ?= 10
 
@@ -73,3 +74,12 @@ bench-read-with-writers:
 	@trap 'kill 0' INT TERM; \
 	MAX_THREADS=$(MAX_THREADS) cargo bench -p umadb-benches --bench grpc_read_with_writers_bench && \
 	MAX_THREADS=$(MAX_THREADS) python ./crates/benches/benches/grpc_read_with_writers_bench_plot.py
+
+bench-all:
+	$(MAKE) bench-append-all
+	$(MAKE) bench-append-cond-all
+	$(MAKE) bench-append-with-readers
+	$(MAKE) bench-read
+	$(MAKE) bench-read-throttled
+	$(MAKE) bench-read-cond
+	$(MAKE) bench-read-with-writers

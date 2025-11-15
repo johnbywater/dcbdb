@@ -333,12 +333,23 @@ The benchmark plots below were produced on an Apple MacBook Pro M4 (10 performan
 
 ### Conditional Append
 
-The benchmark plot below shows total completed append operations per second from concurrent clients. Each client is
-writing 1 event per request with an append condition. This plot shows that running DCB queries sequentially
-does have a significant impact with highly concurrent requests compared with the unconditional append operation. But
-for low concurrency, the rate is mostly limited by the durable commit transaction overhead.
+The benchmark plot below shows total appended events per second from concurrent clients. Each client is
+writing 1 event per request with an append condition. By comparison with the unconditional append operations,
+we can see the rate during low concurrency is mostly limited by the durable commit transaction overhead. Similarly,
+we can see that during high concurrency, the sequential evaluation of the append condition queries becomes the
+limiting factor.
 
 ![UmaDB benchmark](UmaDB-append-bench-cond-1-per-request.png)
+
+The benchmark plot below shows total completed append operations per second from concurrent clients. Each client is
+writing 10 events per request with an append condition.
+
+![UmaDB benchmark](UmaDB-append-bench-cond-10-per-request.png)
+
+The benchmark plot below shows total completed append operations per second from concurrent clients. Each client is
+writing 100 events per request with an append condition.
+
+![UmaDB benchmark](UmaDB-append-bench-cond-100-per-request.png)
 
 ### Unconditional Append
 
@@ -387,10 +398,10 @@ limitations.
 
 ![UmaDB benchmark](UmaDB-read-unthrottled-bench.png)
 
-### Read with Concurrent Writers
+### Uncondition Read with Concurrent Writers
 
 The benchmark plot below shows total events received per second across concurrent client read operations, whilst there are four other
-clients concurrently appending events. This plot shows reading is not drastically impeded by concurrent writers.
+clients concurrently appending events. By comparison with the unconstrained read without writers, this plot shows reading is not drastically impeded by concurrent writers.
 
 ![UmaDB benchmark](UmaDB-read-with-writers-bench.png)
 

@@ -1,4 +1,5 @@
-import pandas as pd
+import json
+import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 
@@ -9,54 +10,103 @@ EVENTS_PER_REQUEST = 1  # number of events appended per client request
 threads = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
 
 x = []
-throughputs = []  # events per second (total across threads)
-lower_errors = []  # lower error bars
-upper_errors = []  # upper error bars
+mean_throughputs = []
+# Store percentile throughputs for each decile band
+# percentile_throughputs[i] contains list of throughputs for i*10 percentile
+percentile_throughputs = [[] for _ in range(11)]  # 0, 10, 20, ..., 100
 
 for t in threads:
+    sample_path = Path(f"target/criterion/grpc_append/{t}/new/sample.json")
     est_path = Path(f"target/criterion/grpc_append/{t}/new/estimates.json")
-    if not est_path.exists():
+    if not sample_path.exists() or not est_path.exists():
         # Skip missing variants gracefully
         continue
-    est = pd.read_json(est_path)
-    mean_ns = est.loc['point_estimate', 'mean']
+    
+    with open(sample_path, 'r') as f:
+        sample_data = json.load(f)
+    
+    with open(est_path, 'r') as f:
+        est_data = json.load(f)
+    
+    # Extract times and iteration counts
+    times = np.array(sample_data['times'])
+    iters = np.array(sample_data['iters'])
+    
+    # Calculate per-iteration times (nanoseconds per iteration)
+    per_iter_times = times / iters
+    
+    # Calculate percentiles for decile bands (0, 10, 20, ..., 100)
+    percentiles = [np.percentile(per_iter_times, p) for p in range(0, 101, 10)]
+    
+    # Get mean from estimates
+    mean_ns = est_data['mean']['point_estimate']
     mean_sec = mean_ns / 1e9
     
-    # Extract confidence interval bounds for variance visualization
-    mean_ci = est.loc['confidence_interval', 'mean']
-    ci_lower_ns = mean_ci['lower_bound']
-    ci_upper_ns = mean_ci['upper_bound']
-    ci_lower_sec = ci_lower_ns / 1e9
-    ci_upper_sec = ci_upper_ns / 1e9
-
     events_total = EVENTS_PER_REQUEST * t  # total across all threads for this variant
-    eps = events_total / mean_sec  # events per second
     
-    # Calculate throughput bounds (note: inverse relationship with time)
-    eps_upper = events_total / ci_lower_sec  # lower time → higher throughput
-    eps_lower = events_total / ci_upper_sec  # upper time → lower throughput
-
+    # Calculate mean throughput
+    mean_eps = events_total / mean_sec
+    
+    # Calculate throughput for each percentile (note: inverse relationship with time)
+    # Lower time = higher throughput, so we reverse the percentiles
+    percentile_eps = [events_total / (p_ns / 1e9) for p_ns in reversed(percentiles)]
+    
     x.append(t)
-    throughputs.append(eps)
-    lower_errors.append(eps - eps_lower)
-    upper_errors.append(eps_upper - eps)
+    mean_throughputs.append(mean_eps)
+    for i, eps in enumerate(percentile_eps):
+        percentile_throughputs[i].append(eps)
 
 plt.figure(figsize=(8, 5))
-plt.errorbar(x, throughputs, yerr=[lower_errors, upper_errors], marker='o', capsize=5, capthick=2, label='Mean ± 95% CI')
+
+# Plot decile bands with progressive shading
+# Band 0: p0-p10 (lightest)
+# Band 1: p10-p20
+# ...
+# Band 8: p80-p90
+# Band 9: p90-p100 (darkest)
+# We want top bands darker, so band 9 (90-100) should be darkest
+
+# Use a color map to create progressive shading from light to dark
+base_color = 'blue'
+num_bands = 10
+
+for i in range(num_bands):
+    # Calculate alpha: lightest at bottom (i=0), darkest at top (i=9)
+    # Use range from 0.15 to 0.6 for good visibility
+    alpha = 0.15 + (i / (num_bands - 1)) * 0.45
+    
+    lower = percentile_throughputs[i]
+    upper = percentile_throughputs[i + 1]
+    
+    # Create label only for first and last band to avoid cluttering legend
+    if i == 0:
+        label = f'p0-p10'
+    elif i == num_bands - 1:
+        label = f'p90-p100'
+    else:
+        label = f'p{i*10}-p{(i+1)*10}'
+    
+    plt.fill_between(x, lower, upper, alpha=alpha, color=base_color, label=label, linewidth=0)
+
+# Plot mean throughput with markers
+plt.plot(x, mean_throughputs, marker='o', linestyle='-', linewidth=2, markersize=6, 
+         label='Mean', color='darkred', zorder=10)
+
+# Add numerical annotations for mean values
+for t, eps in zip(x, mean_throughputs):
+    plt.annotate(f"{eps:,.0f}", (t, eps), textcoords="offset points", 
+                xytext=(0, 8), ha='center', fontsize=8, fontweight='bold')
+
 plt.xscale('log')
 plt.yscale('log')
 plt.xlabel('Clients')
 plt.ylabel('Total events/sec')
 plt.title(f'UmaDB: Append Operations ({EVENTS_PER_REQUEST} event{"s" if EVENTS_PER_REQUEST > 1 else ""} per request)')
 # Show y-axis grid lines and x-axis grid lines only at major ticks (the labeled x ticks)
-plt.grid(True, which='both', axis='y')
-plt.grid(True, which='major', axis='x')
+plt.grid(True, which='both', axis='y', alpha=0.3)
+plt.grid(True, which='major', axis='x', alpha=0.3)
 plt.xticks(x, [str(t) for t in x])
-plt.legend()
-
-# Optional: annotate points
-for t, eps in zip(x, throughputs):
-    plt.annotate(f"{eps:,.0f}", (t, eps), textcoords="offset points", xytext=(0, 6), ha='center', fontsize=8)
+plt.legend(loc='best', fontsize=8, ncol=2)
 
 plt.tight_layout()
 plt.savefig(f"UmaDB-append-bench-{EVENTS_PER_REQUEST}-per-request.png", format="png", dpi=300)

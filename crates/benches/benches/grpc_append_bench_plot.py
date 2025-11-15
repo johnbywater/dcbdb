@@ -14,9 +14,9 @@ x = []
 mean_throughputs = []
 ci_lower_throughputs = []
 ci_upper_throughputs = []
-# Store percentile throughputs for each decile band
-# percentile_throughputs[i] contains list of throughputs for i*10 percentile
-percentile_throughputs = [[] for _ in range(11)]  # 0, 10, 20, ..., 100
+# Store percentile throughputs for bands from p5 to p95
+# percentile_throughputs[i] contains list of throughputs for (5+i*10) percentile
+percentile_throughputs = [[] for _ in range(10)]  # 5, 15, 25, ..., 85, 95
 
 for t in threads:
     sample_path = Path(f"target/criterion/grpc_append_{EVENTS_PER_REQUEST}_per_request/{t}/new/sample.json")
@@ -38,8 +38,8 @@ for t in threads:
     # Calculate per-iteration times (nanoseconds per iteration)
     per_iter_times = times / iters
     
-    # Calculate percentiles for decile bands (0, 10, 20, ..., 100)
-    percentiles = [np.percentile(per_iter_times, p) for p in range(0, 101, 10)]
+    # Calculate percentiles for bands from p5 to p95 (5, 15, 25, ..., 85, 95)
+    percentiles = [np.percentile(per_iter_times, p) for p in range(5, 96, 10)]
     
     # Get mean from estimates
     mean_ns = est_data['mean']['point_estimate']
@@ -81,39 +81,37 @@ if len(x) == 0:
 
 plt.figure(figsize=(8, 5))
 
-# Plot decile bands with progressive shading
-# Band 0: p0-p10 (lightest)
-# Band 1: p10-p20
+# Plot percentile bands from p5 to p95 with progressive shading
+# Band 0: p5-p15 (lightest)
+# Band 1: p15-p25
 # ...
-# Band 8: p80-p90
-# Band 9: p90-p100 (darkest)
-# We want top bands darker, so band 9 (90-100) should be darkest
+# Band 7: p75-p85
+# Band 8: p85-p95 (darkest)
+# We want top bands darker, so band 8 (85-95) should be darkest
 
 # Use a color map to create progressive shading from light to dark
 base_color = 'green'
-num_bands = 10
+num_bands = 9
 
 for i in range(num_bands):
-    # Calculate alpha: lightest at bottom (i=0), darkest at top (i=9)
+    # Calculate alpha: lightest at bottom (i=0), darkest at top (i=8)
     # Use range from 0.15 to 0.6 for good visibility
-    alpha = 0.15 + (i / (num_bands - 1)) * 0.45
+    alpha = 0.0 + (i / (num_bands - 1)) * 0.45
     
     lower = percentile_throughputs[i]
     upper = percentile_throughputs[i + 1]
     
-    # Create label only for first and last band to avoid cluttering legend
-    if i == 0:
-        label = f'p0-p10'
-    elif i == num_bands - 1:
-        label = f'p90-p100'
-    else:
-        label = f'p{i*10}-p{(i+1)*10}'
+    # Calculate percentile values for labels: 5, 15, 25, ..., 85, 95
+    p_lower = 5 + i * 10
+    p_upper = 5 + (i + 1) * 10
     
+    label = f'p{p_lower}-p{p_upper}'
+
     plt.fill_between(x, lower, upper, alpha=alpha, color=base_color, label=label, linewidth=0)
 
-# Add thin black lines at p0 and p100 boundaries
+# Add thin black lines at p5 and p95 boundaries
 plt.plot(x, percentile_throughputs[0], linestyle='-', linewidth=0.8, color='black', alpha=0.7, zorder=5)
-plt.plot(x, percentile_throughputs[10], linestyle='-', linewidth=0.8, color='black', alpha=0.7, zorder=5)
+plt.plot(x, percentile_throughputs[9], linestyle='-', linewidth=0.8, color='black', alpha=0.7, zorder=5)
 
 # Calculate error bar values (asymmetric errors)
 yerr_lower = [mean - lower for mean, lower in zip(mean_throughputs, ci_lower_throughputs)]
@@ -140,6 +138,12 @@ plt.grid(True, which='both', axis='y', alpha=0.3)
 plt.grid(True, which='major', axis='x', alpha=0.3)
 plt.xticks(x, [str(t) for t in x])
 plt.legend(loc='best', fontsize=8, ncol=2)
+
+# Set y-axis minimum to the lowest plotted value rounded down to the next power of 10
+min_value = min(percentile_throughputs[0])  # p5 percentile has the lowest values
+# Round down to the next power of 10: 10^floor(log10(min_value))
+y_min = 10 ** np.floor(np.log10(min_value))
+plt.ylim(bottom=y_min)
 
 plt.tight_layout()
 plt.savefig(f"UmaDB-append-bench-{EVENTS_PER_REQUEST}-per-request.png", format="png", dpi=300)

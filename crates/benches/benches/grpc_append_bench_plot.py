@@ -2,22 +2,25 @@ import json
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
+import os
 
 # Keep this in sync with benches/grpc_append
-EVENTS_PER_REQUEST = 1  # number of events appended per client request
+EVENTS_PER_REQUEST = int(os.environ.get('EVENTS_PER_REQUEST', '10'))  # number of events appended per client request
 
 # Thread variants you ran (match the bench). Edit if you change the bench.
 threads = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
 
 x = []
 mean_throughputs = []
+ci_lower_throughputs = []
+ci_upper_throughputs = []
 # Store percentile throughputs for each decile band
 # percentile_throughputs[i] contains list of throughputs for i*10 percentile
 percentile_throughputs = [[] for _ in range(11)]  # 0, 10, 20, ..., 100
 
 for t in threads:
-    sample_path = Path(f"target/criterion/grpc_append/{t}/new/sample.json")
-    est_path = Path(f"target/criterion/grpc_append/{t}/new/estimates.json")
+    sample_path = Path(f"target/criterion/grpc_append_{EVENTS_PER_REQUEST}_per_request/{t}/new/sample.json")
+    est_path = Path(f"target/criterion/grpc_append_{EVENTS_PER_REQUEST}_per_request/{t}/new/estimates.json")
     if not sample_path.exists() or not est_path.exists():
         # Skip missing variants gracefully
         continue
@@ -42,10 +45,21 @@ for t in threads:
     mean_ns = est_data['mean']['point_estimate']
     mean_sec = mean_ns / 1e9
     
+    # Get confidence interval bounds for mean
+    ci_lower_ns = est_data['mean']['confidence_interval']['lower_bound']
+    ci_upper_ns = est_data['mean']['confidence_interval']['upper_bound']
+    ci_lower_sec = ci_lower_ns / 1e9
+    ci_upper_sec = ci_upper_ns / 1e9
+    
     events_total = EVENTS_PER_REQUEST * t  # total across all threads for this variant
     
     # Calculate mean throughput
     mean_eps = events_total / mean_sec
+    
+    # Calculate CI throughputs (note: inverse relationship with time)
+    # Lower time bound = upper throughput bound, upper time bound = lower throughput bound
+    ci_lower_eps = events_total / ci_upper_sec
+    ci_upper_eps = events_total / ci_lower_sec
     
     # Calculate throughput for each percentile (note: inverse relationship with time)
     # Lower time = higher throughput, so we reverse the percentiles
@@ -53,8 +67,17 @@ for t in threads:
     
     x.append(t)
     mean_throughputs.append(mean_eps)
+    ci_lower_throughputs.append(ci_lower_eps)
+    ci_upper_throughputs.append(ci_upper_eps)
     for i, eps in enumerate(percentile_eps):
         percentile_throughputs[i].append(eps)
+
+# Check if any data was found
+if len(x) == 0:
+    print(f"Error: No benchmark data found for EVENTS_PER_REQUEST={EVENTS_PER_REQUEST}")
+    print(f"Expected to find data in: target/criterion/grpc_append_{EVENTS_PER_REQUEST}_per_request/*/new/")
+    print(f"Please run the benchmark first: make bench-append-{EVENTS_PER_REQUEST}")
+    exit(1)
 
 plt.figure(figsize=(8, 5))
 
@@ -92,9 +115,15 @@ for i in range(num_bands):
 plt.plot(x, percentile_throughputs[0], linestyle='-', linewidth=0.8, color='black', alpha=0.7, zorder=5)
 plt.plot(x, percentile_throughputs[10], linestyle='-', linewidth=0.8, color='black', alpha=0.7, zorder=5)
 
-# Plot mean throughput with round markers in black
-plt.plot(x, mean_throughputs, marker='o', linestyle='-', linewidth=2, markersize=6, 
-         label='Mean', color='black', zorder=10)
+# Calculate error bar values (asymmetric errors)
+yerr_lower = [mean - lower for mean, lower in zip(mean_throughputs, ci_lower_throughputs)]
+yerr_upper = [upper - mean for mean, upper in zip(mean_throughputs, ci_upper_throughputs)]
+
+# Plot mean throughput with round markers in black and confidence intervals
+plt.errorbar(x, mean_throughputs, yerr=[yerr_lower, yerr_upper], 
+             marker='', linestyle='-', linewidth=2, markersize=4,
+             label='Mean (95% CI)', color='black', capsize=3, capthick=1.5, 
+             elinewidth=1.5, zorder=10)
 
 # Add numerical annotations for mean values
 for t, eps in zip(x, mean_throughputs):
